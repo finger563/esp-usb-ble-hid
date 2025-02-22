@@ -45,8 +45,8 @@ protected:
 
   static constexpr uint16_t usb_bcd = 0x0200;
   static constexpr uint16_t vid = 0x045E;
-  // static constexpr uint16_t pid = 0x0B13; // XB Wireless Controller (model 1708)
-  static constexpr uint16_t pid = 0x028E; // Xbox 360 Wired
+  static constexpr uint16_t pid = 0x0B13; // XB Wireless Controller (model 1708)
+  // static constexpr uint16_t pid = 0x028E; // Xbox 360 Wired
   static constexpr uint16_t bcd = 0x0110;
 
   static constexpr const char manufacturer[] = "Microsoft";

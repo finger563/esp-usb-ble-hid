@@ -49,7 +49,7 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   // send the report via tiny usb
   if (tud_mounted()) {
     // and send it over USB
-    tud_hid_report(usb_report_id, report.data(), report.size());
+    send_hid_report(usb_report_id, report);
 
     // toggle the LED each send, so mod 2
     static auto &bsp = Bsp::get();
@@ -132,12 +132,16 @@ extern "C" void app_main(void) {
 
     GamepadInputs inputs{};
 
+    inputs.buttons.capture = index % 2 == 0;
+
     // joystick inputs are in the range [-1, 1] float
     inputs.left_joystick.x = sin(angle);
     inputs.left_joystick.y = cos(angle);
 
     inputs.right_joystick.x = cos(angle);
     inputs.right_joystick.y = sin(angle);
+
+    inputs.set_button(index, true);
 
     index = (index % num_segments) + 1;
 
@@ -149,7 +153,7 @@ extern "C" void app_main(void) {
     auto report = usb_gamepad->get_report_data(usb_report_id);
 
     if (tud_mounted()) {
-      bool success = tud_hid_report(usb_report_id, report.data(), report.size());
+      bool success = send_hid_report(usb_report_id, report);
       espp::Rgb color = success ? espp::Rgb(0.0f, 1.0f, 0.0f) : espp::Rgb(1.0f, 0.0f, 0.0f);
       // toggle the LED each send, so mod 2
       if (index % 2 == 0) {

@@ -42,6 +42,8 @@ GamepadInputs SwitchPro::get_gamepad_inputs() const {
 }
 
 void SwitchPro::set_gamepad_inputs(const GamepadInputs &inputs) {
+  input_report.reset();
+
   input_report.set_buttons(inputs.buttons);
   input_report.set_left_joystick(inputs.left_joystick.x, inputs.left_joystick.y);
   input_report.set_right_joystick(inputs.right_joystick.x, inputs.right_joystick.y);

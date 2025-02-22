@@ -60,6 +60,8 @@ GamepadInputs Xbox::get_gamepad_inputs() const {
 }
 
 void Xbox::set_gamepad_inputs(const GamepadInputs &inputs) {
+  input_report.reset();
+
   input_report.set_buttons(inputs.buttons);
 
   input_report.set_hat(inputs.buttons.up, inputs.buttons.down, inputs.buttons.left,

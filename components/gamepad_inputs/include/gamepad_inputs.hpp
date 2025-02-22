@@ -63,7 +63,7 @@ struct GamepadInputs {
         uint8_t left_sr : 1;
         uint8_t left_sl : 1;
       } __attribute__((packed));
-    };
+    } __attribute__((packed));
   } __attribute__((packed));
 
   struct Joystick {
@@ -80,4 +80,9 @@ struct GamepadInputs {
   Joystick right_joystick;
   Trigger l2;
   Trigger r2;
+
+  void set_button(size_t index, bool value) {
+    // turn the index into a bit into the `raw` field
+    buttons.raw = (buttons.raw & ~(1 << index)) | (value << index);
+  }
 };

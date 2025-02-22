@@ -14,6 +14,8 @@ static std::shared_ptr<GamepadDevice> usb_gamepad;
 static_assert(CFG_TUD_HID >= 1, "CFG_TUD_HID must be at least 1");
 
 static std::vector<uint8_t> hid_report_descriptor;
+static uint8_t usb_hid_input_report[CFG_TUD_HID_EP_BUFSIZE];
+static size_t usb_hid_input_report_len = 0;
 
 static tusb_desc_device_t desc_device = {.bLength = sizeof(tusb_desc_device_t),
                                          .bDescriptorType = TUSB_DESC_DEVICE,
@@ -110,6 +112,14 @@ void stop_usb_gamepad() {
   logger.info("USB initialization DONE");
 }
 
+bool send_hid_report(uint8_t report_id, const std::vector<uint8_t> &report) {
+  // copy the report data into the usb_hid_input_report buffer
+  std::copy(report.begin(), report.end(), usb_hid_input_report);
+  usb_hid_input_report_len = report.size();
+  // now try to send it
+  return tud_hid_report(report_id, usb_hid_input_report, usb_hid_input_report_len);
+}
+
 /********* TinyUSB HID callbacks ***************/
 
 extern "C" void tud_mount_cb(void) {
@@ -138,9 +148,10 @@ extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
                                           uint16_t reqlen) {
   switch (report_type) {
   case HID_REPORT_TYPE_INPUT: {
-    auto report_data = usb_gamepad->get_report_data(report_id);
-    std::copy(report_data.begin(), report_data.end(), buffer);
-    return report_data.size();
+    // copy the report data into the buffer
+    // NOTE: we're ignoring the report_id here
+    std::copy(usb_hid_input_report, usb_hid_input_report + usb_hid_input_report_len, buffer);
+    return usb_hid_input_report_len;
   }
   default:
     return 0;
@@ -158,8 +169,7 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     auto maybe_response = usb_gamepad->on_hid_report(report_id, buffer, bufsize);
     if (maybe_response.has_value()) {
       auto &[response_report_id, response_data] = maybe_response.value();
-      // send the response back to the host
-      tud_hid_report(response_report_id, response_data.data(), response_data.size());
+      send_hid_report(response_report_id, response_data);
     }
   }
 }
