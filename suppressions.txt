@@ -9,3 +9,4 @@ cstyleCast
 // Specific suppressions of the form:
 //   [error id]:[filename]:[line]
 *:components/espp/*
+*:components/gui/generated/*
