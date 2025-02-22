@@ -127,9 +127,9 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     // pass the report along to the currently configured usb gamepad device
     auto maybe_response = usb_gamepad->on_hid_report(report_id, buffer, bufsize);
     if (maybe_response.has_value()) {
-      auto &[report_id, report_data] = maybe_response.value();
+      auto &[response_report_id, response_data] = maybe_response.value();
       // send the response back to the host
-      tud_hid_report(report_id, report_data.data(), report_data.size());
+      tud_hid_report(response_report_id, response_data.data(), response_data.size());
     }
   }
 }
