@@ -4,26 +4,11 @@
 #include "logger.hpp"
 #include "task.hpp"
 
-#if CONFIG_TARGET_HARDWARE_QTPY_ESP32_S3
-#define HAS_DISPLAY 0
-#include "qtpy.hpp"
-using Bsp = espp::QtPy;
-#elif CONFIG_TARGET_HARDWARE_T3_DONGLE
-#define HAS_DISPLAY 1
-#include "t-dongle-s3.hpp"
-using Bsp = espp::TDongleS3;
-#else
-#error "No hardware target specified"
-#endif
-
-#if HAS_DISPLAY
-#include "gui.hpp"
-#endif
-
 #include "switch_pro.hpp"
 #include "xbox.hpp"
 
 #include "ble.hpp"
+#include "bsp.hpp"
 #include "usb.hpp"
 
 using namespace std::chrono_literals;
@@ -47,7 +32,6 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   str += ", Characteristic = " + pRemoteCharacteristic->getUUID().toString();
   // str             += ", Value = " + std::string((char*)pData, length);
   fmt::print("{}\n", str);
-  std::vector<uint8_t> data(pData, pData + length);
 
   // set the data in the ble gamepad
   ble_gamepad->set_report_data(ble_gamepad->get_input_report_id(), pData, length);
@@ -146,7 +130,7 @@ extern "C" void app_main(void) {
     static int index = 0;
     float angle = 2.0f * M_PI * index / num_segments;
 
-    GamepadInputs inputs;
+    GamepadInputs inputs{};
 
     // joystick inputs are in the range [-1, 1] float
     inputs.left_joystick.x = sin(angle);
@@ -161,10 +145,11 @@ extern "C" void app_main(void) {
     usb_gamepad->set_gamepad_inputs(inputs);
 
     // get the output report from the usb gamepad
-    auto report = usb_gamepad->get_report_data(1);
+    uint8_t usb_report_id = usb_gamepad->get_input_report_id();
+    auto report = usb_gamepad->get_report_data(usb_report_id);
 
     if (tud_mounted()) {
-      bool success = tud_hid_report(1, report.data(), report.size());
+      bool success = tud_hid_report(usb_report_id, report.data(), report.size());
       espp::Rgb color = success ? espp::Rgb(0.0f, 1.0f, 0.0f) : espp::Rgb(1.0f, 0.0f, 0.0f);
       // toggle the LED each send, so mod 2
       if (index % 2 == 0) {
@@ -172,6 +157,8 @@ extern "C" void app_main(void) {
       } else {
         bsp.led(espp::Rgb(0.0f, 0.0f, 0.0f));
       }
+    } else {
+      bsp.led(espp::Rgb(1.0f, 0.0f, 0.0f));
     }
   }
 }

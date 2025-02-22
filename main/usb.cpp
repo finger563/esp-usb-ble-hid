@@ -1,4 +1,5 @@
 #include "usb.hpp"
+#include "bsp.hpp"
 
 static espp::Logger logger({.tag = "USB"});
 static std::shared_ptr<GamepadDevice> usb_gamepad;
@@ -17,9 +18,9 @@ static std::vector<uint8_t> hid_report_descriptor;
 static tusb_desc_device_t desc_device = {.bLength = sizeof(tusb_desc_device_t),
                                          .bDescriptorType = TUSB_DESC_DEVICE,
                                          .bcdUSB = 0, // NOTE: to be filled out later
-                                         .bDeviceClass = 0,
-                                         .bDeviceSubClass = 0,
-                                         .bDeviceProtocol = 0,
+                                         .bDeviceClass = 0x00,
+                                         .bDeviceSubClass = 0x00,
+                                         .bDeviceProtocol = 0x00,
 
                                          .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
 
@@ -45,6 +46,17 @@ static const char *hid_string_descriptor[5] = {
     "USB HID Interface",  // 4: HID
 };
 
+// update the configuration descriptor with the new report descriptor size
+static uint8_t hid_configuration_descriptor[] = {
+    // Configuration number, interface count, string index, total length, attribute, power in mA
+    TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUSB_DESC_TOTAL_LEN, 0x00, 100),
+
+    // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
+    // polling interval
+    TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x01, 0x81,
+                             CFG_TUD_HID_EP_BUFSIZE, 1),
+};
+
 void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
   // store the gamepad device
   usb_gamepad = gamepad_device;
@@ -63,15 +75,17 @@ void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
   hid_report_descriptor = usb_gamepad->get_report_descriptor();
 
   // update the configuration descriptor with the new report descriptor size
-  uint8_t hid_configuration_descriptor[] = {
+  uint8_t updated_hid_configuration_descriptor[] = {
       // Configuration number, interface count, string index, total length, attribute, power in mA
       TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUSB_DESC_TOTAL_LEN, 0x00, 100),
 
       // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
       // polling interval
-      TUD_HID_INOUT_DESCRIPTOR(0, 4, false, hid_report_descriptor.size(), 0x01, 0x81,
-                               CFG_TUD_HID_EP_BUFSIZE, 1),
+      TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x01,
+                               0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
   };
+  std::memcpy(hid_configuration_descriptor, updated_hid_configuration_descriptor,
+              sizeof(updated_hid_configuration_descriptor));
 
   const tinyusb_config_t tusb_cfg = {.device_descriptor = &desc_device,
                                      .string_descriptor = hid_string_descriptor,
@@ -81,16 +95,32 @@ void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
                                      .configuration_descriptor = hid_configuration_descriptor,
                                      .self_powered = false};
 
-  if (tinyusb_driver_install(&tusb_cfg)) {
+  if (tinyusb_driver_install(&tusb_cfg) != ESP_OK) {
     logger.error("Failed to install tinyusb driver");
     return;
   }
   logger.info("USB initialization DONE");
 }
 
-void stop_usb_gamepad() {}
+void stop_usb_gamepad() {
+  if (tinyusb_driver_uninstall() != ESP_OK) {
+    logger.error("Failed to uninstall tinyusb driver");
+    return;
+  }
+  logger.info("USB initialization DONE");
+}
 
 /********* TinyUSB HID callbacks ***************/
+
+extern "C" void tud_mount_cb(void) {
+  // Invoked when device is mounted
+  logger.info("USB Mounted");
+}
+
+extern "C" void tud_umount_cb(void) {
+  // Invoked when device is unmounted
+  logger.info("USB Unmounted");
+}
 
 // Invoked when received GET HID REPORT DESCRIPTOR request
 // Application return pointer to descriptor, whose contents must exist long enough for transfer to

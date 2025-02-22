@@ -6,7 +6,7 @@
 struct GamepadInputs {
   struct Buttons {
     union {
-      uint32_t raw;
+      uint32_t raw{0};
       // NOTE: This is the most common shared layout
       struct {
         // byte 0
@@ -67,12 +67,12 @@ struct GamepadInputs {
   } __attribute__((packed));
 
   struct Joystick {
-    float x; // range [-1, 1]
-    float y; // range [-1, 1]
+    float x{0.0f}; // range [-1, 1]
+    float y{0.0f}; // range [-1, 1]
   };
 
   struct Trigger {
-    float value; // range [0, 1]
+    float value{0.0f}; // range [0, 1]
   };
 
   Buttons buttons;
