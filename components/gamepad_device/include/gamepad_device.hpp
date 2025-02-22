@@ -30,6 +30,7 @@ public:
   virtual const DeviceInfo &get_device_info() const = 0;
 
   // Report Data
+  virtual uint8_t get_input_report_id() const { return 0; }
   virtual std::vector<uint8_t> get_report_descriptor() const { return {}; }
   virtual void set_report_data(uint8_t report_id, const uint8_t *data, size_t len) {}
   virtual std::vector<uint8_t> get_report_data(uint8_t report_id) const { return {}; }

@@ -12,5 +12,5 @@ extern "C" {
 #include <tusb.h>
 }
 
-void start_usb_gamepad(std::shared_ptr<GamepadDevice> &gamepad_device);
+void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device);
 void stop_usb_gamepad();

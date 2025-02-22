@@ -50,7 +50,7 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   std::vector<uint8_t> data(pData, pData + length);
 
   // set the data in the ble gamepad
-  ble_gamepad->set_report_data(1, pData, length);
+  ble_gamepad->set_report_data(ble_gamepad->get_input_report_id(), pData, length);
 
   // convert it to GamepadInputs
   auto inputs = ble_gamepad->get_gamepad_inputs();
@@ -59,12 +59,13 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   usb_gamepad->set_gamepad_inputs(inputs);
 
   // then get the output report from the usb gamepad
-  auto report = usb_gamepad->get_report_data(1);
+  uint8_t usb_report_id = usb_gamepad->get_input_report_id();
+  auto report = usb_gamepad->get_report_data(usb_report_id);
 
   // send the report via tiny usb
   if (tud_mounted()) {
     // and send it over USB
-    tud_hid_report(1, report.data(), report.size());
+    tud_hid_report(usb_report_id, report.data(), report.size());
 
     // toggle the LED each send, so mod 2
     static auto &bsp = Bsp::get();

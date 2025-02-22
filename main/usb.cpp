@@ -45,7 +45,7 @@ static const char *hid_string_descriptor[5] = {
     "USB HID Interface",  // 4: HID
 };
 
-void start_usb_gamepad(std::shared_ptr<GamepadDevice> &gamepad_device) {
+void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
   // store the gamepad device
   usb_gamepad = gamepad_device;
 
@@ -60,9 +60,7 @@ void start_usb_gamepad(std::shared_ptr<GamepadDevice> &gamepad_device) {
   desc_device.bcdUSB = device_info.usb_bcd;
 
   // update the report descriptor
-  auto report_descriptor = usb_gamepad->get_report_descriptor();
-  // update the report descriptor
-  hid_report_descriptor = report_descriptor;
+  hid_report_descriptor = usb_gamepad->get_report_descriptor();
 
   // update the configuration descriptor with the new report descriptor size
   uint8_t hid_configuration_descriptor[] = {
@@ -71,7 +69,7 @@ void start_usb_gamepad(std::shared_ptr<GamepadDevice> &gamepad_device) {
 
       // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
       // polling interval
-      TUD_HID_INOUT_DESCRIPTOR(0, 4, false, report_descriptor.size(), 0x01, 0x81,
+      TUD_HID_INOUT_DESCRIPTOR(0, 4, false, hid_report_descriptor.size(), 0x01, 0x81,
                                CFG_TUD_HID_EP_BUFSIZE, 1),
   };
 
@@ -108,10 +106,6 @@ extern "C" uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
 extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
                                           hid_report_type_t report_type, uint8_t *buffer,
                                           uint16_t reqlen) {
-  (void)instance;
-  (void)report_type;
-  (void)reqlen;
-
   switch (report_type) {
   case HID_REPORT_TYPE_INPUT: {
     auto report_data = usb_gamepad->get_report_data(report_id);
@@ -128,9 +122,7 @@ extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
 extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
                                       hid_report_type_t report_type, uint8_t const *buffer,
                                       uint16_t bufsize) {
-  std::vector<uint8_t> data(buffer, buffer + bufsize);
-  // NOTE: here is where we will need to respond to the switch for their custom
-  // communications
+  // Pass along the report to the gamepad device and send the response back to the host
   if (report_type == HID_REPORT_TYPE_OUTPUT) {
     // pass the report along to the currently configured usb gamepad device
     auto maybe_response = usb_gamepad->on_hid_report(report_id, buffer, bufsize);

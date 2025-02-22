@@ -21,6 +21,7 @@ public:
   virtual const DeviceInfo &get_device_info() const override { return device_info; }
 
   // Report Data
+  virtual uint8_t get_input_report_id() const override { return InputReport::ID; }
   virtual std::vector<uint8_t> get_report_descriptor() const override {
     return std::vector<uint8_t>(report_descriptor.begin(), report_descriptor.end());
   }
