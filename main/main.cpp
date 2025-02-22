@@ -15,7 +15,7 @@ using namespace std::chrono_literals;
 
 /************* App Configuration ****************/
 
-std::shared_ptr<Gui> gui;
+static std::shared_ptr<Gui> gui;
 static std::vector<uint8_t> hid_report_descriptor;
 std::shared_ptr<GamepadDevice> ble_gamepad;
 std::shared_ptr<GamepadDevice> usb_gamepad;
@@ -98,11 +98,12 @@ extern "C" void app_main(void) {
 #endif
 
   // MARK: Gamepad initialization
-  usb_gamepad = std::make_shared<Xbox>();
+  usb_gamepad = std::make_shared<SwitchPro>();
   ble_gamepad = std::make_shared<Xbox>();
 
   // MARK: USB initialization
   logger.info("USB initialization");
+  set_gui(gui);
   start_usb_gamepad(usb_gamepad);
 
   // MARK: BLE initialization
@@ -125,25 +126,22 @@ extern "C" void app_main(void) {
       continue;
     }
 
-    // otherwise, just twirl the joysticks
-    static constexpr int num_segments = 15;
-    static int index = 0;
-    float angle = 2.0f * M_PI * index / num_segments;
-
     GamepadInputs inputs{};
 
-    inputs.buttons.capture = index % 2 == 0;
-
+    // otherwise, just twirl the joysticks
+    static constexpr int num_segments = 16;
+    static int index = 0;
+    float angle = 2.0f * M_PI * (index % num_segments) / (num_segments);
     // joystick inputs are in the range [-1, 1] float
     inputs.left_joystick.x = sin(angle);
     inputs.left_joystick.y = cos(angle);
-
     inputs.right_joystick.x = cos(angle);
     inputs.right_joystick.y = sin(angle);
 
-    inputs.set_button(index, true);
+    static constexpr int num_buttons = 15;
+    inputs.set_button(index % num_buttons, true);
 
-    index = (index % num_segments) + 1;
+    index++;
 
     // set the inputs in the usb gamepad
     usb_gamepad->set_gamepad_inputs(inputs);

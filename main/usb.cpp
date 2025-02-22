@@ -4,6 +4,9 @@
 static espp::Logger logger({.tag = "USB"});
 static std::shared_ptr<GamepadDevice> usb_gamepad;
 
+// DEUBGGING:
+static std::shared_ptr<Gui> gui;
+
 /************* TinyUSB descriptors ****************/
 
 //--------------------------------------------------------------------+
@@ -120,6 +123,8 @@ bool send_hid_report(uint8_t report_id, const std::vector<uint8_t> &report) {
   return tud_hid_report(report_id, usb_hid_input_report, usb_hid_input_report_len);
 }
 
+void set_gui(std::shared_ptr<Gui> gui_ptr) { gui = gui_ptr; }
+
 /********* TinyUSB HID callbacks ***************/
 
 extern "C" void tud_mount_cb(void) {
@@ -165,6 +170,7 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
                                       uint16_t bufsize) {
   // Pass along the report to the gamepad device and send the response back to the host
   if (report_type == HID_REPORT_TYPE_OUTPUT) {
+    gui->set_label_text(fmt::format("ID: {}, Size: {}", report_id, bufsize));
     // pass the report along to the currently configured usb gamepad device
     auto maybe_response = usb_gamepad->on_hid_report(report_id, buffer, bufsize);
     if (maybe_response.has_value()) {
