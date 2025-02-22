@@ -3,14 +3,19 @@
 #include <string>
 #include <vector>
 
-#include "gamepad_device.hpp"
 #include "hid-rp-switch-pro.hpp"
+#include "range_mapper.hpp"
+
+#include "gamepad_device.hpp"
 
 class SwitchPro : public GamepadDevice {
 public:
   // Constructor
   explicit SwitchPro()
-      : GamepadDevice("SwitchPro") {}
+      : GamepadDevice("SwitchPro")
+      , thumbstick_range_mapper({.center = InputReport::joystick_center,
+                                 .minimum = InputReport::joystick_min,
+                                 .maximum = InputReport::joystick_max}) {}
 
   // Info
   virtual const DeviceInfo &get_device_info() const override { return device_info; }
@@ -44,6 +49,8 @@ protected:
   static constexpr const char serial[] = "000000000001";
 
   static const DeviceInfo device_info;
+
+  espp::FloatRangeMapper thumbstick_range_mapper;
 
   using InputReport = espp::SwitchProGamepadInputReport<>;
   InputReport input_report;

@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "range_mapper.hpp"
+
 #include "gamepad_device.hpp"
 #include "hid-rp-xbox.hpp"
 
@@ -10,7 +12,13 @@ class Xbox : public GamepadDevice {
 public:
   // Constructor
   explicit Xbox()
-      : GamepadDevice("Xbox") {}
+      : GamepadDevice("Xbox")
+      , thumbstick_range_mapper({.center = InputReport::joystick_center,
+                                 .minimum = InputReport::joystick_min,
+                                 .maximum = InputReport::joystick_max})
+      , trigger_range_mapper({.center = InputReport::trigger_center,
+                              .minimum = InputReport::trigger_min,
+                              .maximum = InputReport::trigger_max}) {}
 
   // Info
   virtual const DeviceInfo &get_device_info() const override { return device_info; }
@@ -45,6 +53,9 @@ protected:
   static constexpr const char serial[] = "1337";
 
   static const DeviceInfo device_info;
+
+  espp::FloatRangeMapper thumbstick_range_mapper;
+  espp::FloatRangeMapper trigger_range_mapper;
 
   using InputReport = espp::XboxGamepadInputReport<>;
   InputReport input_report;
