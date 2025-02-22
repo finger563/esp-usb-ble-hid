@@ -10,11 +10,23 @@ const DeviceInfo SwitchPro::device_info = {.vid = SwitchPro::vid,
 
 void SwitchPro::set_report_data(uint8_t report_id, const uint8_t *data, size_t len) {
   std::vector<uint8_t> data_vec(data, data + len);
-  input_report.set_data(data_vec);
+  switch (report_id) {
+  case input_report.ID:
+    input_report.set_data(data_vec);
+    break;
+  default:
+    logger_.warn("Unknown report id: {}", report_id);
+    break;
+  }
 }
 
 std::vector<uint8_t> SwitchPro::get_report_data(uint8_t report_id) const {
-  return input_report.get_report();
+  switch (report_id) {
+  case input_report.ID:
+    return input_report.get_report();
+  default:
+    return {};
+  }
 }
 
 // Gamepad inputs

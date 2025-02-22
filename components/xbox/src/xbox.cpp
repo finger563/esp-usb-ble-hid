@@ -10,11 +10,33 @@ const DeviceInfo Xbox::device_info = {.vid = Xbox::vid,
 
 void Xbox::set_report_data(uint8_t report_id, const uint8_t *data, size_t len) {
   std::vector<uint8_t> data_vec(data, data + len);
-  input_report.set_data(data_vec);
+  switch (report_id) {
+  case input_report.ID:
+    input_report.set_data(data_vec);
+    break;
+  case rumble_report.ID:
+    rumble_report.set_data(data_vec);
+    break;
+  case battery_report.ID:
+    battery_report.set_data(data_vec);
+    break;
+  default:
+    logger_.warn("Unknown report id: {}", report_id);
+    break;
+  }
 }
 
 std::vector<uint8_t> Xbox::get_report_data(uint8_t report_id) const {
-  return input_report.get_report();
+  switch (report_id) {
+  case input_report.ID:
+    return input_report.get_report();
+  case rumble_report.ID:
+    return rumble_report.get_report();
+  case battery_report.ID:
+    return battery_report.get_report();
+  default:
+    return {};
+  }
 }
 
 // Gamepad inputs

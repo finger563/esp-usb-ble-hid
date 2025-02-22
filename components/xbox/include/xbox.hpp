@@ -63,10 +63,10 @@ protected:
   static constexpr uint8_t num_buttons = InputReport::button_count;
 
   using BatteryReport = espp::XboxBatteryInputReport<>;
-  static BatteryReport battery_report;
+  BatteryReport battery_report;
   static constexpr uint8_t battery_report_id = BatteryReport::ID;
 
   using RumbleReport = espp::XboxRumbleOutputReport<>;
-  static RumbleReport rumble_report;
+  RumbleReport rumble_report;
   static constexpr uint8_t rumble_report_id = RumbleReport::ID;
 }; // class SwitchPro

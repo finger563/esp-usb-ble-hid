@@ -113,7 +113,7 @@ extern "C" void app_main(void) {
 #endif
 
   // MARK: Gamepad initialization
-  usb_gamepad = std::make_shared<SwitchPro>();
+  usb_gamepad = std::make_shared<Xbox>();
   ble_gamepad = std::make_shared<Xbox>();
 
   // MARK: USB initialization
