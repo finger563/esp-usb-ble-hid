@@ -22,7 +22,7 @@ static size_t usb_hid_input_report_len = 0;
 
 static tusb_desc_device_t desc_device = {.bLength = sizeof(tusb_desc_device_t),
                                          .bDescriptorType = TUSB_DESC_DEVICE,
-                                         .bcdUSB = 0, // NOTE: to be filled out later
+                                         .bcdUSB = 0x0100, // NOTE: to be filled out later
                                          .bDeviceClass = 0x00,
                                          .bDeviceSubClass = 0x00,
                                          .bDeviceProtocol = 0x00,
@@ -116,8 +116,11 @@ void stop_usb_gamepad() {
 }
 
 bool send_hid_report(uint8_t report_id, const std::vector<uint8_t> &report) {
+  if (report.size() == 0 || report.size() > CFG_TUD_HID_EP_BUFSIZE) {
+    return false;
+  }
   // copy the report data into the usb_hid_input_report buffer
-  std::copy(report.begin(), report.end(), usb_hid_input_report);
+  std::memcpy(usb_hid_input_report, report.data(), report.size());
   usb_hid_input_report_len = report.size();
   // now try to send it
   return tud_hid_report(report_id, usb_hid_input_report, usb_hid_input_report_len);
@@ -130,6 +133,11 @@ void set_gui(std::shared_ptr<Gui> gui_ptr) { gui = gui_ptr; }
 extern "C" void tud_mount_cb(void) {
   // Invoked when device is mounted
   logger.info("USB Mounted");
+  auto maybe_transmission = usb_gamepad->on_attach();
+  if (maybe_transmission.has_value()) {
+    auto &[report_id, report] = maybe_transmission.value();
+    send_hid_report(report_id, report);
+  }
 }
 
 extern "C" void tud_umount_cb(void) {
@@ -151,16 +159,20 @@ extern "C" uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
 extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
                                           hid_report_type_t report_type, uint8_t *buffer,
                                           uint16_t reqlen) {
+  // copy the report data into the buffer
+  // NOTE: we're ignoring the report_id here
   switch (report_type) {
-  case HID_REPORT_TYPE_INPUT: {
-    // copy the report data into the buffer
-    // NOTE: we're ignoring the report_id here
-    std::copy(usb_hid_input_report, usb_hid_input_report + usb_hid_input_report_len, buffer);
+  case HID_REPORT_TYPE_INVALID:
+    return 0;
+  case HID_REPORT_TYPE_INPUT:
+    std::memcpy(buffer, usb_hid_input_report, usb_hid_input_report_len);
     return usb_hid_input_report_len;
-  }
-  default:
+  case HID_REPORT_TYPE_OUTPUT:
+    return 0;
+  case HID_REPORT_TYPE_FEATURE:
     return 0;
   }
+  return 0;
 }
 
 // Invoked when received SET_REPORT control request or
@@ -168,15 +180,19 @@ extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
 extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
                                       hid_report_type_t report_type, uint8_t const *buffer,
                                       uint16_t bufsize) {
-  // Pass along the report to the gamepad device and send the response back to the host
-  if (report_type == HID_REPORT_TYPE_OUTPUT) {
-    gui->set_label_text(fmt::format("ID: {}, Size: {}", report_id, bufsize));
+  if (report_type == HID_REPORT_TYPE_FEATURE) {
+  } else if (report_type == HID_REPORT_TYPE_OUTPUT) {
     // pass the report along to the currently configured usb gamepad device
     auto maybe_response = usb_gamepad->on_hid_report(report_id, buffer, bufsize);
+    std::string debug_string =
+        fmt::format("In: {:02x}, {:02x}, {:02x}", buffer[0], buffer[1], buffer[2]);
     if (maybe_response.has_value()) {
       auto &[response_report_id, response_data] = maybe_response.value();
-      send_hid_report(response_report_id, response_data);
+      bool success = send_hid_report(response_report_id, response_data);
+      debug_string += fmt::format("\nOut: {:02x}, {:02x}, {:02x}", response_report_id,
+                                  response_data[0], response_data[1]);
     }
+    gui->set_label_text(debug_string);
   }
 }
 
