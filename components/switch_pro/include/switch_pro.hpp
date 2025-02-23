@@ -40,7 +40,7 @@ public:
 protected:
   static constexpr auto report_descriptor = espp::switch_pro_descriptor();
 
-  static constexpr uint16_t usb_bcd = 0x0200;
+  static constexpr uint16_t usb_bcd = 0x0100;
   static constexpr uint16_t vid = 0x057E;
   static constexpr uint16_t pid = 0x2009;
   static constexpr uint16_t bcd = 0x0200;
@@ -52,6 +52,8 @@ protected:
   static const DeviceInfo device_info;
 
   espp::FloatRangeMapper thumbstick_range_mapper;
+
+  bool hid_ready = false;
 
   using InputReport = espp::SwitchProGamepadInputReport<>;
   InputReport input_report;

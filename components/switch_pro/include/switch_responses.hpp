@@ -5,6 +5,7 @@
 // from:
 // https://github.com/EasyConNS/BlueCon-esp32/blob/master/components/joycon/include/reply_pack.h
 
+namespace sp {
 /// Switch Replies
 // Standard full mode
 static uint8_t standreport[] = {
@@ -33,7 +34,7 @@ static uint8_t reply02[] = {
     0x21, // report ID
     0x01, // Timer
     0x40, // high: Battery level
-          // low: Connection info, 6 for ball?
+    // low: Connection info, 6 for ball?
 
     0x84, 0x00, 0x12, // buttons
     0x00, 0x08, 0x80, // left stick
@@ -66,24 +67,24 @@ static uint8_t reply4001[] = {0x21, 0x04, 0x8E, 0x00, 0x00, 0x00, 0x01, 0x18, 0x
 static uint8_t reply3001[] = {0x21, 0x04, 0x8E, 0x00, 0x00, 0x00, 0x01, 0x18, 0x80, 0x01, 0x18,
                               0x80, 0x80, 0x80, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 /*
-Black:
-    body: const Color(0xFF323232),
-    button: const Color(0xFFAAAAAA),
-    leftGrip: _Profile.Gray,
-    rightGrip: _Profile.Gray,
-    code: const Color(0xFF323232),
-Splatoon 2:
-    body: const Color(0xFF313232),
-    button: const Color(0xFFDDDDDD),
-    leftGrip: _Profile.NeonGreen,
-    rightGrip: _Profile.NeonPink,
-    code: const Color(0xFF313232),
-Xenoblade 2:
-    body: const Color(0xFF323132),
-    button: const Color(0xFFDDDDDD),
-    leftGrip: _Profile.Red,
-    rightGrip: _Profile.Red,
-    code: const Color(0xFF323132),
+  Black:
+  body: const Color(0xFF323232),
+  button: const Color(0xFFAAAAAA),
+  leftGrip: _Profile.Gray,
+  rightGrip: _Profile.Gray,
+  code: const Color(0xFF323232),
+  Splatoon 2:
+  body: const Color(0xFF313232),
+  button: const Color(0xFFDDDDDD),
+  leftGrip: _Profile.NeonGreen,
+  rightGrip: _Profile.NeonPink,
+  code: const Color(0xFF313232),
+  Xenoblade 2:
+  body: const Color(0xFF323132),
+  button: const Color(0xFFDDDDDD),
+  leftGrip: _Profile.Red,
+  rightGrip: _Profile.Red,
+  code: const Color(0xFF323132),
 */
 static uint8_t reply1050[] = { // SPI flash read
     0x21, 0x04, 0x8E, 0x84, 0x00, 0x12, 0x01, 0x18, 0x80, 0x01, 0x18, 0x80, 0x80, 0x90,
@@ -120,3 +121,5 @@ static uint8_t reply103D[] = { // 603D
 static uint8_t reply2100[] = {0x21, 0x03, 0x8E, 0x84, 0x00, 0x12, 0x01, 0x18, 0x80, 0x01,
                               0x18, 0x80, 0x80, 0x80, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00,
                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+} // namespace sp
