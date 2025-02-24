@@ -78,7 +78,7 @@ protected:
   uint8_t input_report_mode_ = 0; // standard (0x30), nfc/ir (0x31), simpleHID (0x3F)
   uint8_t player_number_ = 0;     // valid values are 1, 2, 3, and 4
   bool vibration_enabled_ = false;
-  uint8_t vibrator_report_; // randomly selected from sp::vibrator_bytes
+  uint8_t vibrator_report_{0}; // randomly selected from sp::vibrator_bytes
   bool imu_enabled_ = false;
   uint8_t input_report_id_ = 0x21;
   sp::TriggerTimes trigger_times_{};

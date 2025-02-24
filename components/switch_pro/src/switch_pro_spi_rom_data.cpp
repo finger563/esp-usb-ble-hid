@@ -5,10 +5,9 @@
 using namespace sp;
 
 int sp::read_spi(uint8_t bank, uint8_t reg, uint8_t read_length, uint8_t *response) {
-  int i, j;
   if (bank == REG_BANK_SHIPMENT) {
     // set the byte(s) to 0
-    for (i = 0; i < read_length; i++) {
+    for (int i = 0; i < read_length; i++) {
       response[i] = 0;
     }
   } else if (bank == REG_BANK_FACTORY_CONFIG) {
