@@ -25,6 +25,24 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_BT_ENABLED=y
 CONFIG_BT_BLUEDROID_ENABLED=n
 CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_LOG_LEVEL_NONE=y
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+CONFIG_BT_NIMBLE_GAP_DEVICE_NAME_MAX_LEN=100
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
+
+# set the bonding configuration to configure the max number of bonded devices
+# that can be remembered.
+#
+# NOTE: the MAX_CCCDS must be AT LEAST 6 * MAX_BONDS, otherwise the number of
+# bonded devices allowed will be limited by the number of CCCDs / 6. The factor
+# is determined by the number of notifications and indications that can be
+# stored for each bonded device. For this reason, we've set max CCCDs to be very
+# large so that they are not the limit.
+CONFIG_BT_NIMBLE_MAX_BONDS=5
+CONFIG_BT_NIMBLE_MAX_CCCDS=128
+
+# Set the ESP-NIMBLE-CPP Config
+CONFIG_NIMBLE_CPP_LOG_LEVEL_NONE=y
 
 #
 # TinyUSB config

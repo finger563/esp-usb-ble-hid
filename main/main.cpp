@@ -25,19 +25,15 @@ std::shared_ptr<GamepadDevice> usb_gamepad;
 /** Notification / Indication receiving handler callback */
 void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData, size_t length,
               bool isNotify) {
-  std::string str = (isNotify == true) ? "Notification" : "Indication";
-  str += " from ";
-  str += pRemoteCharacteristic->getClient()->getPeerAddress().toString();
-  str += ": Service = " + pRemoteCharacteristic->getRemoteService()->getUUID().toString();
-  str += ", Characteristic = " + pRemoteCharacteristic->getUUID().toString();
-  // str             += ", Value = " + std::string((char*)pData, length);
-  fmt::print("{}\n", str);
-
   // set the data in the ble gamepad
   ble_gamepad->set_report_data(ble_gamepad->get_input_report_id(), pData, length);
 
   // convert it to GamepadInputs
   auto inputs = ble_gamepad->get_gamepad_inputs();
+
+  // invert the y-axis for the joysticks
+  inputs.left_joystick.y = -inputs.left_joystick.y;
+  inputs.right_joystick.y = -inputs.right_joystick.y;
 
   // now set the data in the usb gamepad
   usb_gamepad->set_gamepad_inputs(inputs);
@@ -138,8 +134,10 @@ extern "C" void app_main(void) {
     inputs.right_joystick.x = cos(angle);
     inputs.right_joystick.y = sin(angle);
 
-    static constexpr int num_buttons = 15;
-    inputs.set_button(index % num_buttons, true);
+    // // NOTE: this is commented out since it's annoying when it works, but left
+    // // in for debugging when it doesn't work.
+    // static constexpr int num_buttons = 15;
+    // inputs.set_button(index % num_buttons, true);
 
     index++;
 

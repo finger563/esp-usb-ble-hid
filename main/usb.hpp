@@ -7,6 +7,8 @@
 
 #include "gamepad_device.hpp"
 
+#include "bsp.hpp"
+
 extern "C" {
 #include <class/hid/hid_device.h>
 #include <tinyusb.h>
@@ -19,6 +21,14 @@ void stop_usb_gamepad();
 
 // debugging
 
-#include "gui.hpp"
+#if HAS_DISPLAY
 
-void set_gui(std::shared_ptr<Gui> gui);
+// Set this to 1 to turn on debugging for USB using the GUI
+#define DEBUG_USB 1
+
+#if DEBUG_USB
+#include "gui.hpp"
+void set_gui(std::shared_ptr<Gui> gui_ptr);
+#endif // DEBUG_USB
+
+#endif // HAS_DISPLAY

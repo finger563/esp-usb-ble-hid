@@ -5,7 +5,9 @@ static espp::Logger logger({.tag = "USB"});
 static std::shared_ptr<GamepadDevice> usb_gamepad;
 
 // DEUBGGING:
+#if DEBUG_USB
 static std::shared_ptr<Gui> gui;
+#endif
 
 /************* TinyUSB descriptors ****************/
 
@@ -126,7 +128,9 @@ bool send_hid_report(uint8_t report_id, const std::vector<uint8_t> &report) {
   return tud_hid_report(report_id, usb_hid_input_report, usb_hid_input_report_len);
 }
 
+#if DEBUG_USB
 void set_gui(std::shared_ptr<Gui> gui_ptr) { gui = gui_ptr; }
+#endif
 
 /********* TinyUSB HID callbacks ***************/
 
@@ -184,15 +188,21 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
   } else if (report_type == HID_REPORT_TYPE_OUTPUT) {
     // pass the report along to the currently configured usb gamepad device
     auto maybe_response = usb_gamepad->on_hid_report(report_id, buffer, bufsize);
+#if DEBUG_USB
     std::string debug_string =
         fmt::format("In: {:02x}, {:02x}, {:02x}", buffer[0], buffer[1], buffer[2]);
+#endif
     if (maybe_response.has_value()) {
       auto &[response_report_id, response_data] = maybe_response.value();
-      bool success = send_hid_report(response_report_id, response_data);
+      send_hid_report(response_report_id, response_data);
+#if DEBUG_USB
       debug_string += fmt::format("\nOut: {:02x}, {:02x}, {:02x}", response_report_id,
                                   response_data[0], response_data[1]);
+#endif
     }
+#if DEBUG_USB
     gui->set_label_text(debug_string);
+#endif
   }
 }
 

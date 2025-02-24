@@ -7,15 +7,18 @@
 #include "range_mapper.hpp"
 
 #include "gamepad_device.hpp"
+#include "timer.hpp"
+
+#include "switch_controller_protocol.hpp"
 
 class SwitchPro : public GamepadDevice {
 public:
   // Constructor
   explicit SwitchPro()
       : GamepadDevice("SwitchPro")
-      , thumbstick_range_mapper({.center = InputReport::joystick_center,
-                                 .minimum = InputReport::joystick_min,
-                                 .maximum = InputReport::joystick_max}) {}
+      , thumbstick_range_mapper_({.center = InputReport::joystick_center,
+                                  .minimum = InputReport::joystick_min,
+                                  .maximum = InputReport::joystick_max}) {}
 
   // Info
   virtual const DeviceInfo &get_device_info() const override { return device_info; }
@@ -49,12 +52,47 @@ protected:
   static constexpr const char product[] = "Pro Controller";
   static constexpr const char serial[] = "000000000001";
 
+  GamepadDevice::ReportData process_command(const uint8_t *data, size_t len);
+  void set_subcommand_reply(std::vector<uint8_t> &report);
+  void set_unknown_subcommand(std::vector<uint8_t> &report, uint8_t subcommand_id);
+  void set_full_input_report(std::vector<uint8_t> &report);
+  void set_standard_input_report(std::vector<uint8_t> &report);
+  void set_device_info(std::vector<uint8_t> &report);
+  void set_shipment(std::vector<uint8_t> &report);
+  void toggle_imu(std::vector<uint8_t> &report, sp::Message &message);
+  void set_imu_data(std::vector<uint8_t> &report);
+  void spi_read(std::vector<uint8_t> &report, sp::Message &message);
+  void set_mode(std::vector<uint8_t> &report, sp::Message &message);
+  void set_trigger_buttons(std::vector<uint8_t> &report);
+  void enable_vibration(std::vector<uint8_t> &report);
+  void set_player_lights(std::vector<uint8_t> &report, sp::Message &message);
+  void set_nfc_ir_state(std::vector<uint8_t> &report);
+  void set_nfc_ir_config(std::vector<uint8_t> &report);
+
   static const DeviceInfo device_info;
 
-  espp::FloatRangeMapper thumbstick_range_mapper;
+  espp::FloatRangeMapper thumbstick_range_mapper_;
 
-  bool hid_ready = false;
+  bool hid_ready_ = false; // set after device info has been queried
+
+  uint8_t input_report_mode_ = 0; // standard (0x30), nfc/ir (0x31), simpleHID (0x3F)
+  uint8_t player_number_ = 0;     // valid values are 1, 2, 3, and 4
+  bool vibration_enabled_ = false;
+  uint8_t vibrator_report_; // randomly selected from sp::vibrator_bytes
+  bool imu_enabled_ = false;
+  uint8_t input_report_id_ = 0x21;
+  sp::TriggerTimes trigger_times_{};
 
   using InputReport = espp::SwitchProGamepadInputReport<>;
-  InputReport input_report;
+  InputReport input_report_;
+
+  espp::Timer counter_timer_{{
+      .name = "Switch Pro Counter Timer",
+      .period = std::chrono::milliseconds(5), // Joy-Con uses 4.96ms as the timer tick rate
+      .callback =
+          [this]() {
+            input_report_.increment_counter();
+            return false; // do not stop the timer
+          },
+  }};
 }; // class SwitchPro

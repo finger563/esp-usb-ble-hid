@@ -20,6 +20,7 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     logger.info("{} Disconnected, reason = {} - Starting scan",
                 pClient->getPeerAddress().toString(), reason);
     NimBLEDevice::getScan()->start(scanTimeMs);
+    subscribed = false;
   }
 
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override {
@@ -34,7 +35,9 @@ class ClientCallbacks : public NimBLEClientCallbacks {
       NimBLEDevice::getClientByHandle(connInfo.getConnHandle())->updateConnParams(12, 12, 0, 400);
     }
   }
-} clientCallbacks;
+};
+
+static ClientCallbacks clientCallbacks;
 
 class ScanCallbacks : public NimBLEScanCallbacks {
   espp::Logger logger =
@@ -71,20 +74,22 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     printf("Scan Ended\n");
     NimBLEDevice::getScan()->start(scanTimeMs);
   }
-} scanCallbacks;
+};
+
+static ScanCallbacks scanCallbacks;
 
 void init_ble() {
   NimBLEDevice::init("ESP-USB-BLE-HID");
 
   // // and some i/o config
-  // auto io_capabilities = BLE_HS_IO_NO_INPUT_OUTPUT;
-  // NimBLEDevice::setSecurityIOCap(io_capabilities);
+  auto io_capabilities = BLE_HS_IO_NO_INPUT_OUTPUT;
+  NimBLEDevice::setSecurityIOCap(io_capabilities);
 
   // // set security parameters
-  // bool bonding = true;
-  // bool mitm = false;
-  // bool secure_connections = true;
-  // NimBLEDevice::setSecurityAuth(bonding, mitm, secure_connections);
+  bool bonding = true;
+  bool mitm = false;
+  bool secure_connections = true;
+  NimBLEDevice::setSecurityAuth(bonding, mitm, secure_connections);
 }
 
 void start_ble_scan_thread(NimBLEUUID &service_uuid, NimBLEUUID &char_uuid,
@@ -110,7 +115,7 @@ void start_ble_scan_thread(NimBLEUUID &service_uuid, NimBLEUUID &char_uuid,
 
   // now start a thread to register for notifications if connected or restart
   // scanning if not connected
-  auto timer_fn = [service_uuid, char_uuid, callback]() -> bool {
+  auto timer_fn = [&service_uuid, &char_uuid, &callback]() -> bool {
     if (subscribed) {
       return false; // don't stop the timer
     }
@@ -127,11 +132,15 @@ void start_ble_scan_thread(NimBLEUUID &service_uuid, NimBLEUUID &char_uuid,
 
     // try to subscribe to notifications for each connected client
     for (auto &pClient : pClients) {
-      // subscribe to notifications for the service and characteristic
+      static constexpr bool refresh = true;
+      // refresh services
+      pClient->getServices(refresh);
       auto pSvc = pClient->getService(service_uuid);
       if (!pSvc) {
         continue;
       }
+      // refresh chars
+      pSvc->getCharacteristics(refresh);
       auto pChr = pSvc->getCharacteristic(char_uuid);
       if (!pChr) {
         continue;
