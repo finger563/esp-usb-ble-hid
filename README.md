@@ -40,3 +40,18 @@ See the Getting Started Guide for full steps to configure and use ESP-IDF to bui
 ## Output
 
 ![Image](https://github.com/user-attachments/assets/c6e0bed9-60e5-4ed4-9a31-0082b0b804c6)
+
+## Helpful Links
+
+The links below were invaluable in developing the switch pro implemenation
+within this repo such that it would work on MacOS, Android, iOS, and (most
+importantly) the Nintendo Switch.
+
+* https://github.com/Brikwerk/nxbt/blob/master/nxbt/controller/protocol.py
+* https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/bluetooth_hid_subcommands_notes.md
+* https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/USB-HID-Notes.md
+* https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/spi_flash_notes.md
+* https://github.com/EasyConNS/BlueCon-esp32/tree/master/components/joycon
+* https://github.com/mzyy94/nscon/blob/master/nscon.go
+* https://www.mzyy94.com/blog/2020/03/20/nintendo-switch-pro-controller-usb-gadget/
+
