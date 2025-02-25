@@ -185,6 +185,7 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
                                       hid_report_type_t report_type, uint8_t const *buffer,
                                       uint16_t bufsize) {
   if (report_type == HID_REPORT_TYPE_FEATURE) {
+    // TODO: pro controller supports feature reports
   } else if (report_type == HID_REPORT_TYPE_OUTPUT) {
     // pass the report along to the currently configured usb gamepad device
     auto maybe_response = usb_gamepad->on_hid_report(report_id, buffer, bufsize);
