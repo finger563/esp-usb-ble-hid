@@ -11,6 +11,14 @@
 #include "bsp.hpp"
 #include "usb.hpp"
 
+// set to 1 to enable twirling the joysticks automatically (for testing) when
+// there is no BLE device connected.
+#define DEBUG_NO_BLE_TWIRL_JOYSTICKS 0
+// set to 1 to enable pushing the buttons automatically (for testing) when there
+// is no BLE device connected. Not recommended unless you want to annoy
+// yourself.
+#define DEBUG_NO_BLE_TEST_BUTTONS 0
+
 using namespace std::chrono_literals;
 
 /************* App Configuration ****************/
@@ -147,22 +155,25 @@ extern "C" void app_main(void) {
       continue;
     }
 
-    GamepadInputs inputs{};
-
+#if DEBUG_NO_BLE_TWIRL_JOYSTICKS
     // otherwise, just twirl the joysticks
     static constexpr int num_segments = 16;
     static int index = 0;
     float angle = 2.0f * M_PI * (index % num_segments) / (num_segments);
+
+    GamepadInputs inputs{};
     // joystick inputs are in the range [-1, 1] float
     inputs.left_joystick.x = sin(angle);
     inputs.left_joystick.y = cos(angle);
     inputs.right_joystick.x = cos(angle);
     inputs.right_joystick.y = sin(angle);
 
-    // // NOTE: this is commented out since it's annoying when it works, but left
-    // // in for debugging when it doesn't work.
-    // static constexpr int num_buttons = 15;
-    // inputs.set_button(index % num_buttons, true);
+#if DEBUG_NO_BLE_TEST_BUTTONS
+    // NOTE: this is not recommended since it's annoying when it works, but left
+    // in for debugging when it doesn't work.
+    static constexpr int num_buttons = 15;
+    inputs.set_button(index % num_buttons, true);
+#endif // DEBUG_NO_BLE_TEST_BUTTONS
 
     index++;
 
@@ -174,9 +185,10 @@ extern "C" void app_main(void) {
     auto report = usb_gamepad->get_report_data(usb_report_id);
 
     if (tud_mounted()) {
-      bool success = send_hid_report(usb_report_id, report);
+      send_hid_report(usb_report_id, report);
     } else {
       bsp.led(espp::Rgb(1.0f, 0.0f, 0.0f));
     }
+#endif // DEBUG_NO_BLE_TWIRL_JOYSTICKS
   }
 }

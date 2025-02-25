@@ -100,7 +100,8 @@ void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
                                                                 sizeof(hid_string_descriptor[0]),
                                      .external_phy = false,
                                      .configuration_descriptor = hid_configuration_descriptor,
-                                     .self_powered = false};
+                                     .self_powered = false,
+                                     .vbus_monitor_io = -1};
 
   if (tinyusb_driver_install(&tusb_cfg) != ESP_OK) {
     logger.error("Failed to install tinyusb driver");
