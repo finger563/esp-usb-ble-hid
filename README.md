@@ -37,6 +37,33 @@ idf.py -p PORT flash monitor
 
 See the Getting Started Guide for full steps to configure and use ESP-IDF to build projects.
 
+## How To Use
+
+The dongle can store up to 5 paired devices at a time. When it turns on / is
+plugged in it will attempt to reconnect to one of those devices. If there are no
+paired devices, then it will enter pairing mode.
+
+If at any time you want to pair a new controller, simply press and hold the
+button on the dongle until the LED starts pulsing blue.
+
+### Pairing Mode
+
+While in pairing mode, the device will scan for any BLE devices which expose a
+HID service. It will connect and attempt to bond to the first device it finds.
+
+### Reconnection Mode
+
+When in this mode, the device will scan for the devices in its pairing list and
+connect to the first one it finds.
+
+### Connected
+
+While connected, the device will translate xbox controller inputs received via
+BLE into Nintendo Switch Pro controller inputs which will then be transmitted
+over USB.
+
+If the controller disconnects, then the dongle will re-enter reconnection mode.
+
 ## Output
 
 ![Image](https://github.com/user-attachments/assets/c6e0bed9-60e5-4ed4-9a31-0082b0b804c6)

@@ -10,6 +10,6 @@
 typedef NimBLERemoteCharacteristic::notify_callback notify_callback_t;
 
 void init_ble();
-void start_ble_scan_thread(NimBLEUUID &service_uuid, NimBLEUUID &char_uuid,
-                           notify_callback_t callback);
+void start_ble_reconnection_thread(notify_callback_t callback);
+void start_ble_pairing_thread(notify_callback_t callback);
 bool is_ble_subscribed();

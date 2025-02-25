@@ -93,6 +93,24 @@ extern "C" void app_main(void) {
   logger.info("No display");
 #endif
 
+  // MARK: BLE pairing timer (for use with button)
+  espp::HighResolutionTimer ble_pairing_timer{
+      {.name = "Pairing Timer", .callback = [&]() { start_ble_pairing_thread(notifyCB); }}};
+
+  // MARK: Pairing button initialization
+  // initialize the button, which we'll use to cycle the rotation of the display
+  logger.info("Initializing the button");
+  auto on_button_pressed = [&](const auto &event) {
+    if (event.active) {
+      // start ble pairing timer
+      ble_pairing_timer.oneshot(3'000'000); // 3 seconds
+    } else {
+      // cancel the ble pairing timer
+      ble_pairing_timer.stop();
+    }
+  };
+  bsp.initialize_button(on_button_pressed);
+
   // MARK: Gamepad initialization
   usb_gamepad = std::make_shared<SwitchPro>();
   ble_gamepad = std::make_shared<Xbox>();
@@ -109,10 +127,7 @@ extern "C" void app_main(void) {
   init_ble();
 
   logger.info("Scanning for peripherals");
-  NimBLEUUID hid_service_uuid(espp::HidService::SERVICE_UUID);
-  NimBLEUUID report_map_uuid(espp::HidService::REPORT_MAP_UUID);
-  NimBLEUUID hid_input_uuid(espp::HidService::REPORT_UUID);
-  start_ble_scan_thread(hid_service_uuid, hid_input_uuid, notifyCB);
+  start_ble_reconnection_thread(notifyCB);
 
   // Loop here until we find a device we want to connect to
   while (true) {
@@ -152,13 +167,6 @@ extern "C" void app_main(void) {
 
     if (tud_mounted()) {
       bool success = send_hid_report(usb_report_id, report);
-      espp::Rgb color = success ? espp::Rgb(0.0f, 1.0f, 0.0f) : espp::Rgb(1.0f, 0.0f, 0.0f);
-      // toggle the LED each send, so mod 2
-      if (index % 2 == 0) {
-        bsp.led(color);
-      } else {
-        bsp.led(espp::Rgb(0.0f, 0.0f, 0.0f));
-      }
     } else {
       bsp.led(espp::Rgb(1.0f, 0.0f, 0.0f));
     }
