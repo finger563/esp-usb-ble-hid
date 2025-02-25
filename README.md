@@ -1,11 +1,19 @@
 # ESP USB BLE HID
 
+Example code for using BLE gamepad (such as Xbox wireless controller) with the
+Nintendo Switch via a USB dongle.
+
 This repository contains example code for using an ESP32s3 to act as a USB-BLE
-HID bridge. You would run this code for instance on a QtPy ESP32s3, connected to
-a computer or other device which is a USB HID host. The QtPy / this code would
-then start a BLE GATT Client to connect to a BLE HID device (this example
+HID bridge. You would run this code for instance on a QtPy ESP32s3 or a LilyGo
+T-Dongle S3, connected to a computer or other device which is a USB HID host.
+The main HID host that this targets is the Nintendo Switch. The QtPy / this code
+would then start a BLE GATT Client to connect to a BLE HID device (this example
 targets a gamepad), and will allow the wireless HID device (gamepad) to talk to
 the HID Host.
+
+![image](https://github.com/user-attachments/assets/d76558db-c34e-48d4-9771-06fa4ebdb05a)
+
+https://github.com/user-attachments/assets/a0789d38-bd0e-4215-bf2c-ebedd9958495
 
 ## Cloning
 
@@ -64,9 +72,29 @@ over USB.
 
 If the controller disconnects, then the dongle will re-enter reconnection mode.
 
+### Note about system power
+
+The switch turns off its USB-C port when it enters sleep mode. This means that
+while the Switch Dock's USB-A port still has power, the dongle will not properly
+mount as a usb device until the Switch comes out of sleep. 
+
+For this reason, you cannot use this dongle or the associated BLE controller to
+power on your switch unfortunately. The only way (currently) to remotely wake
+your switch is via Bluetooth Classic.
+
+That being said, I have read online that if you plug a usb-to-ethernet adapter
+into your Switch Dock, then the Switch may keep its USB-C port awake during
+sleep.
+
 ## Output
 
-![Image](https://github.com/user-attachments/assets/c6e0bed9-60e5-4ed4-9a31-0082b0b804c6)
+https://github.com/user-attachments/assets/a0789d38-bd0e-4215-bf2c-ebedd9958495
+
+![CleanShot 2025-02-25 at 08 54 49](https://github.com/user-attachments/assets/d06a53cb-c20c-4de8-9987-38a7bc05b60a)
+
+![CleanShot 2025-02-25 at 09 02 40](https://github.com/user-attachments/assets/6c3820d1-b9f0-4188-96a6-0d1d8b44e1fb)
+
+![CleanShot 2025-02-25 at 09 03 03](https://github.com/user-attachments/assets/89f524e4-1737-4aec-92ac-e3a64f69c6fe)
 
 ## Helpful Links
 
