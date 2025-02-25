@@ -99,7 +99,9 @@ extern "C" void app_main(void) {
 
   // MARK: USB initialization
   logger.info("USB initialization");
+#if DEBUG_USB
   set_gui(gui);
+#endif // DEBUG_USB
   start_usb_gamepad(usb_gamepad);
 
   // MARK: BLE initialization
