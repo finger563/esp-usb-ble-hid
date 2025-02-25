@@ -132,8 +132,7 @@ std::optional<GamepadDevice::ReportData> SwitchPro::on_hid_report(uint8_t report
       // TODO: we should disable USB input reports, but probably doesn't matter
       break;
     }
-    // return {{DEVICE_INIT_REPORT, resp}};
-    return {};
+    return {{DEVICE_INIT_REPORT, resp}};
   }
   case HOST_OUTPUT_REPORT: {
     return process_command(data, len);
