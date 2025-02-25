@@ -195,7 +195,10 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 #endif
     if (maybe_response.has_value()) {
       auto &[response_report_id, response_data] = maybe_response.value();
-      send_hid_report(response_report_id, response_data);
+      if (response_data.size()) {
+        // send_hid_report(response_report_id, response_data);
+        tud_hid_report(response_report_id, response_data.data(), response_data.size());
+      }
 #if DEBUG_USB
       debug_string += fmt::format("\nOut: {:02x}, {:02x}, {:02x}", response_report_id,
                                   response_data[0], response_data[1]);

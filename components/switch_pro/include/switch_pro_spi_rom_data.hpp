@@ -282,12 +282,12 @@ static constexpr uint8_t spi_rom_data_80[] = {
     0xB2, 0xA1,       // magic bytes for user Left Stick calibration
     0xFF, 0xF7, 0x7F, // lx_max, ly_max
     0x00, 0x08, 0x80, // lx_center, ly_center
-    0x00, 0x08, 0x80, // lx_min, ly_min
+    0x00, 0x00, 0x00, // lx_min, ly_min
 
     0xB2, 0xA1,       // magic bytes for user Right Stick calibration
-    0x00, 0x08, 0x80, // rx_max, ry_max
+    0xFF, 0xF7, 0x7F, // rx_max, ry_max
     0x00, 0x08, 0x80, // rx_center, ry_center
-    0xFF, 0xF7, 0x7F, // rx_min, ry_min
+    0x00, 0x00, 0x00, // rx_min, ry_min
 
     // /// LEFT STICK
     // 0xff, 0xff, // left stick magic bytes (0xB2, 0xA1) if user calibration present

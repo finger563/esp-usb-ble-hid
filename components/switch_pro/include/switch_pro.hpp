@@ -110,13 +110,14 @@ protected:
 
   using InputReport = espp::SwitchProGamepadInputReport<>;
   InputReport input_report_;
+  std::recursive_mutex input_report_mutex_;
 
   espp::HighResolutionTimer counter_timer_{{
       .name = "Switch Pro Counter Timer",
       .callback =
           [this]() {
+            std::lock_guard<std::recursive_mutex> lock(input_report_mutex_);
             input_report_.increment_counter();
-            return false; // do not stop the timer
           },
   }};
 }; // class SwitchPro

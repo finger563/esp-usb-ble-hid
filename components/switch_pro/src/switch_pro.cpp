@@ -11,9 +11,11 @@ const DeviceInfo SwitchPro::device_info = {.vid = SwitchPro::vid,
 void SwitchPro::set_report_data(uint8_t report_id, const uint8_t *data, size_t len) {
   std::vector<uint8_t> data_vec(data, data + len);
   switch (report_id) {
-  case input_report_.ID:
+  case input_report_.ID: {
+    std::lock_guard<std::recursive_mutex> lock(input_report_mutex_);
     input_report_.set_data(data_vec);
     break;
+  }
   default:
     logger_.warn("Unknown report id: {}", report_id);
     break;
@@ -35,6 +37,7 @@ std::vector<uint8_t> SwitchPro::get_report_data(uint8_t report_id) const {
 // Gamepad inputs
 GamepadInputs SwitchPro::get_gamepad_inputs() const {
   GamepadInputs inputs{};
+
   input_report_.get_buttons(inputs.buttons);
   input_report_.get_left_joystick(inputs.left_joystick.x, inputs.left_joystick.y);
   input_report_.get_right_joystick(inputs.right_joystick.x, inputs.right_joystick.y);
@@ -45,6 +48,7 @@ GamepadInputs SwitchPro::get_gamepad_inputs() const {
 }
 
 void SwitchPro::set_gamepad_inputs(const GamepadInputs &inputs) {
+  std::lock_guard<std::recursive_mutex> lock(input_report_mutex_);
   input_report_.reset();
 
   input_report_.set_buttons(inputs.buttons);
@@ -58,6 +62,8 @@ void SwitchPro::set_gamepad_inputs(const GamepadInputs &inputs) {
 
   // set housekeeping data
   input_report_.set_usb_powered(true);
+  input_report_.set_battery_charging(true);
+  input_report_.set_battery_level(100);
   // static constexpr uint8_t PRO_CONTROLLER = (0 << 1); // b00 << 1 = Pro Controller, b11 << 1 =
   // Joy-Con static constexpr uint8_t SWITCH_POWERED = 0b1; // b1 = Switch powered, b0 = not powered
   input_report_.set_connection_info(sp::PRO_CONTROLLER.connection_info);

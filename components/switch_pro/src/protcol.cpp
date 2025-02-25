@@ -28,7 +28,12 @@ GamepadDevice::ReportData SwitchPro::process_command(const uint8_t *data, size_t
   Message message(data, len);
 
   // prep most common response, which contains the full input report
-  std::vector<uint8_t> report = input_report_.get_report();
+  std::vector<uint8_t> report;
+
+  {
+    std::lock_guard<std::recursive_mutex> lock(input_report_mutex_);
+    report = input_report_.get_report();
+  }
 
   report[12] = 0x80;
   report[13] = message.subcommand_id;
@@ -145,7 +150,10 @@ void SwitchPro::set_full_input_report(std::vector<uint8_t> &report) {
 
 void SwitchPro::set_standard_input_report(std::vector<uint8_t> &report) {
   // set the timer regardless
-  report[0] = input_report_.get_counter();
+  {
+    std::lock_guard<std::recursive_mutex> lock(input_report_mutex_);
+    report[0] = input_report_.get_counter();
+  }
   if (hid_ready_) {
     // do nothing, we started off with the correct values. all we have to do is
     // set the vibrator byte
@@ -233,6 +241,7 @@ void SwitchPro::spi_read(std::vector<uint8_t> &report, sp::Message &message) {
 
   // if we got here, the read failed, so simply NACK it
   report[12] = 0x83;
+  report[13] = 0x00;
 
   return;
 }
