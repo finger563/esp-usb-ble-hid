@@ -20,9 +20,9 @@ static constexpr float pairing_breathing_period = 1.0f;
 static constexpr float reconnecting_breathing_period = 3.0f;
 
 static float breathing_period = reconnecting_breathing_period;
+static auto breathing_start = std::chrono::high_resolution_clock::now();
 static espp::Gaussian gaussian({.gamma = 0.1f, .alpha = 1.0f, .beta = 0.5f});
 static auto breathe = []() -> float {
-  static auto breathing_start = std::chrono::high_resolution_clock::now();
   auto now = std::chrono::high_resolution_clock::now();
   auto elapsed = std::chrono::duration<float>(now - breathing_start).count();
   float t = std::fmod(elapsed, breathing_period) / breathing_period;
@@ -60,9 +60,10 @@ class ClientCallbacks : public NimBLEClientCallbacks {
   void onDisconnect(NimBLEClient *pClient, int reason) override {
     logger.info("{} Disconnected, reason = {} - Starting scan",
                 pClient->getPeerAddress().toString(), reason);
-    NimBLEDevice::getScan()->start(scanTimeMs);
-    // resume the led task
-    led_task->start();
+    // if we are not scanning, then start scanning
+    if (!NimBLEDevice::getScan()->isScanning()) {
+      start_ble_reconnection_thread(notify_callback);
+    }
     subscribed = false;
   }
 
@@ -125,7 +126,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 
   void onScanEnd(const NimBLEScanResults &results, int reason) override {
     printf("Scan Ended\n");
-    NimBLEDevice::getScan()->start(scanTimeMs);
+    start_ble_reconnection_thread(notify_callback);
   }
 };
 
@@ -141,7 +142,7 @@ static bool timer_callback() {
   // if there are no clients, then ensure we're scanning and return.
   if (!pClients.size()) {
     if (!NimBLEDevice::getScan()->isScanning()) {
-      NimBLEDevice::getScan()->start(scanTimeMs);
+      start_ble_reconnection_thread(notify_callback);
     }
     return false; // don't stop the timer
   }
@@ -221,17 +222,24 @@ static void start_scan() {
   // Start scanning for advertisers
   pScan->start(scanTimeMs);
 
+  // if the led task is not running, set the led breathing start time to now
+  if (!led_task->is_running()) {
+    breathing_start = std::chrono::high_resolution_clock::now();
+  }
+
   // now start the led task
   led_task->start();
 
-  // now start a thread to register for notifications if connected or restart
-  // scanning if not connected
-  using namespace std::chrono_literals;
-  scanTimer = std::make_unique<espp::Timer>(
-      espp::Timer::Config{.name = "Scan Timer",
-                          .period = 100ms,
-                          .callback = timer_callback,
-                          .log_level = espp::Logger::Verbosity::INFO});
+  if (!scanTimer) {
+    // now start a thread to register for notifications if connected or restart
+    // scanning if not connected
+    using namespace std::chrono_literals;
+    scanTimer = std::make_unique<espp::Timer>(
+        espp::Timer::Config{.name = "Scan Timer",
+                            .period = 100ms,
+                            .callback = timer_callback,
+                            .log_level = espp::Logger::Verbosity::INFO});
+  }
 }
 
 void start_ble_reconnection_thread(notify_callback_t callback) {

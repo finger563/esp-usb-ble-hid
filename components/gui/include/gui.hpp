@@ -39,6 +39,9 @@ public:
     paused_ = false;
   }
 
+  void set_usb_connected(bool connected);
+  void set_ble_connected(bool connected);
+
   void set_label_text(std::string_view text) {
     std::lock_guard<std::recursive_mutex> lk(mutex_);
     lv_label_set_text(label_, text.data());

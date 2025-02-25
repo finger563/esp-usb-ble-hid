@@ -24,7 +24,7 @@ void stop_usb_gamepad();
 #if HAS_DISPLAY
 
 // Set this to 1 to turn on debugging for USB using the GUI
-#define DEBUG_USB 1
+#define DEBUG_USB 0
 
 #if DEBUG_USB
 #include "gui.hpp"

@@ -16,12 +16,37 @@ void Gui::init_ui() {
   logger_.info("Initializing UI");
   ui_init();
 
+  set_usb_connected(false);
+  set_ble_connected(false);
+
   // make the label and center it
   label_ = lv_label_create(lv_screen_active());
   lv_label_set_long_mode(label_, LV_LABEL_LONG_WRAP);
   lv_obj_align(label_, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_style_text_align(label_, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_width(label_, 150);
+}
+
+void Gui::set_usb_connected(bool connected) {
+  std::lock_guard<std::recursive_mutex> lk(mutex_);
+  // hide or show the usb image
+  // ui_UsbIcon
+  if (connected) {
+    lv_obj_clear_flag(ui_UsbIcon, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(ui_UsbIcon, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void Gui::set_ble_connected(bool connected) {
+  std::lock_guard<std::recursive_mutex> lk(mutex_);
+  // hide or show the ble image
+  // ui_BtIcon
+  if (connected) {
+    lv_obj_clear_flag(ui_BtIcon, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(ui_BtIcon, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 void Gui::on_value_changed(lv_event_t *e) {

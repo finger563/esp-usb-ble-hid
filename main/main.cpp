@@ -89,9 +89,9 @@ extern "C" void app_main(void) {
   logger.info("Making GUI");
   gui = std::make_shared<Gui>(Gui::Config{.log_level = espp::Logger::Verbosity::INFO});
   gui->set_label_text("");
-#else
+#else  // HAS_DISPLAY
   logger.info("No display");
-#endif
+#endif // HAS_DISPLAY
 
   // MARK: BLE pairing timer (for use with button)
   espp::HighResolutionTimer ble_pairing_timer{
@@ -133,6 +133,14 @@ extern "C" void app_main(void) {
   while (true) {
     // sleep for a bit
     std::this_thread::sleep_for(1s);
+
+    // update the display if we have one
+#if HAS_DISPLAY
+    // show the usb icon if the USB is mounted
+    gui->set_usb_connected(tud_mounted());
+    // show the BLE icon if the BLE subsystem is subscribed (receiving data)
+    gui->set_ble_connected(is_ble_subscribed());
+#endif // HAS_DISPLAY
 
     // if we're subscribed, then don't do anything else
     if (is_ble_subscribed()) {
