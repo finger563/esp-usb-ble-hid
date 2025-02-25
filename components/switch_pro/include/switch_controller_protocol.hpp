@@ -75,6 +75,7 @@ union TriggerTimes {
     uint16_t sr;
     uint16_t home;
   } __attribute__((packed));
+  uint16_t values[7];
   uint8_t bytes[14] = {0};
 } __attribute__((packed));
 

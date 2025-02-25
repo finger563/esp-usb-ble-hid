@@ -53,11 +53,44 @@ void SwitchPro::set_gamepad_inputs(const GamepadInputs &inputs) {
   input_report_.set_brake(inputs.l2.value);
   input_report_.set_accelerator(inputs.r2.value);
 
+  // update trigger buttons elapsed times (for l,r, zl, zr, sl, sr, and home).
+  update_trigger_button_times(inputs);
+
   // set housekeeping data
   input_report_.set_usb_powered(true);
   // static constexpr uint8_t PRO_CONTROLLER = (0 << 1); // b00 << 1 = Pro Controller, b11 << 1 =
   // Joy-Con static constexpr uint8_t SWITCH_POWERED = 0b1; // b1 = Switch powered, b0 = not powered
   input_report_.set_connection_info(sp::PRO_CONTROLLER.connection_info);
+}
+
+void SwitchPro::update_trigger_button_times(const GamepadInputs &inputs) {
+  // for each of the trigger buttons, update the elapsed time.
+  uint64_t now = esp_timer_get_time();
+  update_trigger_button_index(inputs.buttons.l1, l_trigger_index, now);
+  update_trigger_button_index(inputs.buttons.r1, r_trigger_index, now);
+  update_trigger_button_index(inputs.buttons.zl, zl_trigger_index, now);
+  update_trigger_button_index(inputs.buttons.zr, zr_trigger_index, now);
+  // NOTE: we ignore sl/sr for now since we're a pro controller, so we just do home
+  update_trigger_button_index(inputs.buttons.home, home_trigger_index, now);
+
+  // Then for each of the trigger buttons, update the sp::TriggerTimes
+  // (trigger_times_) struct which holds the elapsed time in units of 10ms
+  // (i.e. 10 = 100ms)
+  for (size_t i = 0; i < trigger_button_count; i++) {
+    trigger_times_.values[i] = trigger_button_times_[i].elapsed_time / 10'000; // convert us to 10ms
+  }
+}
+
+void SwitchPro::update_trigger_button_index(bool pressed, size_t index, uint64_t &now) {
+  if (pressed) {
+    if (trigger_button_times_[index].press_start == 0) {
+      trigger_button_times_[index].press_start = now;
+    } else {
+      trigger_button_times_[index].elapsed_time = now - trigger_button_times_[index].press_start;
+    }
+  } else {
+    trigger_button_times_[index].press_start = 0;
+  }
 }
 
 // HID handlers
@@ -99,13 +132,14 @@ std::optional<GamepadDevice::ReportData> SwitchPro::on_hid_report(uint8_t report
       // TODO: we should disable USB input reports, but probably doesn't matter
       break;
     }
-    return {{DEVICE_INIT_REPORT, resp}};
+    // return {{DEVICE_INIT_REPORT, resp}};
+    return {};
   }
   case HOST_OUTPUT_REPORT: {
     return process_command(data, len);
   }
   case HOST_RUMBLE_REPORT: {
-    return {};
+    // TODO: process the rumble packet
   }
   default:
     break;

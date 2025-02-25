@@ -145,7 +145,7 @@ void SwitchPro::set_full_input_report(std::vector<uint8_t> &report) {
 
 void SwitchPro::set_standard_input_report(std::vector<uint8_t> &report) {
   // set the timer regardless
-  // report[0] = input_report_.get_counter();
+  report[0] = input_report_.get_counter();
   if (hid_ready_) {
     // do nothing, we started off with the correct values. all we have to do is
     // set the vibrator byte
@@ -264,17 +264,6 @@ void SwitchPro::set_trigger_buttons(std::vector<uint8_t> &report) {
   //
   // e.g.
   // Left_trigger_ms = ((byte[1] << 8) | byte[0]) * 10;
-
-  // we're already using a TriggerTimes union for serialization of this, so
-  // we'll just update the trigger_times_ members, then copy the data into the
-  // report
-  trigger_times_.l += 10;
-  trigger_times_.r += 10;
-  trigger_times_.zl += 10;
-  trigger_times_.zr += 10;
-  trigger_times_.sl += 10;
-  trigger_times_.sr += 10;
-  trigger_times_.home += 10;
 
   std::memcpy(report.data() + 14, &trigger_times_, sizeof(trigger_times_));
 }
