@@ -99,7 +99,8 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       should_connect = true;
     }
     if (should_connect) {
-      /** stop scan before connecting */
+      /** stop scan before connecting, since we use async connections and don't
+          want to possibly try to connect to multiple devices. */
       NimBLEDevice::getScan()->stop();
 
       logger.info("Found Our Device");
@@ -191,6 +192,8 @@ static bool timer_callback() {
 
 void init_ble(const std::string &device_name) {
   NimBLEDevice::init(device_name);
+  // NOTE: you must create a server if you want the GAP services to be available
+  // and the device name to be readable by connected peers.
   static auto server_ = NimBLEDevice::createServer();
   server_->start();
 
