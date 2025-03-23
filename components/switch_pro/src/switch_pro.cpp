@@ -9,9 +9,9 @@ const DeviceInfo SwitchPro::device_info = {.vid = SwitchPro::vid,
                                            .serial_number = SwitchPro::serial};
 
 void SwitchPro::set_report_data(uint8_t report_id, const uint8_t *data, size_t len) {
-  std::vector<uint8_t> data_vec(data, data + len);
   switch (report_id) {
   case input_report_.ID: {
+    std::vector<uint8_t> data_vec(data, data + len);
     std::lock_guard<std::recursive_mutex> lock(input_report_mutex_);
     input_report_.set_data(data_vec);
     break;
