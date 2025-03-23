@@ -132,7 +132,8 @@ extern "C" void app_main(void) {
 
   // MARK: BLE initialization
   logger.info("BLE initialization");
-  init_ble();
+  std::string device_name = "Switch";
+  init_ble(device_name);
 
   logger.info("Scanning for peripherals");
   start_ble_reconnection_thread(notifyCB);

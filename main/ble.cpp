@@ -99,6 +99,9 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       should_connect = true;
     }
     if (should_connect) {
+      /** stop scan before connecting */
+      NimBLEDevice::getScan()->stop();
+
       logger.info("Found Our Device");
 
       /** Async connections can be made directly in the scan callbacks */
@@ -186,8 +189,10 @@ static bool timer_callback() {
   return false; // don't stop the timer
 }
 
-void init_ble() {
-  NimBLEDevice::init("ESP-USB-BLE-HID");
+void init_ble(const std::string &device_name) {
+  NimBLEDevice::init(device_name);
+  static auto server_ = NimBLEDevice::createServer();
+  server_->start();
 
   // // and some i/o config
   auto io_capabilities = BLE_HS_IO_NO_INPUT_OUTPUT;
