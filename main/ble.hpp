@@ -4,6 +4,7 @@
 
 #include <NimBLEDevice.h>
 
+#include "ble_appearances.hpp"
 #include "hid_service.hpp"
 #include "timer.hpp"
 

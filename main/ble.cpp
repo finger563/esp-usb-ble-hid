@@ -48,6 +48,8 @@ class ClientCallbacks : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient *pClient) override {
     logger.info("connected to: {}", pClient->getPeerAddress().toString());
     static constexpr bool async = true;
+    // set the connection parameters now that we've connected
+    pClient->setConnectionParams(12, 12, 0, 400);
     // bond / secure the connection
     pClient->secureConnection(async);
     // stop the led task
@@ -89,7 +91,10 @@ class ScanCallbacks : public NimBLEScanCallbacks {
   void onResult(const NimBLEAdvertisedDevice *advertisedDevice) override {
     logger.info("Advertised Device found: {}", advertisedDevice->toString());
     bool should_connect = false;
-    if (is_pairing && advertisedDevice->isAdvertisingService(hid_service_uuid)) {
+    bool is_pairable_device =
+        advertisedDevice->isAdvertisingService(hid_service_uuid) ||
+        advertisedDevice->getAppearance() == (uint16_t)espp::BleAppearance::GAMEPAD;
+    if (is_pairing && is_pairable_device) {
       // if we're pairing, then simply connect to the first device that advertises
       // the HID service. The connection callback will try to bond to it.
       should_connect = true;
@@ -115,13 +120,13 @@ class ScanCallbacks : public NimBLEScanCallbacks {
         }
       }
 
-      // set the connection parameters before we connect
-      pClient->setConnectionParams(12, 12, 0, 400);
       // and set our callbacks
       pClient->setClientCallbacks(&clientCallbacks, false);
+      static constexpr bool delete_on_disconnect = true;
+      static constexpr bool delete_on_connect_fail = true;
+      pClient->setSelfDelete(delete_on_disconnect, delete_on_connect_fail);
       if (!pClient->connect(true, true,
                             false)) { // delete attributes, async connect, no MTU exchange
-        NimBLEDevice::deleteClient(pClient);
         logger.error("Failed to connect");
         return;
       }
