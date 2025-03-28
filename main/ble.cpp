@@ -12,6 +12,9 @@ static bool subscribed = false;
 static NimBLEUUID hid_service_uuid(espp::HidService::SERVICE_UUID);
 static NimBLEUUID hid_input_uuid(espp::HidService::REPORT_UUID);
 
+static NimBLEUUID battery_service_uuid(espp::BatteryService::BATTERY_SERVICE_UUID);
+static NimBLEUUID battery_level_uuid(espp::BatteryService::BATTERY_LEVEL_CHAR_UUID);
+
 static bool is_pairing = true;
 static notify_callback_t notify_callback = nullptr;
 
@@ -139,6 +142,28 @@ class ScanCallbacks : public NimBLEScanCallbacks {
   }
 };
 
+std::string get_connected_client_serial_number() {
+  auto clients = NimBLEDevice::getConnectedClients();
+  if (clients.size() == 0) {
+    return "";
+  }
+  auto client = clients[0];
+  // get the device info service
+  auto svc = client->getService(espp::DeviceInfoService::SERVICE_UUID);
+  if (!svc) {
+    return "";
+  }
+  // get the serial number characteristic
+  auto chr = svc->getCharacteristic(espp::DeviceInfoService::SERIAL_NUMBER_CHAR_UUID);
+  // make sure we can read it
+  if (!chr->canRead()) {
+    return {};
+  }
+  // and read it
+  auto value = chr->readValue();
+  return value;
+}
+
 static ScanCallbacks scanCallbacks;
 
 static bool timer_callback() {
@@ -162,27 +187,31 @@ static bool timer_callback() {
     // refresh services
     pClient->getServices(refresh);
     auto pSvc = pClient->getService(hid_service_uuid);
-    if (!pSvc) {
-      continue;
-    }
-    // refresh chars
-    pSvc->getCharacteristics(refresh);
-    auto pChr = pSvc->getCharacteristic(hid_input_uuid);
-    if (!pChr) {
-      continue;
-    }
-    if (pChr->canNotify()) {
-      if (!pChr->subscribe(true, notify_callback)) {
+    if (pSvc) {
+      // refresh chars
+      pSvc->getCharacteristics(refresh);
+      auto pChr = pSvc->getCharacteristic(hid_input_uuid);
+      if (!pChr) {
+        continue;
+      }
+      // subscribe to the characteristic
+      if (!pChr->subscribe(pChr->canNotify(), notify_callback)) {
         pClient->disconnect();
       } else {
         subscribed = true;
       }
-    } else if (pChr->canIndicate()) {
-      // Send false as first argument to subscribe to indications instead of notifications
-      if (!pChr->subscribe(false, notify_callback)) {
-        pClient->disconnect();
-      } else {
-        subscribed = true;
+      if (subscribed) {
+        // we were able to get the HID service and subscribe, so also subscribe
+        // to the battery service if it exists.
+        auto pBatterySvc = pClient->getService(battery_service_uuid);
+        if (pBatterySvc) {
+          pBatterySvc->getCharacteristics(refresh);
+          auto pBatteryChr = pBatterySvc->getCharacteristic(battery_level_uuid);
+          if (pBatteryChr) {
+            // ignore success here since it's not high priority
+            pBatteryChr->subscribe(pBatteryChr->canNotify(), notify_callback);
+          }
+        }
       }
     }
     if (!subscribed) {

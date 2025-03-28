@@ -39,6 +39,10 @@ public:
   virtual GamepadInputs get_gamepad_inputs() const { return {}; }
   virtual void set_gamepad_inputs(const GamepadInputs &inputs) {}
 
+  // Battery level
+  virtual void set_battery_level(uint8_t level) {}
+  virtual uint8_t get_battery_level() const { return 0; }
+
   // HID handlers
   virtual std::optional<ReportData> on_attach() { return {}; }
   virtual std::optional<ReportData> on_hid_report(uint8_t report_id, const uint8_t *data,

@@ -38,6 +38,9 @@ public:
   virtual GamepadInputs get_gamepad_inputs() const override;
   virtual void set_gamepad_inputs(const GamepadInputs &inputs) override;
 
+  // Battery level
+  virtual void set_battery_level(uint8_t level) override;
+
   // HID handlers
   virtual std::optional<ReportData> on_attach() override;
   virtual std::optional<ReportData> on_hid_report(uint8_t report_id, const uint8_t *data,

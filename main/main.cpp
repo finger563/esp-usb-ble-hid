@@ -25,14 +25,25 @@ using namespace std::chrono_literals;
 
 static std::shared_ptr<Gui> gui;
 static std::vector<uint8_t> hid_report_descriptor;
-std::shared_ptr<GamepadDevice> ble_gamepad;
-std::shared_ptr<GamepadDevice> usb_gamepad;
+static std::shared_ptr<GamepadDevice> ble_gamepad;
+static std::shared_ptr<GamepadDevice> usb_gamepad;
+static int battery_level_percent = 100;
+static std::string serial_number = "";
 
 /********* BLE callbacks ***************/
 
 /** Notification / Indication receiving handler callback */
 void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData, size_t length,
               bool isNotify) {
+  // if it's the battery level characteristic, then store the battery level and
+  // return.
+  if (pRemoteCharacteristic->getUUID().equals(
+          NimBLEUUID(espp::BatteryService::BATTERY_LEVEL_CHAR_UUID))) {
+    battery_level_percent = pData[0];
+    return;
+  }
+  // otherwise this is a gamepad input report
+
   // set the data in the ble gamepad
   ble_gamepad->set_report_data(ble_gamepad->get_input_report_id(), pData, length);
 
@@ -45,6 +56,7 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
 
   // now set the data in the usb gamepad
   usb_gamepad->set_gamepad_inputs(inputs);
+  usb_gamepad->set_battery_level(battery_level_percent);
 
   // then get the output report from the usb gamepad
   uint8_t usb_report_id = usb_gamepad->get_input_report_id();
@@ -153,8 +165,20 @@ extern "C" void app_main(void) {
 
     // if we're subscribed, then don't do anything else
     if (is_ble_subscribed()) {
+      // if we haven't gotten the serial number, then get that and save it
+      if (serial_number.empty()) {
+        serial_number = get_connected_client_serial_number();
+#if HAS_DISPLAY
+        gui->set_label_text(serial_number);
+#endif // HAS_DISPLAY
+      }
       continue;
     }
+    // make sure to reset the connected device serial number
+    serial_number = "";
+#if HAS_DISPLAY
+    gui->set_label_text(serial_number);
+#endif // HAS_DISPLAY
 
 #if DEBUG_NO_BLE_TWIRL_JOYSTICKS
     // otherwise, just twirl the joysticks

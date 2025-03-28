@@ -69,6 +69,11 @@ void SwitchPro::set_gamepad_inputs(const GamepadInputs &inputs) {
   input_report_.set_connection_info(sp::PRO_CONTROLLER.connection_info);
 }
 
+void SwitchPro::set_battery_level(uint8_t level) {
+  std::lock_guard<std::recursive_mutex> lock(input_report_mutex_);
+  input_report_.set_battery_level(level);
+}
+
 void SwitchPro::update_trigger_button_times(const GamepadInputs &inputs) {
   // for each of the trigger buttons, update the elapsed time.
   uint64_t now = esp_timer_get_time();
