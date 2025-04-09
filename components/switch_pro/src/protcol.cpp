@@ -217,13 +217,33 @@ void SwitchPro::set_imu_data(std::vector<uint8_t> &report) {
   replace_subarray(report, 12, 49, imu_data);
 }
 
+uint8_t SwitchPro::spi_read_impl(uint8_t bank, uint8_t reg, uint8_t read_length,
+                                 uint8_t *response) {
+  using namespace sp;
+  if (bank == REG_BANK_SHIPMENT) {
+    // set the byte(s) to 0
+    for (int i = 0; i < read_length; i++) {
+      response[i] = 0;
+    }
+  } else if (bank == REG_BANK_FACTORY_CONFIG) {
+    // copy from sp::spi_rom_data_60 variable
+    std::memcpy(response, spi_rom_factory_data.begin() + reg, read_length);
+    return read_length;
+  } else if (bank == REG_BANK_USER_CAL) {
+    // copy from sp::spi_rom_data_80 variable
+    std::memcpy(response, spi_rom_user_data.begin() + reg, read_length);
+    return read_length;
+  }
+  return 0;
+}
+
 void SwitchPro::spi_read(std::vector<uint8_t> &report, sp::Message &message) {
   uint8_t addr_top = message.subcommand[2];
   uint8_t addr_bottom = message.subcommand[1];
   uint8_t read_length = message.subcommand[5];
 
   // try to read from SPI
-  if (sp::read_spi(addr_top, addr_bottom, read_length, report.data() + 19) > 0) {
+  if (spi_read_impl(addr_top, addr_bottom, read_length, report.data() + 19) > 0) {
     // If it succeeded, set the response / SPI header
     // ACK byte
     report[12] = 0x90;

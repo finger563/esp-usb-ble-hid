@@ -16,6 +16,7 @@
 #include "high_resolution_timer.hpp"
 
 #include "switch_controller_protocol.hpp"
+#include "switch_pro_spi_rom_data.hpp"
 
 class SwitchPro : public GamepadDevice {
 public:
@@ -28,7 +29,13 @@ public:
     // start the counter
     counter_timer_.periodic(counter_period_us);
 
-    // generate a random serila number for the device
+    // copy the SPI ROM data
+    std::copy(std::begin(sp::spi_rom_data_60), std::end(sp::spi_rom_data_60),
+              spi_rom_factory_data.begin());
+    std::copy(std::begin(sp::spi_rom_data_80), std::end(sp::spi_rom_data_80),
+              spi_rom_user_data.begin());
+
+    // generate a random serial number for the device
     char serial[] = "000000000001";
     for (size_t i = 0; i < sizeof(serial) - 1; ++i) {
 #if defined(ESP_PLATFORM)
@@ -41,6 +48,13 @@ public:
 #endif
     }
 
+    // set the serial number bytes (first bytes of factory SPI ROM data)
+    std::copy(serial, serial + std::size(serial) - 1, spi_rom_factory_data.begin());
+    // if the serial number is < 16 bytes, fill the remaining bytes out of 16 with 0x00
+    std::fill(spi_rom_factory_data.begin() + std::size(serial), spi_rom_factory_data.begin() + 16,
+              0x00);
+
+    // set the device info
     device_info_ = {
         .vid = SwitchPro::vid,
         .pid = SwitchPro::pid,
@@ -105,7 +119,18 @@ protected:
   void set_nfc_ir_state(std::vector<uint8_t> &report);
   void set_nfc_ir_config(std::vector<uint8_t> &report);
 
+  /// Read the SPI flash memory
+  /// @param bank The bank to read from
+  /// @param reg The register to read from
+  /// @param read_length The number of bytes to read
+  /// @param response The buffer to store the read data
+  /// @return num bytes read
+  uint8_t spi_read_impl(uint8_t bank, uint8_t reg, uint8_t read_length, uint8_t *response);
+
   DeviceInfo device_info_;
+
+  std::array<uint8_t, std::size(sp::spi_rom_data_60)> spi_rom_factory_data;
+  std::array<uint8_t, std::size(sp::spi_rom_data_80)> spi_rom_user_data;
 
   espp::FloatRangeMapper thumbstick_range_mapper_;
 

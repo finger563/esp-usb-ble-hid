@@ -3,14 +3,6 @@
 #include <cstdint>
 
 namespace sp {
-/// Read the SPI flash memory
-/// @param bank The bank to read from
-/// @param reg The register to read from
-/// @param read_length The number of bytes to read
-/// @param response The buffer to store the read data
-/// @return num bytes read
-int read_spi(uint8_t bank, uint8_t reg, uint8_t read_length, uint8_t *response);
-
 // SPI Banks
 //
 // For more information, see

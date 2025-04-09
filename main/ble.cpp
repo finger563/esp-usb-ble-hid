@@ -46,13 +46,19 @@ static auto led_task =
     espp::Task::make_unique({.callback = led_callback, .task_config = {.name = "breathe"}});
 
 class ClientCallbacks : public NimBLEClientCallbacks {
+  static constexpr uint16_t min_conn_interval = 12;    // 1.25ms units = 15ms
+  static constexpr uint16_t max_conn_interval = 12;    // 1.25ms units = 15ms
+  static constexpr uint16_t latency = 4;               // 4 packets at 15ms = 60ms
+  static constexpr uint16_t supervision_timeout = 400; // 4s
+
   espp::Logger logger =
       espp::Logger({.tag = "BLE Client Callbacks", .level = espp::Logger::Verbosity::INFO});
   void onConnect(NimBLEClient *pClient) override {
     logger.info("connected to: {}", pClient->getPeerAddress().toString());
     static constexpr bool async = true;
     // set the connection parameters now that we've connected
-    pClient->setConnectionParams(12, 12, 0, 400);
+    pClient->setConnectionParams(min_conn_interval, max_conn_interval, latency,
+                                 supervision_timeout);
     // bond / secure the connection
     pClient->secureConnection(async);
     // stop the led task
@@ -81,7 +87,8 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     } else {
       logger.info("Encryption successful!");
       // set the connection parameters
-      NimBLEDevice::getClientByHandle(connInfo.getConnHandle())->updateConnParams(12, 12, 0, 400);
+      NimBLEDevice::getClientByHandle(connInfo.getConnHandle())
+          ->updateConnParams(min_conn_interval, max_conn_interval, latency, supervision_timeout);
     }
   }
 };
