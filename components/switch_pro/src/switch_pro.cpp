@@ -1,12 +1,6 @@
 #include "switch_pro.hpp"
 
-const DeviceInfo SwitchPro::device_info = {.vid = SwitchPro::vid,
-                                           .pid = SwitchPro::pid,
-                                           .bcd = SwitchPro::bcd,
-                                           .usb_bcd = SwitchPro::usb_bcd,
-                                           .manufacturer_name = SwitchPro::manufacturer,
-                                           .product_name = SwitchPro::product,
-                                           .serial_number = SwitchPro::serial};
+#include <esp_random.h>
 
 void SwitchPro::set_report_data(uint8_t report_id, const uint8_t *data, size_t len) {
   switch (report_id) {

@@ -56,8 +56,8 @@ struct GamepadInputs {
         uint8_t dpad_right : 1; // overlapped with right
         uint8_t : 2;
         // byte 2
-        uint8_t minus : 1; // overlapped with select
         uint8_t plus : 1;  // overlapped with start
+        uint8_t minus : 1; // overlapped with select
         uint8_t right_sr : 1;
         uint8_t right_sl : 1;
         uint8_t left_sr : 1;

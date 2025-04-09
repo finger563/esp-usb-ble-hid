@@ -3,6 +3,12 @@
 #include <string>
 #include <vector>
 
+#if defined(ESP_PLATFORM)
+#include <esp_random.h>
+#else
+#include <random>
+#endif
+
 #include "hid-rp-switch-pro.hpp"
 #include "range_mapper.hpp"
 
@@ -21,10 +27,33 @@ public:
                                   .maximum = InputReport::joystick_max}) {
     // start the counter
     counter_timer_.periodic(counter_period_us);
+
+    // generate a random serila number for the device
+    char serial[] = "000000000001";
+    for (size_t i = 0; i < sizeof(serial) - 1; ++i) {
+#if defined(ESP_PLATFORM)
+      serial[i] = '0' + (esp_random() % 10);
+#else
+      static std::random_device rd;
+      static std::mt19937 gen(rd());
+      static std::uniform_int_distribution<int> dist(0, 9);
+      serial[i] = '0' + dist(gen);
+#endif
+    }
+
+    device_info_ = {
+        .vid = SwitchPro::vid,
+        .pid = SwitchPro::pid,
+        .bcd = SwitchPro::bcd,
+        .usb_bcd = SwitchPro::usb_bcd,
+        .manufacturer_name = SwitchPro::manufacturer,
+        .product_name = SwitchPro::product,
+        .serial_number = serial,
+    };
   }
 
   // Info
-  virtual const DeviceInfo &get_device_info() const override { return device_info; }
+  virtual const DeviceInfo &get_device_info() const override { return device_info_; }
 
   // Report Data
   virtual uint8_t get_input_report_id() const override { return InputReport::ID; }
@@ -58,7 +87,6 @@ protected:
 
   static constexpr const char manufacturer[] = "Nintendo Co., Ltd.";
   static constexpr const char product[] = "Pro Controller";
-  static constexpr const char serial[] = "000000000001";
 
   GamepadDevice::ReportData process_command(const uint8_t *data, size_t len);
   void set_subcommand_reply(std::vector<uint8_t> &report);
@@ -77,7 +105,7 @@ protected:
   void set_nfc_ir_state(std::vector<uint8_t> &report);
   void set_nfc_ir_config(std::vector<uint8_t> &report);
 
-  static const DeviceInfo device_info;
+  DeviceInfo device_info_;
 
   espp::FloatRangeMapper thumbstick_range_mapper_;
 
