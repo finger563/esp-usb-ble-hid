@@ -36,7 +36,8 @@ public:
               spi_rom_user_data.begin());
 
     // generate a random serial number for the device
-    char serial[] = "000000000001";
+    static constexpr size_t serial_length = 12;
+    char serial[serial_length] = {0};
     for (size_t i = 0; i < sizeof(serial) - 1; ++i) {
 #if defined(ESP_PLATFORM)
       serial[i] = '0' + (esp_random() % 10);
