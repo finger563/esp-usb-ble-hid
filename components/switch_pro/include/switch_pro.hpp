@@ -54,21 +54,10 @@ public:
     // if the serial number is < 16 bytes, fill the remaining bytes out of 16 with 0x00
     std::fill(spi_rom_factory_data.begin() + std::size(serial), spi_rom_factory_data.begin() + 16,
               0x00);
-
-    // set the device info
-    device_info_ = {
-        .vid = SwitchPro::vid,
-        .pid = SwitchPro::pid,
-        .bcd = SwitchPro::bcd,
-        .usb_bcd = SwitchPro::usb_bcd,
-        .manufacturer_name = SwitchPro::manufacturer,
-        .product_name = SwitchPro::product,
-        .serial_number = serial,
-    };
   }
 
   // Info
-  virtual const DeviceInfo &get_device_info() const override { return device_info_; }
+  virtual const DeviceInfo &get_device_info() const override { return device_info; }
 
   // Report Data
   virtual uint8_t get_input_report_id() const override { return InputReport::ID; }
@@ -95,13 +84,14 @@ protected:
 
   static constexpr uint64_t counter_period_us = 4960; // Joy-Con uses 4.96ms as the timer tick rate
 
-  static constexpr uint16_t usb_bcd = 0x0100;
+  static constexpr uint16_t usb_bcd = 0x0200;
   static constexpr uint16_t vid = 0x057E;
   static constexpr uint16_t pid = 0x2009;
   static constexpr uint16_t bcd = 0x0200;
 
   static constexpr const char manufacturer[] = "Nintendo Co., Ltd.";
   static constexpr const char product[] = "Pro Controller";
+  static constexpr const char usb_serial_number[] = "000000000001";
 
   GamepadDevice::ReportData process_command(const uint8_t *data, size_t len);
   void set_subcommand_reply(std::vector<uint8_t> &report);
@@ -128,7 +118,7 @@ protected:
   /// @return num bytes read
   uint8_t spi_read_impl(uint8_t bank, uint8_t reg, uint8_t read_length, uint8_t *response);
 
-  DeviceInfo device_info_;
+  static const DeviceInfo device_info;
 
   std::array<uint8_t, std::size(sp::spi_rom_data_60)> spi_rom_factory_data;
   std::array<uint8_t, std::size(sp::spi_rom_data_80)> spi_rom_user_data;
