@@ -173,15 +173,8 @@ void SwitchPro::set_device_info(std::vector<uint8_t> &report) {
   // copy the device info data into the report
   replace_subarray(report, 14, 14 + sizeof(sp::device_info), sp::device_info);
 
-  // // TODO: BT mac address bytes 18 - 23
-  // // // Controller Bluetooth Address
-  // // address = bt_address.strip().split(":");  // Getting from adapter
-  // // for (const auto &address_byte_str : address) {
-  // //   // Converting string address bytes to hex
-  // //   // and assigning to report
-  // //   address_byte = int(address_byte_str, 16);
-  // //   report[index++] = address_byte;
-  // // }
+  // copy BT mac address from mac_address_ into bytes 18 - 23
+  std::memcpy(report.data() + 18, mac_address_.data(), mac_address_.size());
 }
 
 void SwitchPro::set_shipment(std::vector<uint8_t> &report) {

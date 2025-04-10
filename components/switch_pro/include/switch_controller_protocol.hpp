@@ -104,9 +104,9 @@ static constexpr uint8_t INIT_COMMAND_SET_BAUD_RATE = 0x03;  // sent by host, no
 static constexpr uint8_t INIT_COMMAND_ENABLE_USB_HID = 0x04; // sent by host, enable USB
 static constexpr uint8_t INIT_COMMAND_ENABLE_BT_HID = 0x05;  // sent by host, switches back to BT
 
-static constexpr uint8_t device_init_report_data[63] = {INIT_COMMAND_DEVICE_INFO,
-                                                        // padding
-                                                        0, PRO_CONTROLLER.id,
+static constexpr size_t device_init_report_data_mac_addr_offset = 3;
+static constexpr uint8_t device_init_report_data[63] = {INIT_COMMAND_DEVICE_INFO, 0,
+                                                        PRO_CONTROLLER.id,
                                                         // mac address
                                                         0xFD, 0x5E, 0xEC, 0xE9, 0xB6, 0x98};
 

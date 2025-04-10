@@ -112,8 +112,7 @@ std::optional<GamepadDevice::ReportData> SwitchPro::on_attach() {
   // return data to start the initialization sequence
   // Kick off initialization sequence by providing device info
   return {{DEVICE_INIT_REPORT,
-           std::vector<uint8_t>(device_init_report_data,
-                                device_init_report_data + sizeof(device_init_report_data))}};
+           std::vector<uint8_t>(device_init_report_data_.begin(), device_init_report_data_.end())}};
 }
 
 std::optional<GamepadDevice::ReportData> SwitchPro::on_hid_report(uint8_t report_id,

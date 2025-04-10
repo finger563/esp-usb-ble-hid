@@ -23,7 +23,9 @@ using namespace std::chrono_literals;
 
 /************* App Configuration ****************/
 
+#if HAS_DISPLAY
 static std::shared_ptr<Gui> gui;
+#endif
 static std::vector<uint8_t> hid_report_descriptor;
 static std::shared_ptr<GamepadDevice> ble_gamepad;
 static std::shared_ptr<GamepadDevice> usb_gamepad;

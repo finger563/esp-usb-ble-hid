@@ -4,6 +4,7 @@
 #include <vector>
 
 #if defined(ESP_PLATFORM)
+#include <esp_mac.h>
 #include <esp_random.h>
 #else
 #include <random>
@@ -38,12 +39,14 @@ public:
     // generate a random serial number for the device
     static constexpr size_t serial_length = 12;
     char serial[serial_length] = {0};
+#if !defined(ESP_PLATFORM)
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+#endif
     for (size_t i = 0; i < sizeof(serial) - 1; ++i) {
 #if defined(ESP_PLATFORM)
       serial[i] = '0' + (esp_random() % 10);
 #else
-      static std::random_device rd;
-      static std::mt19937 gen(rd());
       static std::uniform_int_distribution<int> dist(0, 9);
       serial[i] = '0' + dist(gen);
 #endif
@@ -54,6 +57,26 @@ public:
     // if the serial number is < 16 bytes, fill the remaining bytes out of 16 with 0x00
     std::fill(spi_rom_factory_data.begin() + std::size(serial), spi_rom_factory_data.begin() + 16,
               0x00);
+
+    // set the mac address to the system's mac address (if esp32, otherwise
+    // random)
+#if defined(ESP_PLATFORM)
+    // get the MAC address from the ESP32
+    esp_read_mac(mac_address_.data(), ESP_MAC_WIFI_STA);
+#else
+    // generate a random MAC address
+    std::uniform_int_distribution<int> dist(0, 255);
+    for (size_t i = 0; i < mac_address_.size(); ++i) {
+      mac_address_[i] = dist(gen);
+    }
+#endif
+
+    // copy sp::device_init_report_data into device_init_report_data_
+    std::copy(std::begin(sp::device_init_report_data), std::end(sp::device_init_report_data),
+              device_init_report_data_.begin());
+    // then update the mac address
+    std::copy(mac_address_.begin(), mac_address_.end(),
+              device_init_report_data_.begin() + sp::device_init_report_data_mac_addr_offset);
   }
 
   // Info
@@ -119,6 +142,9 @@ protected:
   uint8_t spi_read_impl(uint8_t bank, uint8_t reg, uint8_t read_length, uint8_t *response);
 
   static const DeviceInfo device_info;
+
+  std::array<uint8_t, 63> device_init_report_data_;
+  std::array<uint8_t, 6> mac_address_{0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
   std::array<uint8_t, std::size(sp::spi_rom_data_60)> spi_rom_factory_data;
   std::array<uint8_t, std::size(sp::spi_rom_data_80)> spi_rom_user_data;
