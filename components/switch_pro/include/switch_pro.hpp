@@ -70,13 +70,6 @@ public:
       mac_address_[i] = dist(gen);
     }
 #endif
-
-    // copy sp::device_init_report_data into device_init_report_data_
-    std::copy(std::begin(sp::device_init_report_data), std::end(sp::device_init_report_data),
-              device_init_report_data_.begin());
-    // then update the mac address
-    std::copy(mac_address_.begin(), mac_address_.end(),
-              device_init_report_data_.begin() + sp::device_init_report_data_mac_addr_offset);
   }
 
   // Info
@@ -143,7 +136,6 @@ protected:
 
   static const DeviceInfo device_info;
 
-  std::array<uint8_t, 63> device_init_report_data_;
   std::array<uint8_t, 6> mac_address_{0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
   std::array<uint8_t, std::size(sp::spi_rom_data_60)> spi_rom_factory_data;

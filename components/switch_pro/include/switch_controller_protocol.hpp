@@ -84,6 +84,8 @@ struct Controller {
   uint8_t connection_info;
 };
 
+static constexpr size_t REPORT_SIZE = 63;
+
 static constexpr Controller JOYCON_LEFT = {0x01, 0x0E};
 static constexpr Controller JOYCON_RIGHT = {0x02, 0x0E};
 static constexpr Controller PRO_CONTROLLER = {0x03, 0x00};
@@ -105,10 +107,10 @@ static constexpr uint8_t INIT_COMMAND_ENABLE_USB_HID = 0x04; // sent by host, en
 static constexpr uint8_t INIT_COMMAND_ENABLE_BT_HID = 0x05;  // sent by host, switches back to BT
 
 static constexpr size_t device_init_report_data_mac_addr_offset = 3;
-static constexpr uint8_t device_init_report_data[63] = {INIT_COMMAND_DEVICE_INFO, 0,
-                                                        PRO_CONTROLLER.id,
-                                                        // mac address
-                                                        0xFD, 0x5E, 0xEC, 0xE9, 0xB6, 0x98};
+static constexpr uint8_t device_init_report_data[REPORT_SIZE] = {
+    INIT_COMMAND_DEVICE_INFO, 0, PRO_CONTROLLER.id,
+    // mac address
+    0xFD, 0x5E, 0xEC, 0xE9, 0xB6, 0x98};
 
 static constexpr uint8_t device_info[] = {
     0x03, 0x48,        // Version info

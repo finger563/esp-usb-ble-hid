@@ -108,11 +108,17 @@ void SwitchPro::update_trigger_button_index(bool pressed, size_t index, uint64_t
 
 // HID handlers
 std::optional<GamepadDevice::ReportData> SwitchPro::on_attach() {
-  using namespace sp;
+  // copy the device init report data into a vector
+  auto data =
+      std::vector<uint8_t>(sp::device_init_report_data,
+                           sp::device_init_report_data + std::size(sp::device_init_report_data));
+  // replace the mac address with our own
+  // then update the mac address
+  std::copy(mac_address_.begin(), mac_address_.end(),
+            data.begin() + sp::device_init_report_data_mac_addr_offset);
   // return data to start the initialization sequence
   // Kick off initialization sequence by providing device info
-  return {{DEVICE_INIT_REPORT,
-           std::vector<uint8_t>(device_init_report_data_.begin(), device_init_report_data_.end())}};
+  return {{sp::DEVICE_INIT_REPORT, data}};
 }
 
 std::optional<GamepadDevice::ReportData> SwitchPro::on_hid_report(uint8_t report_id,
@@ -125,7 +131,7 @@ std::optional<GamepadDevice::ReportData> SwitchPro::on_hid_report(uint8_t report
   switch (data[0]) {
   case HOST_INIT_REPORT: {
     uint8_t cmd = data[1];
-    std::vector<uint8_t> resp(63, 0);
+    std::vector<uint8_t> resp(sp::REPORT_SIZE, 0);
     resp[0] = cmd;
     switch (cmd) {
     case INIT_COMMAND_DEVICE_INFO:
