@@ -15,10 +15,7 @@ the HID Host.
 
 https://github.com/user-attachments/assets/a0789d38-bd0e-4215-bf2c-ebedd9958495
 
-![image](https://github.com/user-attachments/assets/9dead4bb-c41c-43a0-b833-d14e99000340)
-
 https://github.com/user-attachments/assets/c81b947a-24a1-4a44-b5d0-5d4c274beb93
-
 
 ## Cloning
 
