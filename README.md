@@ -33,6 +33,15 @@ Alternatively, you can always ensure the submodules are up to date after cloning
 git submodule update --init --recursive
 ```
 
+## Configuration
+
+You can run `idf.py menuconfig` to configure the project to run on either the
+`T-Dongle-S3` or the `QtPy (ESP32 or ESP32S3)`. The configuration is under the
+`Hardware Configuration` menu from the main menu and is the `Target Hardware`
+option.
+
+![CleanShot 2025-04-10 at 07 57 26](https://github.com/user-attachments/assets/be355584-251d-4c2c-81ed-15089b45f4e1)
+
 ## Build and Flash
 
 Build the project and flash it to the board, then run monitor tool to view serial output:
