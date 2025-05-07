@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: false
 
+    outputs:
+      zipfile-id: ${{ steps.zip_step.outputs.artifact-id }}
+
     steps:
     - name: Checkout repo
       uses: actions/checkout@v4
@@ -29,6 +32,7 @@ jobs:
 
     - name: Upload Build Outputs
       uses: actions/upload-artifact@v4
+      id: zip_step
       with:
         name: build-artifacts
         path: |
@@ -50,3 +54,14 @@ jobs:
           build/partition_table/partition-table.bin
           build/flasher_args.json
           build/flash_args
+
+  package_macos:
+    needs: build
+    runs-on: macos-latest
+    name: Package the binaries into an executable for MacOS Systems
+    steps:
+      - uses: esp-cpp/esp-packaged-programmer-action@9ea3c79fb386739e33153acf29b639e8c6631c2e
+        id: macos-package
+        with:
+          zipfile-id: ${{ needs.build.outputs.zipfile-id }}
+          programmer-name: 'esp-usb-ble-hid_programmer'
