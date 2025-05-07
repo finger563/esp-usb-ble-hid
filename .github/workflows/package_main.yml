@@ -60,7 +60,7 @@ jobs:
     runs-on: macos-latest
     name: Package the binaries into an executable for MacOS Systems
     steps:
-      - uses: esp-cpp/esp-packaged-programmer-action@5abc06a115ed15e6de9efcc0afbbd631aa5f332d
+      - uses: esp-cpp/esp-packaged-programmer-action@3f20e527611642bdb9b24f85072f2720d7add295
         id: macos-package
         with:
           zipfile-id: ${{ needs.build.outputs.zipfile-id }}
