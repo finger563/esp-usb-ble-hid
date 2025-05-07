@@ -5,6 +5,7 @@ on:
     branches: [main]
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -31,9 +32,11 @@ jobs:
       with:
         name: build-artifacts
         path: |
+          build/*.bin
+          build/*.elf
           build/bootloader/bootloader.bin
           build/partition_table/partition-table.bin
-          build/*.bin
+          build/flasher_args.json
           build/flash_args
 
     - name: Attach files to release
@@ -42,7 +45,8 @@ jobs:
       with:
         files: |
           build/*.bin
+          build/*.elf
           build/bootloader/bootloader.bin
           build/partition_table/partition-table.bin
+          build/flasher_args.json
           build/flash_args
-
