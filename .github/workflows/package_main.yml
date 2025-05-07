@@ -63,7 +63,7 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: esp-cpp/esp-packaged-programmer-action@d23ee2af883f464bf6c635d4519a56a224358632
+      - uses: esp-cpp/esp-packaged-programmer-action@574b4edb3fbd9b33894aa87e705f3454acd247d9
         with:
           zipfile-id: ${{ needs.build.outputs.zipfile-id }}
           programmer-name: 'esp-usb-ble-hid_programmer'
