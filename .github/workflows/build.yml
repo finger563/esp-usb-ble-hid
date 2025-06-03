@@ -10,8 +10,6 @@ jobs:
     steps:
     - name: Checkout repo
       uses: actions/checkout@v4
-      with:
-        submodules: 'recursive'
 
     - name: Build main
       uses: espressif/esp-idf-ci-action@v1
