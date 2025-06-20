@@ -2,7 +2,7 @@
 #include "bsp.hpp"
 
 static espp::Logger logger({.tag = "USB"});
-static std::shared_ptr<GamepadDevice> usb_gamepad;
+static std::vector<std::shared_ptr<GamepadDevice>> usb_gamepads;
 
 // DEUBGGING:
 #if DEBUG_USB
@@ -19,8 +19,8 @@ static std::shared_ptr<Gui> gui;
 static_assert(CFG_TUD_HID >= 1, "CFG_TUD_HID must be at least 1");
 
 static std::vector<uint8_t> hid_report_descriptor;
-static uint8_t usb_hid_input_report[CFG_TUD_HID_EP_BUFSIZE];
-static size_t usb_hid_input_report_len = 0;
+static uint8_t usb_hid_input_report[3][CFG_TUD_HID_EP_BUFSIZE];
+static size_t usb_hid_input_report_len[3] = {0};
 
 static tusb_desc_device_t desc_device = {.bLength = sizeof(tusb_desc_device_t),
                                          .bDescriptorType = TUSB_DESC_DEVICE,
@@ -42,15 +42,17 @@ static tusb_desc_device_t desc_device = {.bLength = sizeof(tusb_desc_device_t),
                                          // Index of serial number description string
                                          .iSerialNumber = 0x03,
                                          // Number of configurations
-                                         .bNumConfigurations = 0x01};
+                                         .bNumConfigurations = 0x03};
 
-static const char *hid_string_descriptor[5] = {
+static const char *hid_string_descriptor[] = {
     // array of pointer to string descriptors
-    (char[]){0x09, 0x04}, // 0: is supported language is English (0x0409)
-    "Finger563",          // 1: Manufacturer, NOTE: to be filled out later
-    "USB BLE Dongle",     // 2: Product, NOTE: to be filled out later
-    "20011201",           // 3: Serials, NOTE: to be filled out later
-    "USB HID Interface",  // 4: HID
+    (char[]){0x09, 0x04},  // 0: is supported language is English (0x0409)
+    "Finger563",           // 1: Manufacturer, NOTE: to be filled out later
+    "USB BLE Dongle",      // 2: Product, NOTE: to be filled out later
+    "20011201",            // 3: Serials, NOTE: to be filled out later
+    "USB HID Interface 1", // 4: HID #1
+    "USB HID Interface 2", // 5: HID #2
+    "USB HID Interface 3", // 6: HID #3
 };
 
 // update the configuration descriptor with the new report descriptor size
@@ -62,14 +64,22 @@ static uint8_t hid_configuration_descriptor[] = {
     // polling interval
     TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x01, 0x81,
                              CFG_TUD_HID_EP_BUFSIZE, 1),
+    // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
+    // polling interval
+    TUD_HID_INOUT_DESCRIPTOR(1, 5, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x02, 0x82,
+                             CFG_TUD_HID_EP_BUFSIZE, 1),
+    // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
+    // polling interval
+    TUD_HID_INOUT_DESCRIPTOR(2, 6, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x03, 0x83,
+                             CFG_TUD_HID_EP_BUFSIZE, 1),
 };
 
-void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
+void start_usb_gamepads(const std::vector<std::shared_ptr<GamepadDevice>> &gamepad_devices) {
   // store the gamepad device
-  usb_gamepad = gamepad_device;
+  usb_gamepads = gamepad_devices;
 
   // update the usb descriptors
-  const auto &device_info = usb_gamepad->get_device_info();
+  const auto &device_info = usb_gamepads[0]->get_device_info();
   hid_string_descriptor[1] = device_info.manufacturer_name.c_str();
   hid_string_descriptor[2] = device_info.product_name.c_str();
   hid_string_descriptor[3] = device_info.serial_number.c_str();
@@ -79,7 +89,7 @@ void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
   desc_device.bcdUSB = device_info.usb_bcd;
 
   // update the report descriptor
-  hid_report_descriptor = usb_gamepad->get_report_descriptor();
+  hid_report_descriptor = usb_gamepads[0]->get_report_descriptor();
 
   // update the configuration descriptor with the new report descriptor size
   uint8_t updated_hid_configuration_descriptor[] = {
@@ -89,7 +99,15 @@ void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
       // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
       // polling interval
       TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x01,
-                               0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
+                               0x81, CFG_TUD_HID_EP_BUFSIZE, 10),
+      // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
+      // polling interval
+      TUD_HID_INOUT_DESCRIPTOR(1, 5, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x02,
+                               0x82, CFG_TUD_HID_EP_BUFSIZE, 10),
+      // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
+      // polling interval
+      TUD_HID_INOUT_DESCRIPTOR(2, 6, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x03,
+                               0x83, CFG_TUD_HID_EP_BUFSIZE, 10),
   };
   std::memcpy(hid_configuration_descriptor, updated_hid_configuration_descriptor,
               sizeof(updated_hid_configuration_descriptor));
@@ -118,15 +136,16 @@ void stop_usb_gamepad() {
   logger.info("USB initialization DONE");
 }
 
-bool send_hid_report(uint8_t report_id, const std::vector<uint8_t> &report) {
+bool send_hid_report(uint8_t instance, uint8_t report_id, const std::vector<uint8_t> &report) {
   if (report.size() == 0 || report.size() > CFG_TUD_HID_EP_BUFSIZE) {
     return false;
   }
   // copy the report data into the usb_hid_input_report buffer
-  std::memcpy(usb_hid_input_report, report.data(), report.size());
-  usb_hid_input_report_len = report.size();
+  std::memcpy(usb_hid_input_report[instance], report.data(), report.size());
+  usb_hid_input_report_len[instance] = report.size();
   // now try to send it
-  return tud_hid_report(report_id, usb_hid_input_report, usb_hid_input_report_len);
+  return tud_hid_n_report(instance, report_id, usb_hid_input_report[instance],
+                          usb_hid_input_report_len[instance]);
 }
 
 #if DEBUG_USB
@@ -138,10 +157,13 @@ void set_gui(std::shared_ptr<Gui> gui_ptr) { gui = gui_ptr; }
 extern "C" void tud_mount_cb(void) {
   // Invoked when device is mounted
   logger.info("USB Mounted");
-  auto maybe_transmission = usb_gamepad->on_attach();
-  if (maybe_transmission.has_value()) {
-    auto &[report_id, report] = maybe_transmission.value();
-    send_hid_report(report_id, report);
+  for (int i = 0; i < usb_gamepads.size(); i++) {
+    auto &usb_gamepad = usb_gamepads[i];
+    auto maybe_transmission = usb_gamepad->on_attach();
+    if (maybe_transmission.has_value()) {
+      auto &[report_id, report] = maybe_transmission.value();
+      send_hid_report(i, report_id, report);
+    }
   }
 }
 
@@ -170,8 +192,8 @@ extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
   case HID_REPORT_TYPE_INVALID:
     return 0;
   case HID_REPORT_TYPE_INPUT:
-    std::memcpy(buffer, usb_hid_input_report, usb_hid_input_report_len);
-    return usb_hid_input_report_len;
+    std::memcpy(buffer, usb_hid_input_report[instance], usb_hid_input_report_len[instance]);
+    return usb_hid_input_report_len[instance];
   case HID_REPORT_TYPE_OUTPUT:
     return 0;
   case HID_REPORT_TYPE_FEATURE:
@@ -188,8 +210,13 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
   if (report_type == HID_REPORT_TYPE_FEATURE) {
     // TODO: pro controller supports feature reports
   } else if (report_type == HID_REPORT_TYPE_OUTPUT) {
+    if (instance >= usb_gamepads.size()) {
+      logger.error("Invalid USB gamepad instance: {}", instance);
+      return;
+    }
+
     // pass the report along to the currently configured usb gamepad device
-    auto maybe_response = usb_gamepad->on_hid_report(report_id, buffer, bufsize);
+    auto maybe_response = usb_gamepads[instance]->on_hid_report(report_id, buffer, bufsize);
 #if DEBUG_USB
     std::string debug_string =
         fmt::format("In: {:02x}, {:02x}, {:02x}", buffer[0], buffer[1], buffer[2]);
@@ -198,7 +225,7 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
       auto &[response_report_id, response_data] = maybe_response.value();
       if (response_data.size()) {
         // send_hid_report(response_report_id, response_data);
-        tud_hid_report(response_report_id, response_data.data(), response_data.size());
+        tud_hid_n_report(instance, response_report_id, response_data.data(), response_data.size());
       }
 #if DEBUG_USB
       debug_string += fmt::format("\nOut: {:02x}, {:02x}, {:02x}", response_report_id,

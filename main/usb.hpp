@@ -15,8 +15,8 @@ extern "C" {
 #include <tusb.h>
 }
 
-void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device);
-bool send_hid_report(uint8_t report_id, const std::vector<uint8_t> &report);
+void start_usb_gamepads(const std::vector<std::shared_ptr<GamepadDevice>> &gamepad_devices);
+bool send_hid_report(uint8_t instance, uint8_t report_id, const std::vector<uint8_t> &report);
 void stop_usb_gamepad();
 
 // debugging
