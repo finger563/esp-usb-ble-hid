@@ -42,7 +42,7 @@ static tusb_desc_device_t desc_device = {.bLength = sizeof(tusb_desc_device_t),
                                          // Index of serial number description string
                                          .iSerialNumber = 0x03,
                                          // Number of configurations
-                                         .bNumConfigurations = 0x03};
+                                         .bNumConfigurations = 0x01};
 
 static const char *hid_string_descriptor[] = {
     // array of pointer to string descriptors
@@ -137,6 +137,10 @@ void stop_usb_gamepad() {
 }
 
 bool send_hid_report(uint8_t instance, uint8_t report_id, const std::vector<uint8_t> &report) {
+  if (instance >= usb_gamepads.size() || instance >= CFG_TUD_HID) {
+    logger.error("Invalid USB gamepad instance: {}", instance);
+    return false;
+  }
   if (report.size() == 0 || report.size() > CFG_TUD_HID_EP_BUFSIZE) {
     return false;
   }
