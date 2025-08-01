@@ -99,15 +99,15 @@ void start_usb_gamepads(const std::vector<std::shared_ptr<GamepadDevice>> &gamep
       // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
       // polling interval
       TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x01,
-                               0x81, CFG_TUD_HID_EP_BUFSIZE, 10),
+                               0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
       // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
       // polling interval
       TUD_HID_INOUT_DESCRIPTOR(1, 5, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x02,
-                               0x82, CFG_TUD_HID_EP_BUFSIZE, 10),
+                               0x82, CFG_TUD_HID_EP_BUFSIZE, 1),
       // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
       // polling interval
       TUD_HID_INOUT_DESCRIPTOR(2, 6, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x03,
-                               0x83, CFG_TUD_HID_EP_BUFSIZE, 10),
+                               0x83, CFG_TUD_HID_EP_BUFSIZE, 1),
   };
   std::memcpy(hid_configuration_descriptor, updated_hid_configuration_descriptor,
               sizeof(updated_hid_configuration_descriptor));
