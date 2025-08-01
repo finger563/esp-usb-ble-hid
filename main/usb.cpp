@@ -51,8 +51,12 @@ static const char *hid_string_descriptor[] = {
     "USB BLE Dongle",      // 2: Product, NOTE: to be filled out later
     "20011201",            // 3: Serials, NOTE: to be filled out later
     "USB HID Interface 1", // 4: HID #1
+#if CFG_TUD_HID > 1
     "USB HID Interface 2", // 5: HID #2
+#endif
+#if CFG_TUD_HID > 2
     "USB HID Interface 3", // 6: HID #3
+#endif
 };
 
 // update the configuration descriptor with the new report descriptor size
@@ -64,14 +68,20 @@ static uint8_t hid_configuration_descriptor[] = {
     // polling interval
     TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x01, 0x81,
                              CFG_TUD_HID_EP_BUFSIZE, 1),
+
+#if CFG_TUD_HID > 1
     // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
     // polling interval
     TUD_HID_INOUT_DESCRIPTOR(1, 5, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x02, 0x82,
                              CFG_TUD_HID_EP_BUFSIZE, 1),
+#endif
+
+#if CFG_TUD_HID > 2
     // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
     // polling interval
     TUD_HID_INOUT_DESCRIPTOR(2, 6, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x03, 0x83,
                              CFG_TUD_HID_EP_BUFSIZE, 1),
+#endif
 };
 
 void start_usb_gamepads(const std::vector<std::shared_ptr<GamepadDevice>> &gamepad_devices) {
@@ -93,21 +103,27 @@ void start_usb_gamepads(const std::vector<std::shared_ptr<GamepadDevice>> &gamep
 
   // update the configuration descriptor with the new report descriptor size
   uint8_t updated_hid_configuration_descriptor[] = {
-      // Configuration number, interface count, string index, total length, attribute, power in mA
-      TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUSB_DESC_TOTAL_LEN, 0x00, 100),
+    // Configuration number, interface count, string index, total length, attribute, power in mA
+    TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUSB_DESC_TOTAL_LEN, 0x00, 100),
 
-      // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
-      // polling interval
-      TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x01,
-                               0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
-      // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
-      // polling interval
-      TUD_HID_INOUT_DESCRIPTOR(1, 5, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x02,
-                               0x82, CFG_TUD_HID_EP_BUFSIZE, 1),
-      // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
-      // polling interval
-      TUD_HID_INOUT_DESCRIPTOR(2, 6, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x03,
-                               0x83, CFG_TUD_HID_EP_BUFSIZE, 1),
+    // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
+    // polling interval
+    TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x01, 0x81,
+                             CFG_TUD_HID_EP_BUFSIZE, 1),
+
+#if CFG_TUD_HID > 1
+    // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
+    // polling interval
+    TUD_HID_INOUT_DESCRIPTOR(1, 5, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x02, 0x82,
+                             CFG_TUD_HID_EP_BUFSIZE, 1),
+#endif
+
+#if CFG_TUD_HID > 2
+    // Interface number, string index, boot protocol, report descriptor len, EP In address, size &
+    // polling interval
+    TUD_HID_INOUT_DESCRIPTOR(2, 6, HID_ITF_PROTOCOL_NONE, hid_report_descriptor.size(), 0x03, 0x83,
+                             CFG_TUD_HID_EP_BUFSIZE, 1),
+#endif
   };
   std::memcpy(hid_configuration_descriptor, updated_hid_configuration_descriptor,
               sizeof(updated_hid_configuration_descriptor));
