@@ -126,6 +126,11 @@ std::optional<GamepadDevice::ReportData> SwitchPro::on_hid_report(uint8_t report
   // ignore the report_id
   (void)report_id;
 
+  if (len < 2 || len > sp::REPORT_SIZE) {
+    logger_.error("Invalid report length: {}", len);
+    return std::nullopt;
+  }
+
   using namespace sp;
 
   switch (data[0]) {
@@ -137,8 +142,10 @@ std::optional<GamepadDevice::ReportData> SwitchPro::on_hid_report(uint8_t report
     case INIT_COMMAND_DEVICE_INFO:
       break;
     case INIT_COMMAND_HANDSHAKE:
-      // copy the input data back into the response
-      std::copy(data + 1, data + len, resp.begin());
+      if (len > 2) {
+        // copy the input data back into the response
+        std::copy(data + 1, data + (len - 1), resp.begin());
+      }
       break;
     case INIT_COMMAND_SET_BAUD_RATE:
       break;

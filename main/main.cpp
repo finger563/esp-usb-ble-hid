@@ -28,7 +28,7 @@ static std::shared_ptr<Gui> gui;
 #endif
 static std::vector<uint8_t> hid_report_descriptor;
 static std::shared_ptr<GamepadDevice> ble_gamepad;
-static std::shared_ptr<GamepadDevice> usb_gamepad;
+static std::vector<std::shared_ptr<GamepadDevice>> usb_gamepads;
 static int battery_level_percent = 100;
 static std::string serial_number = "";
 
@@ -57,17 +57,22 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   inputs.right_joystick.y = -inputs.right_joystick.y;
 
   // now set the data in the usb gamepad
-  usb_gamepad->set_gamepad_inputs(inputs);
-  usb_gamepad->set_battery_level(battery_level_percent);
-
-  // then get the output report from the usb gamepad
-  uint8_t usb_report_id = usb_gamepad->get_input_report_id();
-  auto report = usb_gamepad->get_report_data(usb_report_id);
+  for (auto &usb_gamepad : usb_gamepads) {
+    usb_gamepad->set_gamepad_inputs(inputs);
+    usb_gamepad->set_battery_level(battery_level_percent);
+  }
 
   // send the report via tiny usb
   if (tud_mounted()) {
-    // and send it over USB
-    send_hid_report(usb_report_id, report);
+
+    for (int i = 0; i < usb_gamepads.size(); i++) {
+      auto &usb_gamepad = usb_gamepads[i];
+      // then get the output report from the usb gamepad
+      uint8_t usb_report_id = usb_gamepad->get_input_report_id();
+      auto report = usb_gamepad->get_report_data(usb_report_id);
+      // and send it over USB
+      send_hid_report(i, usb_report_id, report);
+    }
 
     // toggle the LED each send, so mod 2
     static auto &bsp = Bsp::get();
@@ -134,7 +139,13 @@ extern "C" void app_main(void) {
   bsp.initialize_button(on_button_pressed);
 
   // MARK: Gamepad initialization
-  usb_gamepad = std::make_shared<SwitchPro>();
+  logger.info("Gamepad initialization");
+  for (int i = 0; i < 3; i++) {
+    // create a new USB gamepad
+    auto usb_gamepad = std::make_shared<SwitchPro>();
+    usb_gamepads.push_back(usb_gamepad);
+  }
+
   ble_gamepad = std::make_shared<Xbox>();
 
   // MARK: USB initialization
@@ -142,7 +153,7 @@ extern "C" void app_main(void) {
 #if DEBUG_USB
   set_gui(gui);
 #endif // DEBUG_USB
-  start_usb_gamepad(usb_gamepad);
+  start_usb_gamepads(usb_gamepads);
 
   // MARK: BLE initialization
   logger.info("BLE initialization");
@@ -204,15 +215,16 @@ extern "C" void app_main(void) {
 
     index++;
 
-    // set the inputs in the usb gamepad
-    usb_gamepad->set_gamepad_inputs(inputs);
-
     // get the output report from the usb gamepad
-    uint8_t usb_report_id = usb_gamepad->get_input_report_id();
-    auto report = usb_gamepad->get_report_data(usb_report_id);
-
     if (tud_mounted()) {
-      send_hid_report(usb_report_id, report);
+      // set the inputs in the usb gamepad
+      for (int i = 0; i < usb_gamepads.size(); i++) {
+        auto &usb_gamepad = usb_gamepads[i];
+        usb_gamepad->set_gamepad_inputs(inputs);
+        uint8_t usb_report_id = usb_gamepad->get_input_report_id();
+        auto report = usb_gamepad->get_report_data(usb_report_id);
+        send_hid_report(i, usb_report_id, report);
+      }
     } else {
       bsp.led(espp::Rgb(1.0f, 0.0f, 0.0f));
     }
