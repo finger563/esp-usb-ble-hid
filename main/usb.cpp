@@ -140,6 +140,7 @@ void set_gui(std::shared_ptr<Gui> gui_ptr) { gui = gui_ptr; }
 
 /********* TinyUSB HID callbacks ***************/
 
+// cppcheck-suppress constParameterCallback
 void device_event_handler(tinyusb_event_t *event, void *arg) {
   switch (event->id) {
   case TINYUSB_EVENT_ATTACHED: {
