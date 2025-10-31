@@ -22,6 +22,8 @@ static std::vector<uint8_t> hid_report_descriptor;
 static uint8_t usb_hid_input_report[CFG_TUD_HID_EP_BUFSIZE];
 static size_t usb_hid_input_report_len = 0;
 
+void device_event_handler(tinyusb_event_t *event, void *arg);
+
 static tusb_desc_device_t desc_device = {.bLength = sizeof(tusb_desc_device_t),
                                          .bDescriptorType = TUSB_DESC_DEVICE,
                                          .bcdUSB = 0x0100, // NOTE: to be filled out later
@@ -94,14 +96,17 @@ void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device) {
   std::memcpy(hid_configuration_descriptor, updated_hid_configuration_descriptor,
               sizeof(updated_hid_configuration_descriptor));
 
-  const tinyusb_config_t tusb_cfg = {.device_descriptor = &desc_device,
-                                     .string_descriptor = hid_string_descriptor,
-                                     .string_descriptor_count = sizeof(hid_string_descriptor) /
-                                                                sizeof(hid_string_descriptor[0]),
-                                     .external_phy = false,
-                                     .configuration_descriptor = hid_configuration_descriptor,
-                                     .self_powered = false,
-                                     .vbus_monitor_io = -1};
+  tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG(device_event_handler);
+  tusb_cfg.task = TINYUSB_TASK_CUSTOM(4096 /*size */, 4 /* priority */,
+                                      0 /* affinity: 0 - CPU0, 1 - CPU1 ... */);
+  tusb_cfg.descriptor.device = &desc_device;
+  tusb_cfg.descriptor.string = hid_string_descriptor;
+  tusb_cfg.descriptor.string_count =
+      sizeof(hid_string_descriptor) / sizeof(hid_string_descriptor[0]);
+  tusb_cfg.descriptor.full_speed_config = hid_configuration_descriptor;
+  tusb_cfg.phy.skip_setup = false; // was external-phy = false
+  tusb_cfg.phy.self_powered = false;
+  tusb_cfg.phy.vbus_monitor_io = -1;
 
   if (tinyusb_driver_install(&tusb_cfg) != ESP_OK) {
     logger.error("Failed to install tinyusb driver");
@@ -135,19 +140,24 @@ void set_gui(std::shared_ptr<Gui> gui_ptr) { gui = gui_ptr; }
 
 /********* TinyUSB HID callbacks ***************/
 
-extern "C" void tud_mount_cb(void) {
-  // Invoked when device is mounted
-  logger.info("USB Mounted");
-  auto maybe_transmission = usb_gamepad->on_attach();
-  if (maybe_transmission.has_value()) {
-    auto &[report_id, report] = maybe_transmission.value();
-    send_hid_report(report_id, report);
+void device_event_handler(tinyusb_event_t *event, void *arg) {
+  switch (event->id) {
+  case TINYUSB_EVENT_ATTACHED: {
+    // Invoked when device is mounted
+    logger.info("USB Mounted");
+    auto maybe_transmission = usb_gamepad->on_attach();
+    if (maybe_transmission.has_value()) {
+      auto &[report_id, report] = maybe_transmission.value();
+      send_hid_report(report_id, report);
+    }
+  } break;
+  case TINYUSB_EVENT_DETACHED: {
+    // Invoked when device is unmounted
+    logger.info("USB Unmounted");
+  } break;
+  default:
+    break;
   }
-}
-
-extern "C" void tud_umount_cb(void) {
-  // Invoked when device is unmounted
-  logger.info("USB Unmounted");
 }
 
 // Invoked when received GET HID REPORT DESCRIPTOR request
