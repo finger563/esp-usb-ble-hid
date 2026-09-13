@@ -25,7 +25,11 @@ jobs:
         target: ${{ env.IDF_TARGET }}
         path: '.'
 
+    # Informational: the delta step rebuilds the BASE ref with this workflow's
+    # IDF, so a base that predates an IDF bump (e.g. main on v5.5 vs v6.1 here)
+    # cannot build. The "Build main" step above is the correctness gate.
     - name: Determine Size Delta
+      continue-on-error: true
       uses: esp-cpp/esp-idf-size-delta@v1
       with:
         app_name: ${{ env.APP_NAME }}

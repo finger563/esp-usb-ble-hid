@@ -61,8 +61,10 @@ jobs:
           build/flash_args
 
     - name: Determine Size Delta
-      # only run this if the release is published
+      # only run this if the release is published. Informational: it rebuilds
+      # the previous tag with this workflow's IDF, which fails across an IDF bump.
       if: ${{ github.event.release && github.event.action == 'published' }}
+      continue-on-error: true
       uses: esp-cpp/esp-idf-size-delta@v1
       with:
         app_name: ${{ env.APP_NAME }}
