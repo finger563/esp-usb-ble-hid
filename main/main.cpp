@@ -102,7 +102,6 @@ static void push_inputs(GamepadInputs inputs) {
 /********* BLE callbacks ***************/
 
 /** Notification / Indication receiving handler callback */
-// cppcheck-suppress constParameterCallback
 void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData, size_t length,
               bool isNotify) {
   // if it's the battery level characteristic, then store the battery level and
