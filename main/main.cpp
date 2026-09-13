@@ -1,5 +1,12 @@
+#include <atomic>
 #include <chrono>
+#include <cmath>
+#include <mutex>
 #include <thread>
+
+#include "esp_app_desc.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 
 #include "logger.hpp"
 #include "task.hpp"
@@ -9,6 +16,8 @@
 
 #include "ble.hpp"
 #include "bsp.hpp"
+#include "services.hpp"
+#include "status_led.hpp"
 #include "usb.hpp"
 
 // set to 1 to enable twirling the joysticks automatically (for testing) when
@@ -26,15 +35,74 @@ using namespace std::chrono_literals;
 #if HAS_DISPLAY
 static std::shared_ptr<Gui> gui;
 #endif
-static std::vector<uint8_t> hid_report_descriptor;
 static std::shared_ptr<GamepadDevice> ble_gamepad;
-static std::shared_ptr<GamepadDevice> usb_gamepad;
-static int battery_level_percent = 100;
+static std::shared_ptr<espp::SwitchPro> usb_controller;
+static std::atomic<int> battery_level_percent{100};
+static std::mutex serial_number_mutex;
 static std::string serial_number = "";
+
+static std::string get_serial_number() {
+  std::lock_guard<std::mutex> lk(serial_number_mutex);
+  return serial_number;
+}
+static void set_serial_number(const std::string &sn) {
+  std::lock_guard<std::mutex> lk(serial_number_mutex);
+  serial_number = sn;
+}
+
+/********* Input mapping ***************/
+
+// Radial deadzone: inside it the stick reads (0,0); outside it the remaining
+// travel is rescaled so full deflection still reaches 1.0.
+static void apply_deadzone(GamepadInputs::Joystick &j, float deadzone) {
+  if (deadzone <= 0.0f)
+    return;
+  const float mag = std::sqrt(j.x * j.x + j.y * j.y);
+  if (mag < deadzone) {
+    j.x = j.y = 0.0f;
+    return;
+  }
+  const float scale = std::min(1.0f, (mag - deadzone) / (1.0f - deadzone)) / mag;
+  j.x *= scale;
+  j.y *= scale;
+}
+
+// Apply the user settings to the controller inputs and push them into the USB
+// controller's input report (streamed to the host by the USB sender task).
+static void push_inputs(GamepadInputs inputs) {
+  const auto s = services_settings();
+  if (s.invert_left_y)
+    inputs.left_joystick.y = -inputs.left_joystick.y;
+  if (s.invert_right_y)
+    inputs.right_joystick.y = -inputs.right_joystick.y;
+  const float deadzone = s.deadzone_percent / 100.0f;
+  apply_deadzone(inputs.left_joystick, deadzone);
+  apply_deadzone(inputs.right_joystick, deadzone);
+  if (s.swap_ab) {
+    const bool a = inputs.buttons.a, b = inputs.buttons.b;
+    inputs.buttons.a = b;
+    inputs.buttons.b = a;
+  }
+  if (s.swap_xy) {
+    const bool x = inputs.buttons.x, y = inputs.buttons.y;
+    inputs.buttons.x = y;
+    inputs.buttons.y = x;
+  }
+  usb_controller->update_input_report([&](espp::SwitchPro::InputReport &r) {
+    r.reset();
+    r.set_buttons(inputs.buttons);
+    r.set_left_joystick(inputs.left_joystick.x, inputs.left_joystick.y);
+    r.set_right_joystick(inputs.right_joystick.x, inputs.right_joystick.y);
+    r.set_brake(inputs.l2.value);
+    r.set_accelerator(inputs.r2.value);
+  });
+  usb_controller->set_battery_level(static_cast<uint8_t>(battery_level_percent.load()));
+}
 
 /********* BLE callbacks ***************/
 
 /** Notification / Indication receiving handler callback */
+// cppcheck-suppress constParameterCallback
 void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData, size_t length,
               bool isNotify) {
   // if it's the battery level characteristic, then store the battery level and
@@ -46,37 +114,66 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   }
   // otherwise this is a gamepad input report
 
-  // set the data in the ble gamepad
+  // set the data in the ble gamepad and convert it to GamepadInputs
   ble_gamepad->set_report_data(ble_gamepad->get_input_report_id(), pData, length);
+  push_inputs(ble_gamepad->get_gamepad_inputs());
 
-  // convert it to GamepadInputs
-  auto inputs = ble_gamepad->get_gamepad_inputs();
-
-  // invert the y-axis for the joysticks
-  inputs.left_joystick.y = -inputs.left_joystick.y;
-  inputs.right_joystick.y = -inputs.right_joystick.y;
-
-  // now set the data in the usb gamepad
-  usb_gamepad->set_gamepad_inputs(inputs);
-  usb_gamepad->set_battery_level(battery_level_percent);
-
-  // then get the output report from the usb gamepad
-  uint8_t usb_report_id = usb_gamepad->get_input_report_id();
-  auto report = usb_gamepad->get_report_data(usb_report_id);
-
-  // send the report via tiny usb
-  if (tud_mounted()) {
-    // and send it over USB
-    send_hid_report(usb_report_id, report);
-
-    // toggle the LED each send, so mod 2
-    static auto &bsp = Bsp::get();
+  if (usb_is_mounted()) {
+    // toggle the LED each report, so mod 2
     static bool led_on = false;
-    static auto on_color = espp::Rgb(0.0f, 0.0f, 1.0f); // use blue for BLE
-    static auto off_color = espp::Rgb(0.0f, 0.0f, 0.0f);
-    bsp.led(led_on ? on_color : off_color);
+    static const auto on_color = espp::Rgb(0.0f, 0.0f, 1.0f); // use blue for BLE
+    static const auto off_color = espp::Rgb(0.0f, 0.0f, 0.0f);
+    set_led(led_on ? on_color : off_color);
     led_on = !led_on;
   }
+}
+
+/********* Dongle console (device-config module) callbacks ***************/
+
+static device_config::Info device_info() {
+  device_config::Info info;
+  const auto *desc = esp_app_get_description();
+  info.project = desc->project_name;
+  info.firmware = desc->version;
+  info.idf_version = desc->idf_ver;
+  info.hardware = HARDWARE_NAME;
+  info.uptime_s = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+  info.usb_mounted = usb_is_mounted();
+  info.ble_connected = is_ble_subscribed();
+  info.ble_scanning = is_ble_scanning();
+  info.pairing = is_ble_pairing();
+  info.battery_percent = static_cast<uint8_t>(battery_level_percent.load());
+  info.bond_count = ble_bond_count();
+  info.controller = get_serial_number();
+  return info;
+}
+
+static bool device_action(device_config::Action action, std::string &error) {
+  switch (action) {
+  case device_config::Action::StartPairing:
+    start_ble_pairing_thread(notifyCB);
+    return true;
+  case device_config::Action::ClearBonds:
+    ble_clear_bonds();
+    // no bonds left, so this enters pairing mode
+    start_ble_reconnection_thread(notifyCB);
+    return true;
+  case device_config::Action::Reboot:
+    // let the OK reply reach the host first
+    std::thread([]() {
+      std::this_thread::sleep_for(500ms);
+      esp_restart();
+    }).detach();
+    return true;
+  }
+  error = "unknown action";
+  return false;
+}
+
+static void apply_settings(const device_config::Settings &s) {
+  set_led_brightness_percent(s.led_brightness);
+  // the other settings are read per input report (push_inputs); the BLE name
+  // is read at boot (init_ble)
 }
 
 extern "C" void app_main(void) {
@@ -89,7 +186,7 @@ extern "C" void app_main(void) {
 
   // MARK: LED initialization
   bsp.initialize_led();
-  bsp.led(espp::Rgb(0.0f, 0.0f, 0.0f));
+  set_led(espp::Rgb(0.0f, 0.0f, 0.0f));
 
   // MARK: Display initialization
 #if HAS_DISPLAY
@@ -115,12 +212,23 @@ extern "C" void app_main(void) {
   logger.info("No display");
 #endif // HAS_DISPLAY
 
+  // MARK: Services (NVS settings, OTA, crash dumps, device config on the USB
+  // vendor stream). Registered before USB starts so the modules exist as soon
+  // as the host can talk to us.
+  logger.info("Services initialization");
+  services_init(
+      usb_dispatcher(),
+      {.info = device_info, .on_action = device_action, .on_settings_changed = apply_settings});
+  const auto settings = services_settings();
+  apply_settings(settings);
+  if (const auto report = services_crash_report(); !report.empty())
+    logger.warn("Previous boot crashed:\n{}", report);
+
   // MARK: BLE pairing timer (for use with button)
   espp::HighResolutionTimer ble_pairing_timer{
       {.name = "Pairing Timer", .callback = [&]() { start_ble_pairing_thread(notifyCB); }}};
 
   // MARK: Pairing button initialization
-  // initialize the button, which we'll use to cycle the rotation of the display
   logger.info("Initializing the button");
   auto on_button_pressed = [&](const auto &event) {
     if (event.active) {
@@ -134,20 +242,19 @@ extern "C" void app_main(void) {
   bsp.initialize_button(on_button_pressed);
 
   // MARK: Gamepad initialization
-  usb_gamepad = std::make_shared<SwitchPro>();
+  usb_controller = std::make_shared<espp::SwitchPro>(
+      espp::SwitchPro::Config{.log_level = espp::Logger::Verbosity::WARN});
   ble_gamepad = std::make_shared<Xbox>();
 
   // MARK: USB initialization
   logger.info("USB initialization");
-#if DEBUG_USB
-  set_gui(gui);
-#endif // DEBUG_USB
-  start_usb_gamepad(usb_gamepad);
+  if (!start_usb(usb_controller)) {
+    logger.error("USB initialization failed");
+  }
 
   // MARK: BLE initialization
-  logger.info("BLE initialization");
-  std::string device_name = "Switch";
-  init_ble(device_name);
+  logger.info("BLE initialization (name '{}')", settings.ble_name);
+  init_ble(settings.ble_name);
 
   logger.info("Scanning for peripherals");
   start_ble_reconnection_thread(notifyCB);
@@ -160,7 +267,7 @@ extern "C" void app_main(void) {
     // update the display if we have one
 #if HAS_DISPLAY
     // show the usb icon if the USB is mounted
-    gui->set_usb_connected(tud_mounted());
+    gui->set_usb_connected(usb_is_mounted());
     // show the BLE icon if the BLE subsystem is subscribed (receiving data)
     gui->set_ble_connected(is_ble_subscribed());
 #endif // HAS_DISPLAY
@@ -168,18 +275,19 @@ extern "C" void app_main(void) {
     // if we're subscribed, then don't do anything else
     if (is_ble_subscribed()) {
       // if we haven't gotten the serial number, then get that and save it
-      if (serial_number.empty()) {
-        serial_number = get_connected_client_serial_number();
+      if (get_serial_number().empty()) {
+        const auto sn = get_connected_client_serial_number();
+        set_serial_number(sn);
 #if HAS_DISPLAY
-        gui->set_label_text(serial_number);
+        gui->set_label_text(sn);
 #endif // HAS_DISPLAY
       }
       continue;
     }
     // make sure to reset the connected device serial number
-    serial_number = "";
+    set_serial_number("");
 #if HAS_DISPLAY
-    gui->set_label_text(serial_number);
+    gui->set_label_text("");
 #endif // HAS_DISPLAY
 
 #if DEBUG_NO_BLE_TWIRL_JOYSTICKS
@@ -204,17 +312,9 @@ extern "C" void app_main(void) {
 
     index++;
 
-    // set the inputs in the usb gamepad
-    usb_gamepad->set_gamepad_inputs(inputs);
-
-    // get the output report from the usb gamepad
-    uint8_t usb_report_id = usb_gamepad->get_input_report_id();
-    auto report = usb_gamepad->get_report_data(usb_report_id);
-
-    if (tud_mounted()) {
-      send_hid_report(usb_report_id, report);
-    } else {
-      bsp.led(espp::Rgb(1.0f, 0.0f, 0.0f));
+    push_inputs(inputs);
+    if (!usb_is_mounted()) {
+      set_led(espp::Rgb(1.0f, 0.0f, 0.0f));
     }
 #endif // DEBUG_NO_BLE_TWIRL_JOYSTICKS
   }

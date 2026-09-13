@@ -1,5 +1,6 @@
 #include "ble.hpp"
 #include "bsp.hpp"
+#include "status_led.hpp"
 
 #include "gaussian.hpp"
 
@@ -33,11 +34,10 @@ static auto breathe = []() -> float {
 };
 static auto led_callback = [](auto &m, auto &cv) -> bool {
   using namespace std::chrono_literals;
-  static auto &bsp = Bsp::get();
   static espp::Rgb led_color(0.0f, 0.0f, 1.0f); // blue
   espp::Hsv hsv = led_color.hsv();
   hsv.v = breathe();
-  bsp.led(hsv);
+  set_led(hsv);
   std::unique_lock<std::mutex> lk(m);
   cv.wait_for(lk, 10ms);
   return false;
@@ -63,9 +63,8 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     pClient->secureConnection(async);
     // stop the led task
     led_task->stop();
-    static auto &bsp = Bsp::get();
-    static espp::Rgb black(0.0f, 0.0f, 0.0f); // blue
-    bsp.led(black);
+    static espp::Rgb black(0.0f, 0.0f, 0.0f);
+    set_led(black);
   }
 
   void onDisconnect(NimBLEClient *pClient, int reason) override {
@@ -319,3 +318,18 @@ void start_ble_pairing_thread(notify_callback_t callback) {
 }
 
 bool is_ble_subscribed() { return subscribed; }
+
+bool is_ble_scanning() { return NimBLEDevice::getScan()->isScanning(); }
+
+bool is_ble_pairing() { return is_pairing; }
+
+uint8_t ble_bond_count() { return static_cast<uint8_t>(NimBLEDevice::getNumBonds()); }
+
+void ble_clear_bonds() {
+  // drop the live connection first (its client would otherwise re-bond)
+  for (auto *client : NimBLEDevice::getConnectedClients()) {
+    client->disconnect();
+  }
+  subscribed = false;
+  NimBLEDevice::deleteAllBonds();
+}

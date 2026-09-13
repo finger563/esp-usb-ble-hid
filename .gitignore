@@ -35,3 +35,5 @@ sdkconfig
 sdkconfig.old
 managed_components/
 squareline/backup/
+.cache/
+build_*/

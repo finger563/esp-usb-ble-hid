@@ -5,9 +5,9 @@ on: [pull_request]
 env:
   APP_NAME: 'ESP USB BLE HID'
   IDF_TARGET: 'esp32s3'
-  IDF_VERSION: 'v5.5.1'
+  IDF_VERSION: 'v6.1'
   IDF_COMPONENT_MANAGER: "1" # whether to enable the component manager or not
-  FLASH_TOTAL_OVERRIDE: '2097152' # 2MB flash app partition for main app
+  FLASH_TOTAL_OVERRIDE: '1900544' # 0x1D0000: one OTA app slot (partitions.csv)
 
 jobs:
   build:
