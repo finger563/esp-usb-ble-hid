@@ -422,11 +422,11 @@ bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type
   return NimBLEDevice::deleteBond(addr);
 }
 
-void ble_clear_bonds() {
+bool ble_clear_bonds() {
   // drop the live connection first (its client would otherwise re-bond)
   for (auto *client : NimBLEDevice::getConnectedClients()) {
     client->disconnect();
   }
   subscribed = false;
-  NimBLEDevice::deleteAllBonds();
+  return NimBLEDevice::deleteAllBonds();
 }

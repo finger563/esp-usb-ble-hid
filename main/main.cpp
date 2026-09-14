@@ -141,9 +141,13 @@ static device_config::Info device_info() {
   info.ble_connected = is_ble_subscribed();
   info.ble_scanning = is_ble_scanning();
   info.pairing = is_ble_pairing();
-  info.battery_percent = static_cast<uint8_t>(battery_level_percent.load());
   info.bond_count = ble_bond_count();
-  info.controller = get_serial_number();
+  // battery / serial describe the connected controller only: report them as
+  // unknown (0 / "") rather than stale cached values when nothing is connected
+  if (info.ble_connected) {
+    info.battery_percent = static_cast<uint8_t>(battery_level_percent.load());
+    info.controller = get_serial_number();
+  }
   return info;
 }
 
@@ -153,7 +157,10 @@ static bool device_action(device_config::Action action, std::string &error) {
     start_ble_pairing_thread(notifyCB);
     return true;
   case device_config::Action::ClearBonds:
-    ble_clear_bonds();
+    if (!ble_clear_bonds()) {
+      error = "could not clear the bond store";
+      return false; // keep the names: their bonds may still exist
+    }
     services_clear_bond_names();
     // no bonds left, so this enters pairing mode
     start_ble_reconnection_thread(notifyCB);

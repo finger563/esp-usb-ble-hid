@@ -58,15 +58,25 @@ static bool save_settings(const device_config::Settings &s, std::string &error) 
     error = "NVS is not initialized";
     return false;
   }
+  // Stage every key on one handle and commit once, so a failure part-way
+  // through never leaves a half-applied set of settings for the next boot.
   std::error_code ec;
-  nvs_storage->set_var(kNvsNamespace, "inv_ly", s.invert_left_y, ec);
-  nvs_storage->set_var(kNvsNamespace, "inv_ry", s.invert_right_y, ec);
-  nvs_storage->set_var(kNvsNamespace, "swap_ab", s.swap_ab, ec);
-  nvs_storage->set_var(kNvsNamespace, "swap_xy", s.swap_xy, ec);
-  nvs_storage->set_var(kNvsNamespace, "deadzone", s.deadzone_percent, ec);
-  nvs_storage->set_var(kNvsNamespace, "led", s.led_brightness, ec);
-  nvs_storage->set_var(kNvsNamespace, "ble_name", s.ble_name, ec);
+  auto handle = nvs_storage->get_handle(kNvsNamespace, ec);
+  auto stage = [&](const char *key, auto value) {
+    if (!ec)
+      handle.set(key, value, ec);
+  };
+  stage("inv_ly", s.invert_left_y);
+  stage("inv_ry", s.invert_right_y);
+  stage("swap_ab", s.swap_ab);
+  stage("swap_xy", s.swap_xy);
+  stage("deadzone", s.deadzone_percent);
+  stage("led", s.led_brightness);
+  stage("ble_name", s.ble_name);
+  if (!ec)
+    handle.commit(ec);
   if (ec) {
+    // uncommitted writes are discarded with the handle: nothing was persisted
     error = "could not save settings to NVS: " + ec.message();
     logger.error("{}", error);
     return false;
