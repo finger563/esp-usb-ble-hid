@@ -229,10 +229,13 @@
 
     /* ---- paired controllers ---- */
     .bonds { list-style: none; margin: 0; padding: 0; }
-    .bonds li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+    .bonds li { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
     .bonds li:last-child { border-bottom: none; }
-    .bonds .mac { font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.03em; }
-    .bonds .label { color: var(--ink-2); overflow-wrap: anywhere; }
+    .bonds .who { flex: 1 1 auto; min-width: 0; display: grid; gap: 3px; }
+    .bonds .name { font-weight: 600; overflow-wrap: anywhere; }
+    .bonds .name.unknown { font-weight: 500; color: var(--muted); font-style: italic; }
+    .bonds .meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .bonds .mac { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.03em; color: var(--muted); }
     .bonds .badge { padding: 1px 8px; font-size: 11px; }
     .bonds .badge::before { display: none; }
     .bonds .badge.on::before { display: inline-block; }
@@ -1560,16 +1563,25 @@
         return;
       }
       list.forEach((b, i) => {
+        // Name-first: `label` is the name the controller reported the last time it
+        // connected (persisted by the dongle); "" = never learned.
         const li = document.createElement("li");
+        const who = document.createElement("div"); who.className = "who";
+        const name = document.createElement("div");
+        name.className = "name" + (b.label ? "" : " unknown");
+        name.textContent = b.label || "Unknown controller";
+        if (!b.label) name.title = "The dongle has not learned this controller's name yet — it is filled in the next time the controller connects.";
+        const meta = document.createElement("div"); meta.className = "meta";
         const mac = document.createElement("span"); mac.className = "mac"; mac.textContent = b.mac;
         const type = document.createElement("span"); type.className = "badge"; type.textContent = b.addressTypeName;
         type.title = "BLE address type " + b.addressType;
-        li.append(mac, type);
-        if (b.connected) { const c = document.createElement("span"); c.className = "badge on"; c.textContent = "connected"; li.appendChild(c); }
-        if (b.label) { const l = document.createElement("span"); l.className = "label"; l.textContent = b.label; li.appendChild(l); }
+        meta.append(mac, type);
+        if (b.connected) { const c = document.createElement("span"); c.className = "badge on"; c.textContent = "connected"; meta.appendChild(c); }
+        who.append(name, meta);
+        li.appendChild(who);
         const btn = document.createElement("button");
         btn.type = "button"; btn.className = "danger small"; btn.textContent = "Forget";
-        btn.setAttribute("aria-label", "Forget controller " + b.mac);
+        btn.setAttribute("aria-label", "Forget " + (b.label ? b.label : "the controller at " + b.mac));
         btn.disabled = !transport || busy;
         btn.addEventListener("click", () => forgetBond(i, btn));
         li.appendChild(btn);
@@ -1600,14 +1612,16 @@
     async function forgetBond(index, btn) {
       const b = bonds[index];
       if (!b || !transport) return;
-      const what = b.mac + (b.label ? " (" + b.label + ")" : "") + (b.connected ? ", the connected controller," : "");
-      const ok = await askConfirm(els.bondsConfirm, btn, "Forget " + what + "? It must be paired again to reconnect.", "Forget controller");
+      const who = b.label ? "‘" + b.label + "’" : "the controller at " + b.mac;
+      const ok = await askConfirm(els.bondsConfirm, btn,
+        "Forget " + who + (b.connected ? " (currently connected)" : "") + "? It must be paired again to reconnect.",
+        "Forget controller");
       if (!ok || !transport) return;
       try {
         const [, list] = await transact(MODULE.DEVICE, DEV.FORGET_BOND, encodeForgetBond(b), { expect: [[DEV.OK], [DEV.BONDS]] });
         renderBonds(parseBonds(list.payload).bonds);
-        logLine("ok", "Forgot controller " + b.mac + ".");
-        setNote(els.bondsNote, "ok", "Forgot " + b.mac + ".");
+        logLine("ok", "Forgot " + who + (b.label ? " (" + b.mac + ")" : "") + ".");
+        setNote(els.bondsNote, "ok", "Forgot " + who + ".");
         refreshInfo(true);
       } catch (e) {
         const msg = (e && e.deviceError) ? "Dongle refused: " + e.message + (e.code === 5 ? " (it may already be gone — refreshing)" : "") : "Forget failed: " + e.message;

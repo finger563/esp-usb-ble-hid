@@ -24,6 +24,41 @@ static NimBLEUUID battery_level_uuid(espp::BatteryService::BATTERY_LEVEL_CHAR_UU
 static std::atomic<bool> is_pairing{true};
 static notify_callback_t notify_callback = nullptr;
 
+// The controller's name, reported to the app once it is connected + subscribed
+// (see ble_set_bond_name_callback). The advertised name is captured when we
+// decide to connect (scan task) and used as the fallback if the GAP Device Name
+// cannot be read (scan-timer task), hence the mutex.
+static bond_name_callback_t bond_name_callback = nullptr;
+static std::mutex advertised_name_mutex;
+static std::string advertised_name;
+
+static NimBLEUUID generic_access_service_uuid(espp::GenericAccessService::SERVICE_UUID);
+static NimBLEUUID device_name_uuid(espp::GenericAccessService::NAME_CHAR_UUID);
+
+// Read the connected controller's name: GAP Device Name, else the name it
+// advertised, else "". Control characters are stripped and the result capped
+// so it is safe to store and display.
+static std::string read_controller_name(NimBLEClient *client) {
+  std::string name;
+  if (auto *gap = client->getService(generic_access_service_uuid)) {
+    if (auto *chr = gap->getCharacteristic(device_name_uuid); chr && chr->canRead()) {
+      name = chr->readValue();
+    }
+  }
+  if (name.empty()) {
+    std::lock_guard<std::mutex> lk(advertised_name_mutex);
+    name = advertised_name;
+  }
+  std::string clean;
+  for (const char c : name) {
+    if (static_cast<unsigned char>(c) >= 0x20 && static_cast<unsigned char>(c) < 0x7F)
+      clean.push_back(c);
+    if (clean.size() >= 31)
+      break;
+  }
+  return clean;
+}
+
 // LED configuration for BLE pairing / reconnecting
 static constexpr float pairing_breathing_period = 1.0f;
 static constexpr float reconnecting_breathing_period = 3.0f;
@@ -123,6 +158,11 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       NimBLEDevice::getScan()->stop();
 
       logger.info("Found Our Device");
+      {
+        // remember what it called itself, for the paired-controller list
+        std::lock_guard<std::mutex> lk(advertised_name_mutex);
+        advertised_name = advertisedDevice->haveName() ? advertisedDevice->getName() : "";
+      }
 
       /** Async connections can be made directly in the scan callbacks */
       auto pClient = NimBLEDevice::getDisconnectedClient();
@@ -222,6 +262,13 @@ static bool timer_callback() {
             // ignore success here since it's not high priority
             pBatteryChr->subscribe(pBatteryChr->canNotify(), notify_callback);
           }
+        }
+        // and report the controller's name for the paired-controller list
+        if (bond_name_callback) {
+          const NimBLEAddress id = pClient->getConnInfo().getIdAddress();
+          std::array<uint8_t, 6> address{};
+          std::copy(id.getVal(), id.getVal() + address.size(), address.begin());
+          bond_name_callback(address, id.getType(), read_controller_name(pClient));
         }
       }
     }
@@ -329,6 +376,10 @@ bool is_ble_scanning() { return NimBLEDevice::getScan()->isScanning(); }
 bool is_ble_pairing() { return is_pairing.load(); }
 
 uint8_t ble_bond_count() { return static_cast<uint8_t>(NimBLEDevice::getNumBonds()); }
+
+void ble_set_bond_name_callback(bond_name_callback_t callback) {
+  bond_name_callback = std::move(callback); // set once at startup, before scanning
+}
 
 // The identity addresses of the connected clients (a bond is keyed by the
 // identity address, not the possibly-random connection address).

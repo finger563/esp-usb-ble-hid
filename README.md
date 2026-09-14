@@ -203,8 +203,9 @@ Actions: **Start pairing** (same as holding the button), **Forget all
 controllers**, **Reboot**. The status card shows USB / BLE state, the connected
 controller's serial and battery, the number of paired controllers, uptime and
 the firmware / hardware / IDF versions. The **Paired controllers** card lists
-every bonded controller (address, which one is connected, its serial when
-known) and can forget them individually.
+every bonded controller by the name it reports (its BLE Device Name, read and
+remembered each time it connects — "Unknown controller" until then), with its
+address, which one is connected, and a per-controller *Forget*.
 
 ### Firmware update (OTA over USB)
 

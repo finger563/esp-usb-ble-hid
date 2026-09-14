@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "battery_service.hpp"
 #include "ble_appearances.hpp"
 #include "device_info_service.hpp"
+#include "generic_access_service.hpp"
 #include "hid_service.hpp"
 #include "timer.hpp"
 
@@ -33,6 +35,12 @@ struct BleBond {
 };
 /// The bonded (paired) controllers.
 std::vector<BleBond> ble_bonds();
+/// Called (from the BLE scan-timer task) once a controller is connected and
+/// subscribed, with its identity address and its name -- the GAP Device Name
+/// (0x2A00) if readable, else the advertised name, else "".
+using bond_name_callback_t = std::function<void(const std::array<uint8_t, 6> &address,
+                                                uint8_t address_type, const std::string &name)>;
+void ble_set_bond_name_callback(bond_name_callback_t callback);
 /// Forget one bond (disconnecting it first if it is the connected controller).
 /// Returns false if no such bond exists.
 bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type);

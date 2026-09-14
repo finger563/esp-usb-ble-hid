@@ -10,6 +10,7 @@
 #include "coredump.hpp"
 #include "coredump_service.hpp"
 #include "detail/ota_stream_protocol.hpp"
+#include "format.hpp"
 #include "logger.hpp"
 #include "nvs.hpp"
 #include "ota.hpp"
@@ -72,6 +73,54 @@ static bool save_settings(const device_config::Settings &s, std::string &error) 
   }
   logger.info("Settings saved");
   return true;
+}
+
+// --- paired-controller names (NVS) --------------------------------------------------
+//
+// One namespace, one key per bond: the 12-hex-digit address (NVS keys are
+// limited to 15 characters). Values are the controller's name (<= 31 chars).
+
+static constexpr const char *kBondNamesNamespace = "bondnames";
+
+static std::string bond_key(const std::array<uint8_t, 6> &address) {
+  return fmt::format("{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}", address[0], address[1], address[2],
+                     address[3], address[4], address[5]);
+}
+
+std::string services_bond_name(const std::array<uint8_t, 6> &address) {
+  if (!nvs_storage)
+    return {};
+  std::string name;
+  std::error_code ec;
+  nvs_storage->get_var(kBondNamesNamespace, bond_key(address), name, ec);
+  return ec ? std::string{} : name; // not found = unknown
+}
+
+void services_set_bond_name(const std::array<uint8_t, 6> &address, const std::string &name) {
+  if (!nvs_storage || name.empty())
+    return;
+  if (services_bond_name(address) == name)
+    return; // unchanged: spare the flash
+  std::error_code ec;
+  nvs_storage->set_var(kBondNamesNamespace, bond_key(address), name, ec);
+  if (ec)
+    logger.warn("Could not store controller name '{}': {}", name, ec.message());
+  else
+    logger.info("Stored controller name '{}'", name);
+}
+
+void services_forget_bond_name(const std::array<uint8_t, 6> &address) {
+  if (!nvs_storage)
+    return;
+  std::error_code ec;
+  nvs_storage->erase(kBondNamesNamespace, bond_key(address), ec); // missing key is fine
+}
+
+void services_clear_bond_names() {
+  if (!nvs_storage)
+    return;
+  std::error_code ec;
+  nvs_storage->erase(kBondNamesNamespace, ec);
 }
 
 // --- module instances --------------------------------------------------------------

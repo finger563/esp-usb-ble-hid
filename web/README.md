@@ -32,9 +32,11 @@ advertise is disabled.
   the connected controller's serial and battery, number of paired controllers,
   uptime, project, firmware, hardware and ESP-IDF version. Auto-refreshes every
   2 s while connected (pauses while another transfer is running).
-- **Paired controllers** — one row per BLE bond: MAC address, address type
-  (public / random), a *connected* badge for the controller currently in use
-  and its serial number when known. **Forget** on a row drops that bond only
+- **Paired controllers** — one row per BLE bond, name first: the name the
+  controller reported the last time it connected (e.g. "Xbox Wireless
+  Controller"; "Unknown controller" until the dongle has learned it), then its
+  MAC address, address type (public / random) and a *connected* badge for the
+  controller currently in use. **Forget** on a row drops that bond only
   (in-page confirmation). The list refreshes after connecting, after any
   action and quietly alongside the 2 s status poll.
 - **Settings** — stick Y-axis inversion, A/B and X/Y swaps, radial stick

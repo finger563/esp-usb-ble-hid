@@ -154,6 +154,7 @@ static bool device_action(device_config::Action action, std::string &error) {
     return true;
   case device_config::Action::ClearBonds:
     ble_clear_bonds();
+    services_clear_bond_names();
     // no bonds left, so this enters pairing mode
     start_ble_reconnection_thread(notifyCB);
     return true;
@@ -176,9 +177,8 @@ static std::vector<device_config::BondInfo> device_bonds() {
     info.address = b.address;
     info.address_type = b.address_type;
     info.connected = b.connected;
-    // the only per-controller detail we have is the connected one's serial
-    if (b.connected)
-      info.label = get_serial_number();
+    // the name the controller reported when it last connected ("" = unknown)
+    info.label = services_bond_name(b.address);
     bonds.push_back(std::move(info));
   }
   return bonds;
@@ -190,6 +190,7 @@ static bool device_forget_bond(const std::array<uint8_t, 6> &address, uint8_t ad
     error = "no such paired controller";
     return false;
   }
+  services_forget_bond_name(address);
   if (ble_bond_count() == 0) {
     // nothing left to reconnect to: enter pairing mode
     start_ble_reconnection_thread(notifyCB);
@@ -279,6 +280,11 @@ extern "C" void app_main(void) {
   // the console can ask for status / bonds / actions, which use NimBLE.
   logger.info("BLE initialization (name '{}')", settings.ble_name);
   init_ble(settings.ble_name);
+  // remember each controller's name so the console can list it by name
+  ble_set_bond_name_callback(
+      [](const std::array<uint8_t, 6> &address, uint8_t, const std::string &name) {
+        services_set_bond_name(address, name);
+      });
 
   // MARK: USB initialization
   logger.info("USB initialization");

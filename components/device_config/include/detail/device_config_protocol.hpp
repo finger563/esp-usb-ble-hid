@@ -365,7 +365,8 @@ struct BondInfo {
       address{};           ///< BLE identity address, as stored (little-endian, NimBLE order)
   uint8_t address_type{0}; ///< BLE address type (0 public, 1 random)
   bool connected{false};   ///< this controller is the one currently connected
-  std::string label;       ///< e.g. the connected controller's serial ("" if unknown)
+  std::string label;       ///< the controller's name as it reported it (GAP Device Name or
+                           ///< advertised name) when it last connected; "" = unknown
 
   bool operator==(const BondInfo &) const = default;
 

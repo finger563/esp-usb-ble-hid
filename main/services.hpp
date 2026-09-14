@@ -37,5 +37,13 @@ void services_init(espp::Dispatcher &dispatcher, const ServicesCallbacks &callba
 /// A copy of the current (persisted) settings.
 device_config::Settings services_settings();
 
+/// Paired-controller names, persisted in NVS keyed by the bond's address so the
+/// console can show something better than a MAC. Names come from the BLE side
+/// (GAP Device Name / advertised name) each time a controller connects.
+std::string services_bond_name(const std::array<uint8_t, 6> &address);
+void services_set_bond_name(const std::array<uint8_t, 6> &address, const std::string &name);
+void services_forget_bond_name(const std::array<uint8_t, 6> &address);
+void services_clear_bond_names();
+
 /// The last crash report (empty if the previous boot was clean).
 std::string services_crash_report();
