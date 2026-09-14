@@ -232,9 +232,10 @@ struct Settings {
       if (!value)
         return std::nullopt;
       auto as_bool = [&](bool &field) {
-        if (value->size() != 1)
+        // booleans are exactly 0 or 1 on the wire
+        if (value->size() != 1 || (*value)[0] > 1)
           return false;
-        field = (*value)[0] != 0;
+        field = (*value)[0] == 1;
         return true;
       };
       auto as_u8 = [&](uint8_t &field) {

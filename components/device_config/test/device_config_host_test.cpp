@@ -54,6 +54,12 @@ int main() {
     CHECK(!dc::Settings::parse(truncated, dc::Settings{}).has_value());
     std::vector<uint8_t> wrong_len{dc::kProtocolVersion, 1, uint8_t(dc::Key::SwapAB), 2, 1, 1};
     CHECK(!dc::Settings::parse(wrong_len, dc::Settings{}).has_value());
+    // booleans are exactly 0 or 1: any other byte is malformed, not "true"
+    std::vector<uint8_t> bad_bool{dc::kProtocolVersion, 1, uint8_t(dc::Key::SwapAB), 1, 2};
+    CHECK(!dc::Settings::parse(bad_bool, dc::Settings{}).has_value());
+    std::vector<uint8_t> ok_bool{dc::kProtocolVersion, 1, uint8_t(dc::Key::SwapAB), 1, 1};
+    CHECK(dc::Settings::parse(ok_bool, dc::Settings{}).has_value() &&
+          dc::Settings::parse(ok_bool, dc::Settings{})->swap_ab);
     CHECK(!dc::Settings::parse({}, dc::Settings{}).has_value());
   }
   // ---- validation ----

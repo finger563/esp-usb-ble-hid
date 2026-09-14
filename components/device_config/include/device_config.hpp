@@ -42,9 +42,11 @@ public:
 
   /// Called with a complete frame to transmit.
   using send_fn = std::function<void(std::span<const uint8_t> frame)>;
-  /// Called (outside the settings lock) after the settings changed, with the
-  /// new values; persist and apply them here.
-  using settings_changed_fn = std::function<void(const Settings &settings)>;
+  /// Called (outside the settings lock) with new settings; persist and apply
+  /// them here. Return false (and set @p error) if they could not be
+  /// persisted: the module then keeps the previous settings and replies ERROR
+  /// instead of acknowledging values that would be lost on reboot.
+  using settings_changed_fn = std::function<bool(const Settings &settings, std::string &error)>;
   /// Returns the live device status.
   using info_fn = std::function<Info()>;
   /// Performs an action; on failure return false and set @p error.
@@ -115,14 +117,20 @@ public:
         send_error(request, ErrorCode::InvalidValue, why);
         break;
       }
-      apply(*updated);
+      if (std::string error; !apply(*updated, error)) {
+        send_error(request, ErrorCode::Failed, error);
+        break;
+      }
       send(Msg::Ok, device_config::make_ok_payload(request));
       send(Msg::Settings, updated->serialize());
       break;
     }
     case Msg::ResetSettings: {
       const Settings defaults{};
-      apply(defaults);
+      if (std::string error; !apply(defaults, error)) {
+        send_error(request, ErrorCode::Failed, error);
+        break;
+      }
       send(Msg::Ok, device_config::make_ok_payload(request));
       send(Msg::Settings, defaults.serialize());
       break;
@@ -171,14 +179,18 @@ public:
   }
 
 protected:
-  void apply(const Settings &s) {
-    {
-      std::lock_guard<std::mutex> lk(mutex_);
-      settings_ = s;
+  // Persist first (outside the lock: NVS writes may take a while), and only
+  // adopt the new values once they are stored, so a failed write never leaves
+  // the running settings out of sync with what the next boot will load.
+  bool apply(const Settings &s, std::string &error) {
+    if (on_settings_changed_ && !on_settings_changed_(s, error)) {
+      if (error.empty())
+        error = "settings could not be saved";
+      return false;
     }
-    // notify outside the lock: the callback persists to NVS and may take a while
-    if (on_settings_changed_)
-      on_settings_changed_(s);
+    std::lock_guard<std::mutex> lk(mutex_);
+    settings_ = s;
+    return true;
   }
 
   void send(Msg type, std::span<const uint8_t> payload) {

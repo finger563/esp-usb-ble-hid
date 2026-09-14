@@ -1166,7 +1166,7 @@
 
     let transport = null;
     const parser = new StreamParser();
-    let lastDeviceIds = null;     // { vendorId, productId } of the last connected dongle (auto-reconnect)
+    let lastDeviceIds = null;     // { vendorId, productId, serial } of the last connected dongle (auto-reconnect)
     let expectRestart = false;    // a reboot we asked for is coming; a disconnect is not an error
     let expectRestartUntil = 0;
 
@@ -1213,13 +1213,20 @@
       }
       transport = t;
       parser.reset();
+      const reconnected = expectRestart;
       expectRestart = false;
-      lastDeviceIds = { vendorId: device.vendorId, productId: device.productId };
+      // Every dongle shares the VID/PID; the firmware-assigned USB serial number
+      // (derived from the MAC) is what identifies THIS dongle across a reboot.
+      const serial = (device.serialNumber || "").trim();
+      lastDeviceIds = { vendorId: device.vendorId, productId: device.productId, serial };
       t.startPump(handleRxBytes);
       setStatus("connected", "Connected");
       updateUI();
-      logLine("ok", "Connected to " + t.describe() + " — vendor interface " + t.iface + ", bulk IN 0x" +
+      logLine("ok", (reconnected ? "Reconnected to " : "Connected to ") + t.describe() +
+              (serial ? " (serial " + serial + ")" : " (no USB serial number)") +
+              " — vendor interface " + t.iface + ", bulk IN 0x" +
               t.epIn.toString(16) + " (" + t.inPacketSize + " B) / OUT 0x" + t.epOut.toString(16) + ".");
+      if (!serial) logLine("warn", "This dongle reports no USB serial number; an automatic reconnect after a reboot can only match by VID/PID, which every dongle shares.");
       await afterConnect();
       return true;
     }
@@ -1268,8 +1275,20 @@
       navigator.usb.addEventListener("connect", async (e) => {
         if (transport || !expectRestart || Date.now() > expectRestartUntil) return;
         const d = e.device;
-        if (lastDeviceIds && (d.vendorId !== lastDeviceIds.vendorId || d.productId !== lastDeviceIds.productId)) return;
-        logLine("sys", "Dongle is back; reconnecting…");
+        if (!lastDeviceIds) return;
+        if (d.vendorId !== lastDeviceIds.vendorId || d.productId !== lastDeviceIds.productId) return;
+        const name = (d.productName || "USB device") + " (" + d.vendorId.toString(16).padStart(4, "0") + ":" + d.productId.toString(16).padStart(4, "0") + ")";
+        const serial = (d.serialNumber || "").trim();
+        if (lastDeviceIds.serial) {
+          if (serial !== lastDeviceIds.serial) {
+            logLine("warn", "Ignoring " + name + " (serial " + (serial || "none") + "): not the dongle that was updated (serial " + lastDeviceIds.serial + ").");
+            return;
+          }
+          logLine("sys", "Dongle is back (serial " + serial + "); reconnecting…");
+        } else {
+          logLine("warn", "A dongle matching VID/PID appeared" + (serial ? " (serial " + serial + ")" : "") +
+                  "; the updated dongle had no USB serial, so this match is by VID/PID only. Reconnecting…");
+        }
         await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
         if (transport) return;
         const ok = await openTransport(d);

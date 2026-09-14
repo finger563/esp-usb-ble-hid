@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 
 #include "ble.hpp"
 #include "bsp.hpp"
@@ -10,7 +11,9 @@
 
 static uint32_t scanTimeMs = 5000; // scan time in milliseconds, 0 = scan forever
 static std::unique_ptr<espp::Timer> scanTimer;
-static bool subscribed = false;
+// read from other tasks (the USB RX worker's status queries), written by the
+// BLE callbacks / scan timer: keep them atomic
+static std::atomic<bool> subscribed{false};
 
 static NimBLEUUID hid_service_uuid(espp::HidService::SERVICE_UUID);
 static NimBLEUUID hid_input_uuid(espp::HidService::REPORT_UUID);
@@ -18,7 +21,7 @@ static NimBLEUUID hid_input_uuid(espp::HidService::REPORT_UUID);
 static NimBLEUUID battery_service_uuid(espp::BatteryService::BATTERY_SERVICE_UUID);
 static NimBLEUUID battery_level_uuid(espp::BatteryService::BATTERY_LEVEL_CHAR_UUID);
 
-static bool is_pairing = true;
+static std::atomic<bool> is_pairing{true};
 static notify_callback_t notify_callback = nullptr;
 
 // LED configuration for BLE pairing / reconnecting
@@ -319,11 +322,11 @@ void start_ble_pairing_thread(notify_callback_t callback) {
   start_scan();
 }
 
-bool is_ble_subscribed() { return subscribed; }
+bool is_ble_subscribed() { return subscribed.load(); }
 
 bool is_ble_scanning() { return NimBLEDevice::getScan()->isScanning(); }
 
-bool is_ble_pairing() { return is_pairing; }
+bool is_ble_pairing() { return is_pairing.load(); }
 
 uint8_t ble_bond_count() { return static_cast<uint8_t>(NimBLEDevice::getNumBonds()); }
 

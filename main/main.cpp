@@ -275,15 +275,16 @@ extern "C" void app_main(void) {
       espp::SwitchPro::Config{.log_level = espp::Logger::Verbosity::WARN});
   ble_gamepad = std::make_shared<Xbox>();
 
+  // MARK: BLE initialization -- before USB: as soon as the device is mounted
+  // the console can ask for status / bonds / actions, which use NimBLE.
+  logger.info("BLE initialization (name '{}')", settings.ble_name);
+  init_ble(settings.ble_name);
+
   // MARK: USB initialization
   logger.info("USB initialization");
   if (!start_usb(usb_controller)) {
     logger.error("USB initialization failed");
   }
-
-  // MARK: BLE initialization
-  logger.info("BLE initialization (name '{}')", settings.ble_name);
-  init_ble(settings.ble_name);
 
   logger.info("Scanning for peripherals");
   start_ble_reconnection_thread(notifyCB);

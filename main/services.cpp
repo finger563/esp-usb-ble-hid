@@ -52,9 +52,11 @@ static device_config::Settings load_settings() {
   return s;
 }
 
-static void save_settings(const device_config::Settings &s) {
-  if (!nvs_storage)
-    return;
+static bool save_settings(const device_config::Settings &s, std::string &error) {
+  if (!nvs_storage) {
+    error = "NVS is not initialized";
+    return false;
+  }
   std::error_code ec;
   nvs_storage->set_var(kNvsNamespace, "inv_ly", s.invert_left_y, ec);
   nvs_storage->set_var(kNvsNamespace, "inv_ry", s.invert_right_y, ec);
@@ -63,10 +65,13 @@ static void save_settings(const device_config::Settings &s) {
   nvs_storage->set_var(kNvsNamespace, "deadzone", s.deadzone_percent, ec);
   nvs_storage->set_var(kNvsNamespace, "led", s.led_brightness, ec);
   nvs_storage->set_var(kNvsNamespace, "ble_name", s.ble_name, ec);
-  if (ec)
-    logger.error("Could not save settings to NVS: {}", ec.message());
-  else
-    logger.info("Settings saved");
+  if (ec) {
+    error = "could not save settings to NVS: " + ec.message();
+    logger.error("{}", error);
+    return false;
+  }
+  logger.info("Settings saved");
+  return true;
 }
 
 // --- module instances --------------------------------------------------------------
@@ -254,10 +259,13 @@ void services_init(espp::Dispatcher &dispatcher, const ServicesCallbacks &callba
       .send = send,
       .initial = settings,
       .on_settings_changed =
-          [on_changed = callbacks.on_settings_changed](const device_config::Settings &s) {
-            save_settings(s);
+          [on_changed = callbacks.on_settings_changed](const device_config::Settings &s,
+                                                       std::string &error) {
+            if (!save_settings(s, error))
+              return false; // not applied either: the module keeps the old values
             if (on_changed)
               on_changed(s);
+            return true;
           },
       .info = callbacks.info,
       .on_action = callbacks.on_action,
