@@ -29,6 +29,12 @@ the HID Host.
     - [Reconnection Mode](#reconnection-mode)
     - [Connected](#connected)
     - [Note about system power](#note-about-system-power)
+  - [Dongle Console (settings, firmware update, crash dumps)](#dongle-console-settings-firmware-update-crash-dumps)
+    - [Settings](#settings)
+    - [Firmware update (OTA over USB)](#firmware-update-ota-over-usb)
+    - [Crash dumps](#crash-dumps)
+    - [Adding your own module](#adding-your-own-module)
+  - [Architecture](#architecture)
   - [Output](#output)
   - [Helpful Links](#helpful-links)
 
@@ -76,19 +82,15 @@ https://github.com/user-attachments/assets/c81b947a-24a1-4a44-b5d0-5d4c274beb93
 
 ## Cloning
 
-Since this repo contains a submodule, you need to make sure you clone it
-recursively, e.g. with:
-
 ``` sh
-git clone --recurse-submodules https://github.com/finger563/esp-usb-ble-hid
+git clone https://github.com/finger563/esp-usb-ble-hid
 ```
 
-Alternatively, you can always ensure the submodules are up to date after cloning
-(or if you forgot to clone recursively) by running:
-
-``` sh
-git submodule update --init --recursive
-```
+All library code comes from the [ESP Component
+Registry](https://components.espressif.com) (the
+[espp](https://github.com/esp-cpp/espp) components, `esp_tinyusb`, ...) and is
+fetched by the IDF component manager on the first build. The project builds
+with **ESP-IDF v6.1** (what CI uses).
 
 ## Configuration
 
@@ -96,6 +98,16 @@ You can run `idf.py menuconfig` to configure the project to run on either the
 `T-Dongle-S3` or the `QtPy (ESP32 or ESP32S3)`. The configuration is under the
 `Hardware Configuration` menu from the main menu and is the `Target Hardware`
 option.
+
+The `USB Configuration` menu controls the extra USB interfaces next to the
+Switch Pro HID interface:
+
+- **Vendor (WebUSB) interface** (default on) — carries the [dongle
+  console](#dongle-console-settings-firmware-update-crash-dumps) stream
+  (settings, firmware update, crash dumps). Turn it off to present a plain
+  single-interface HID gamepad if a host refuses the composite device.
+- **CDC-ACM log console** (default off) — a USB serial port carrying the logs,
+  so `idf.py monitor` works over the same cable.
 
 ![CleanShot 2025-04-10 at 07 57 26](https://github.com/user-attachments/assets/be355584-251d-4c2c-81ed-15089b45f4e1)
 
@@ -156,6 +168,99 @@ your switch is via Bluetooth Classic.
 That being said, I have read online that if you plug a usb-to-ethernet adapter
 into your Switch Dock, then the Switch may keep its USB-C port awake during
 sleep.
+
+## Dongle Console (settings, firmware update, crash dumps)
+
+Plug the dongle into a computer and open the **[Dongle
+Console](https://finger563.github.io/esp-usb-ble-hid/dongle_console.html)** in
+a Chromium-based browser (Chrome / Edge / Brave — it uses WebUSB, so it also
+works from a local copy of [`web/dongle_console.html`](web/dongle_console.html)
+opened via `file://`). Click *Connect* and pick the *Pro Controller* device. No
+driver is needed on any OS (the dongle advertises WebUSB + MS OS 2.0
+descriptors).
+
+The console talks to the dongle over a USB **vendor interface** that sits next
+to the gamepad HID interface, using the espp `stream_frame` framing and
+`dispatcher` module routing. Three modules are available:
+
+| Module | Id | What it does |
+|--------|----|--------------|
+| Device Config | `0x10` | status, settings, pairing / forget controllers / reboot (this repo: `components/device_config`) |
+| OTA | `0x00` | firmware update over USB (`espp/ota`) |
+| Core Dump | `0x04` | download / erase the last crash dump (`espp/coredump`) |
+
+### Settings
+
+Settings are stored in NVS and survive updates:
+
+- **Invert left / right stick Y** (default on — what the Switch expects)
+- **Swap A/B**, **Swap X/Y** — use the Xbox physical layout on the Switch
+- **Stick deadzone** (0–50 %)
+- **LED brightness**
+- **BLE name** (applies after a reboot)
+
+Actions: **Start pairing** (same as holding the button), **Forget all
+controllers**, **Reboot**. The status card shows USB / BLE state, the connected
+controller's serial and battery, the number of paired controllers, uptime and
+the firmware / hardware / IDF versions. The **Paired controllers** card lists
+every bonded controller by the name it reports (its BLE Device Name, read and
+remembered each time it connects — "Unknown controller" until then), with its
+address, which one is connected, and a per-controller *Forget*.
+
+### Firmware update (OTA over USB)
+
+The *Firmware* tab flashes a `build/esp-usb-ble-hid.bin` (from the
+[releases](https://github.com/finger563/esp-usb-ble-hid/releases) or your own
+build) over the vendor interface — no bootloader mode, no serial port. The
+partition table has two app slots; after an update the new image boots in
+*pending-verify* state and the console asks you to **confirm** it once it
+reconnects (or roll back). If it is never confirmed, the bootloader returns to
+the previous firmware on the next reset.
+
+From the command line, the same protocol is driven by the espp OTA tool:
+`idf.py ota-usb` (after a build; set `ESPP_OTA_VID=0x057E ESPP_OTA_PID=0x2009`
+since the dongle presents as a Pro Controller).
+
+> The partition layout changed with this feature (factory → `ota_0`/`ota_1`).
+> Dongles running an older release must be reflashed once over serial / with
+> the release programmer; after that, updates go over USB.
+
+### Crash dumps
+
+If the firmware ever crashes, the panic handler writes a core dump to the
+`coredump` partition and the next boot logs a summary. The *Crash dump* tab
+downloads it as `core.elf` (analyze with `espcoredump.py info_corefile --core
+core.elf --core-format elf build/esp-usb-ble-hid.elf`) and can erase it.
+
+### Adding your own module
+
+The console stream is the espp dispatcher, so any custom protocol can be added
+as another module: see `components/device_config` for a complete, host-tested
+example (protocol header + module class + web UI) and the espp [custom modules
+guide](https://esp-cpp.github.io/espp/dispatcher/custom_modules.html).
+
+## Architecture
+
+```
+  BLE gamepad ──notify──▶ Xbox (hid-rp parse) ──▶ GamepadInputs ──settings──▶ espp::SwitchPro
+                                                                                  │ input report
+                                                              espp::UsbDevice ◀───┘
+                                                          ┌────────┴──────────────────┐
+                                             HID iface (Pro Controller)     vendor iface (WebUSB)
+                                                     │                              │
+                                              Nintendo Switch              espp::Dispatcher
+                                                                        ┌──────┼──────────┐
+                                                                     OTA   Core Dump   Device Config
+```
+
+- `main/usb.cpp` — the composite USB device (HID + optional vendor + optional
+  CDC), the HID handshake/report sender task and the vendor RX worker.
+- `main/services.cpp` — NVS settings + the OTA / core-dump / device-config
+  modules on the dispatcher.
+- `main/ble.cpp` — BLE central: scanning, pairing, bonding, HID subscription.
+- `components/device_config` — the configuration protocol + module (host tests
+  in `test/`).
+- `web/dongle_console.html` — the browser console (published to GitHub Pages).
 
 ## Output
 

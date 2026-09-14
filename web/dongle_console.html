@@ -1,0 +1,2130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dongle Console</title>
+  <meta name="description" content="Browser console for the ESP USB BLE HID gamepad dongle: device status and settings, firmware update (OTA) and crash-dump retrieval over WebUSB.">
+  <meta name="color-scheme" content="light dark">
+  <style>
+    /* ------------------------------------------------------------------
+       Theme tokens. Light is the base; dark overrides via prefers-color-scheme.
+       Palette: warm paper + ink, with a "neon blue / neon red" controller accent.
+       ------------------------------------------------------------------ */
+    :root {
+      --bg: #f2f0e9;
+      --panel: #ffffff;
+      --panel-2: #e9e6dc;
+      --panel-3: #dfdbcf;
+      --ink: #1b1d23;
+      --ink-2: #3c3f48;
+      --muted: #6c707b;
+      --line: #d5d1c4;
+      --line-strong: #b9b4a4;
+      --accent: #0b86bf;
+      --accent-strong: #086b99;
+      --accent-soft: #d8ecf6;
+      --accent-ink: #ffffff;
+      --danger: #d1372c;
+      --danger-soft: #f8ddd9;
+      --ok: #2d8a4a;
+      --ok-soft: #d8efdf;
+      --warn: #b47a0c;
+      --warn-soft: #f6ead0;
+      --tx: #4b5fd6;
+      --rx: #0f8f7f;
+      --focus: #0b86bf;
+      --shadow: 0 1px 2px rgba(20, 22, 30, 0.06), 0 4px 14px rgba(20, 22, 30, 0.05);
+      --radius: 10px;
+      --font-ui: "Avenir Next", "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --font-mono: "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #131519;
+        --panel: #1c1f25;
+        --panel-2: #252931;
+        --panel-3: #2e333d;
+        --ink: #e8e6df;
+        --ink-2: #c7c5bd;
+        --muted: #979ba5;
+        --line: #2f343d;
+        --line-strong: #454b56;
+        --accent: #33b5ee;
+        --accent-strong: #5cc6f3;
+        --accent-soft: #14303d;
+        --accent-ink: #0b1116;
+        --danger: #ff6152;
+        --danger-soft: #3b1f1c;
+        --ok: #5ccb7c;
+        --ok-soft: #1a3323;
+        --warn: #e4ad3f;
+        --warn-soft: #3a2f16;
+        --tx: #8f9dff;
+        --rx: #3fc9b6;
+        --focus: #5cc6f3;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.25);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-ui);
+      font-size: 14px;
+      line-height: 1.45;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    code, pre, .mono { font-family: var(--font-mono); font-size: 12.5px; }
+    a { color: var(--accent); }
+    [hidden] { display: none !important; }
+
+    /* ---- focus ---- */
+    button:focus-visible, input:focus-visible, select:focus-visible, [role="tab"]:focus-visible, .filebtn:focus-within {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    /* ---- header ---- */
+    .top {
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      padding: 10px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; z-index: 5;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand svg { width: 28px; height: 28px; flex: none; }
+    .brand h1 { font-size: 17px; white-space: nowrap; }
+    .brand .sub { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .conn { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+    .devbadge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 999px;
+      background: var(--panel-2); border: 1px solid var(--line);
+      font-size: 12px; max-width: 46vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .devbadge .fw { color: var(--muted); }
+
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+    }
+    .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: 0.7; }
+    .pill.connected { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+    .pill.busy { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+    .pill.error { color: var(--danger); background: var(--danger-soft); border-color: transparent; }
+
+    /* ---- buttons / inputs ---- */
+    button, .filebtn {
+      font: inherit; font-size: 13px; font-weight: 600;
+      color: var(--ink); background: var(--panel-2);
+      border: 1px solid var(--line-strong); border-radius: 8px;
+      padding: 7px 13px; cursor: pointer; line-height: 1.2;
+      transition: background 0.12s, border-color 0.12s, transform 0.05s;
+      white-space: nowrap;
+    }
+    button:hover:not(:disabled), .filebtn:hover { background: var(--panel-3); }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+    button.primary:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+    button.danger { color: var(--danger); border-color: var(--danger); background: transparent; }
+    button.danger:hover:not(:disabled) { background: var(--danger-soft); }
+    button.danger.solid { background: var(--danger); color: #fff; }
+    button.ghost { background: transparent; border-color: transparent; color: var(--accent); }
+    button.ghost:hover:not(:disabled) { background: var(--accent-soft); }
+    button.small { padding: 4px 9px; font-size: 12px; }
+    input[type="text"], select {
+      font: inherit; color: var(--ink); background: var(--panel);
+      border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 10px;
+      min-width: 0;
+    }
+    input[type="text"].invalid { border-color: var(--danger); }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
+    .filebtn { display: inline-flex; align-items: center; gap: 8px; position: relative; overflow: hidden; }
+    .filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+    /* ---- banners ---- */
+    .banner {
+      margin: 12px 16px 0; padding: 10px 14px; border-radius: var(--radius);
+      border: 1px solid var(--warn); background: var(--warn-soft); color: var(--ink);
+    }
+    .banner.danger { border-color: var(--danger); background: var(--danger-soft); }
+
+    /* ---- tabs ---- */
+    .tabs {
+      display: flex; gap: 2px; padding: 10px 16px 0; border-bottom: 1px solid var(--line);
+      background: var(--bg);
+    }
+    [role="tab"] {
+      background: transparent; border: 1px solid transparent; border-bottom: none;
+      border-radius: 8px 8px 0 0; color: var(--muted); padding: 8px 14px; margin-bottom: -1px;
+      font-weight: 600;
+    }
+    [role="tab"]:hover:not(:disabled) { color: var(--ink); background: var(--panel-2); }
+    [role="tab"][aria-selected="true"] {
+      color: var(--ink); background: var(--panel); border-color: var(--line);
+      box-shadow: inset 0 3px 0 var(--accent);
+    }
+    [role="tab"] .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); margin-left: 7px; vertical-align: middle; }
+    [role="tab"].present .dot { background: var(--ok); }
+    [role="tab"].missing .dot { background: var(--danger); }
+
+    /* ---- layout ---- */
+    main { flex: 1 1 auto; padding: 14px 16px 8px; min-height: 0; }
+    [role="tabpanel"] { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }
+    .card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 14px 16px; min-width: 0;
+    }
+    .card.wide { grid-column: 1 / -1; }
+    .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .card-head h2 { flex: 1 1 auto; }
+    .muted { color: var(--muted); }
+    .small-text { font-size: 12px; }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .row + .row { margin-top: 8px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .confirm-slot:empty { display: none; }
+    .confirm-box {
+      margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid var(--danger); background: var(--danger-soft);
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    .confirm-box span { flex: 1 1 200px; }
+    .note { margin-top: 8px; min-height: 1.2em; }
+    .note.err { color: var(--danger); }
+    .note.ok { color: var(--ok); }
+    .note.warn { color: var(--warn); }
+
+    /* ---- status card ---- */
+    .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 6px;
+      font-size: 12px; font-weight: 600; border: 1px solid var(--line); color: var(--muted); background: var(--panel-2);
+    }
+    .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+    .badge.on { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+    .badge.on::before { background: var(--ok); }
+    .badge.hot { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+    .badge.hot::before { background: var(--warn); animation: blink 1s infinite; }
+    @keyframes blink { 50% { opacity: 0.25; } }
+    .kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; overflow-wrap: anywhere; }
+    .kv dd.mono { font-size: 12px; }
+    .meter { display: inline-block; width: 90px; height: 8px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line); vertical-align: middle; margin-left: 8px; overflow: hidden; }
+    .meter i { display: block; height: 100%; background: var(--ok); width: 0; }
+    .meter.low i { background: var(--danger); }
+
+    /* ---- paired controllers ---- */
+    .bonds { list-style: none; margin: 0; padding: 0; }
+    .bonds li { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+    .bonds li:last-child { border-bottom: none; }
+    .bonds .who { flex: 1 1 auto; min-width: 0; display: grid; gap: 3px; }
+    .bonds .name { font-weight: 600; overflow-wrap: anywhere; }
+    .bonds .name.unknown { font-weight: 500; color: var(--muted); font-style: italic; }
+    .bonds .meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .bonds .mac { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.03em; color: var(--muted); }
+    .bonds .badge { padding: 1px 8px; font-size: 11px; }
+    .bonds .badge::before { display: none; }
+    .bonds .badge.on::before { display: inline-block; }
+    .bonds li button { margin-left: auto; }
+    .bonds .bond-empty { display: block; padding: 6px 0; }
+
+    /* ---- settings form ---- */
+    .form { display: grid; gap: 10px; }
+    .field { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+    .field:last-child { border-bottom: none; }
+    .field label { font-weight: 600; }
+    .field .hint { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+    .field.slider { grid-template-columns: 1fr 52px; }
+    .field.slider input[type="range"] { grid-column: 1; }
+    .field.slider output { font-family: var(--font-mono); font-size: 12.5px; text-align: right; }
+    .field.text { grid-template-columns: 1fr; }
+    .field.text input { width: 100%; }
+    .switch { position: relative; width: 40px; height: 22px; display: inline-block; }
+    .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; width: 100%; height: 100%; cursor: pointer; }
+    .switch i { position: absolute; inset: 0; border-radius: 11px; background: var(--line-strong); transition: background 0.15s; }
+    .switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+    .switch input:checked + i { background: var(--accent); }
+    .switch input:checked + i::after { transform: translateX(18px); }
+    .switch input:focus-visible + i { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .switch input:disabled + i { opacity: 0.45; }
+    .dirty { color: var(--warn); font-size: 12px; }
+
+    /* ---- progress ---- */
+    .progress { height: 10px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; margin-top: 10px; }
+    .progress-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
+    .progress-fill.done { background: var(--ok); }
+    .progress-fill.failed { background: var(--danger); }
+    .stats { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+
+    pre.report {
+      margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line);
+      white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font-size: 12px;
+    }
+    .cmdrow { display: flex; gap: 8px; align-items: stretch; }
+    .cmdrow pre { flex: 1 1 auto; margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); overflow-x: auto; white-space: pre; font-size: 12px; }
+
+    /* ---- log ---- */
+    .logpanel { border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
+    .loghead { display: flex; align-items: center; gap: 12px; padding: 6px 16px; border-bottom: 1px solid var(--line); }
+    .loghead h2 { flex: 1 1 auto; }
+    .loghead label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+    #log { height: 170px; overflow-y: auto; padding: 6px 16px 10px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; resize: vertical; }
+    #log > div { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #log .t { color: var(--muted); }
+    #log .sys { color: var(--ink-2); }
+    #log .ok { color: var(--ok); }
+    #log .err { color: var(--danger); }
+    #log .warn { color: var(--warn); }
+    #log .tx { color: var(--tx); }
+    #log .rx { color: var(--rx); }
+
+    @media (max-width: 640px) {
+      .top { padding: 8px 10px; gap: 8px; }
+      .brand .sub { display: none; }
+      .conn { margin-left: 0; width: 100%; }
+      .devbadge { max-width: 100%; }
+      main { padding: 10px; }
+      .tabs { padding: 8px 10px 0; }
+      [role="tab"] { padding: 7px 10px; font-size: 13px; }
+      [role="tabpanel"] { grid-template-columns: 1fr; }
+      .kv { grid-template-columns: 1fr; gap: 2px; }
+      .kv dt { font-size: 12px; }
+      .kv dd { margin-bottom: 4px; }
+      .loghead, #log { padding-left: 10px; padding-right: 10px; }
+      #log { height: 140px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 9h14a7 7 0 0 1 7 7v2a6 6 0 0 1-6 6l-3-3h-10l-3 3a6 6 0 0 1-6-6v-2a7 7 0 0 1 7-7z"/>
+        <path d="M11 15v4M9 17h4"/>
+        <circle cx="22" cy="16" r="1.2" fill="currentColor"/><circle cx="25" cy="19" r="1.2" fill="currentColor"/>
+      </svg>
+      <div>
+        <h1>Dongle Console</h1>
+        <div class="sub">ESP USB BLE HID · WebUSB</div>
+      </div>
+    </div>
+    <div class="conn">
+      <span id="status" class="pill">Disconnected</span>
+      <span id="devBadge" class="devbadge" hidden></span>
+      <button id="connectBtn" class="primary" type="button">Connect dongle</button>
+      <button id="anyBtn" class="ghost" type="button" title="Show every USB device instead of only the dongle (VID 057E / PID 2009)">Pick any USB device…</button>
+    </div>
+  </header>
+
+  <div id="unsupported" class="banner danger" hidden>
+    WebUSB is not available here. Open this page in Chrome, Edge or another Chromium-based browser
+    from <code>https://</code>, <code>http://localhost</code> or a local <code>file://</code> path.
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="Console sections">
+    <button role="tab" id="tabbtn-device" data-tab="device" aria-selected="true" aria-controls="tab-device" type="button">Device<span class="dot"></span></button>
+    <button role="tab" id="tabbtn-firmware" data-tab="firmware" aria-selected="false" aria-controls="tab-firmware" tabindex="-1" type="button">Firmware<span class="dot"></span></button>
+    <button role="tab" id="tabbtn-coredump" data-tab="coredump" aria-selected="false" aria-controls="tab-coredump" tabindex="-1" type="button">Crash dump<span class="dot"></span></button>
+  </nav>
+
+  <main>
+    <!-- ============================ Device ============================ -->
+    <section id="tab-device" role="tabpanel" aria-labelledby="tabbtn-device">
+      <div class="card">
+        <div class="card-head">
+          <h2>Status</h2>
+          <span id="infoAuto" class="muted small-text">auto-refresh 2 s</span>
+          <button id="infoBtn" class="small" type="button" disabled>Refresh now</button>
+        </div>
+        <div class="badges">
+          <span id="bUsb" class="badge">USB</span>
+          <span id="bBle" class="badge">Controller</span>
+          <span id="bScan" class="badge">Scanning</span>
+          <span id="bPair" class="badge">Pairing</span>
+        </div>
+        <dl class="kv">
+          <dt>Controller</dt><dd id="iController" class="mono">—</dd>
+          <dt>Battery</dt><dd><span id="iBattery">—</span><span id="iBatteryMeter" class="meter" hidden><i></i></span></dd>
+          <dt>Paired controllers</dt><dd id="iBonds">—</dd>
+          <dt>Uptime</dt><dd id="iUptime">—</dd>
+          <dt>Project</dt><dd id="iProject">—</dd>
+          <dt>Firmware</dt><dd id="iFirmware" class="mono">—</dd>
+          <dt>Hardware</dt><dd id="iHardware">—</dd>
+          <dt>ESP-IDF</dt><dd id="iIdf" class="mono">—</dd>
+        </dl>
+        <div id="infoNote" class="note muted small-text">Connect the dongle to read its status.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Paired controllers</h2>
+          <span id="bondsCount" class="muted small-text"></span>
+          <button id="bondsRefresh" class="small" type="button" disabled>Refresh</button>
+        </div>
+        <ul id="bondsList" class="bonds" aria-label="Paired controllers">
+          <li class="bond-empty muted">Connect the dongle to list its paired controllers.</li>
+        </ul>
+        <div id="bondsConfirm" class="confirm-slot"></div>
+        <div id="bondsNote" class="note muted small-text"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Settings</h2>
+          <span id="settingsDirty" class="dirty" hidden></span>
+          <button id="settingsReload" class="small" type="button" disabled>Reload</button>
+        </div>
+        <form id="settingsForm" class="form" autocomplete="off">
+          <div class="field">
+            <label for="s_invert_left_y">Invert left stick Y</label>
+            <span class="switch"><input type="checkbox" id="s_invert_left_y" data-key="invert_left_y" disabled><i></i></span>
+          </div>
+          <div class="field">
+            <label for="s_invert_right_y">Invert right stick Y</label>
+            <span class="switch"><input type="checkbox" id="s_invert_right_y" data-key="invert_right_y" disabled><i></i></span>
+          </div>
+          <div class="field">
+            <label for="s_swap_ab">Swap A / B</label>
+            <span class="switch"><input type="checkbox" id="s_swap_ab" data-key="swap_ab" disabled><i></i></span>
+            <span class="hint">Xbox-style physical layout on the Switch.</span>
+          </div>
+          <div class="field">
+            <label for="s_swap_xy">Swap X / Y</label>
+            <span class="switch"><input type="checkbox" id="s_swap_xy" data-key="swap_xy" disabled><i></i></span>
+          </div>
+          <div class="field slider">
+            <label for="s_deadzone_percent">Stick deadzone</label>
+            <output id="o_deadzone_percent" for="s_deadzone_percent">0 %</output>
+            <input type="range" id="s_deadzone_percent" data-key="deadzone_percent" min="0" max="50" step="1" value="0" disabled>
+            <span class="hint">Radial deadzone, 0–50 % of full travel.</span>
+          </div>
+          <div class="field slider">
+            <label for="s_led_brightness">Status LED brightness</label>
+            <output id="o_led_brightness" for="s_led_brightness">100 %</output>
+            <input type="range" id="s_led_brightness" data-key="led_brightness" min="0" max="100" step="1" value="100" disabled>
+          </div>
+          <div class="field text">
+            <label for="s_ble_name">BLE device name</label>
+            <input type="text" id="s_ble_name" data-key="ble_name" maxlength="31" spellcheck="false" placeholder="Switch" disabled>
+            <span class="hint">1–31 printable ASCII characters. Applies after reboot.</span>
+          </div>
+        </form>
+        <div class="actions">
+          <button id="settingsApply" class="primary" type="button" disabled>Apply changes</button>
+          <button id="settingsReset" class="danger" type="button" disabled>Reset to defaults</button>
+        </div>
+        <div id="settingsConfirm" class="confirm-slot"></div>
+        <div id="settingsNote" class="note muted small-text"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Actions</h2></div>
+        <div class="actions">
+          <button id="actPair" type="button" disabled>Start pairing</button>
+          <button id="actForget" class="danger" type="button" disabled>Forget all controllers</button>
+          <button id="actReboot" class="danger" type="button" disabled>Reboot dongle</button>
+        </div>
+        <div id="actionConfirm" class="confirm-slot"></div>
+        <div id="actionNote" class="note muted small-text">Pairing mode is the same as holding the dongle's button. Rebooting drops the USB link; the console reconnects when the dongle comes back.</div>
+      </div>
+    </section>
+
+    <!-- ============================ Firmware ============================ -->
+    <section id="tab-firmware" role="tabpanel" aria-labelledby="tabbtn-firmware" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>Running image</h2>
+          <button id="otaStatusBtn" class="small" type="button" disabled>Check status</button>
+        </div>
+        <dl class="kv">
+          <dt>Firmware</dt><dd id="otaFw" class="mono">—</dd>
+          <dt>Rollback</dt><dd id="otaRollback">—</dd>
+        </dl>
+        <div id="verifyPanel" class="banner" hidden style="margin: 12px 0 0;">
+          <div id="verifyText"></div>
+          <div class="actions">
+            <button id="markValidBtn" class="primary" type="button">Confirm this firmware</button>
+            <button id="rollbackBtn" class="danger" type="button">Roll back to previous</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="markValidBtn2" type="button" disabled>Mark running image valid</button>
+          <button id="rollbackBtn2" class="danger" type="button" disabled>Roll back and reboot</button>
+        </div>
+        <div id="otaConfirm" class="confirm-slot"></div>
+        <div id="otaStatusNote" class="note muted small-text">A freshly flashed image boots "pending verify" and rolls back on the next reset unless the host confirms it here.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Update firmware</h2></div>
+        <div class="row">
+          <label class="filebtn">Choose .bin file<input type="file" id="fileInput" accept=".bin,application/octet-stream" aria-label="Firmware image (.bin)"></label>
+          <span id="fileInfo" class="muted small-text">No file selected.</span>
+        </div>
+        <div class="row">
+          <label for="chunkSize" class="muted small-text">Chunk size</label>
+          <select id="chunkSize">
+            <option value="512">512 B</option>
+            <option value="1024" selected>1024 B</option>
+            <option value="2048">2048 B</option>
+            <option value="4096">4096 B</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button id="uploadBtn" class="primary" type="button" disabled>Flash firmware</button>
+          <button id="abortBtn" class="danger" type="button" disabled>Abort update</button>
+        </div>
+        <div class="progress"><div id="otaFill" class="progress-fill"></div></div>
+        <div class="stats"><span id="otaBytes">0 / 0 bytes</span><span id="otaPercent">0%</span><span id="otaRate">-</span></div>
+        <div id="otaNote" class="note muted small-text">The dongle erases its update partition on BEGIN (a few seconds), then writes each chunk before acknowledging the next. After FINISH it reboots into the new image and the USB link drops.</div>
+      </div>
+    </section>
+
+    <!-- ============================ Crash dump ============================ -->
+    <section id="tab-coredump" role="tabpanel" aria-labelledby="tabbtn-coredump" hidden>
+      <div class="card wide">
+        <div class="card-head">
+          <h2>Last crash</h2>
+          <span id="cdInfo" class="muted small-text"></span>
+          <button id="cdRefreshBtn" class="small" type="button" disabled>Refresh</button>
+        </div>
+        <pre id="cdReport" class="report">(not read yet)</pre>
+        <div class="actions">
+          <button id="cdElfBtn" class="primary" type="button" disabled>Download core.elf</button>
+          <button id="cdRawBtn" type="button" disabled>Download raw image</button>
+          <button id="cdEraseBtn" class="danger" type="button" disabled>Erase stored dump</button>
+        </div>
+        <div id="cdConfirm" class="confirm-slot"></div>
+        <div class="progress"><div id="cdFill" class="progress-fill"></div></div>
+        <div class="stats"><span id="cdBytes">0 / 0 bytes</span><span id="cdPercent">0%</span><span id="cdRate">-</span></div>
+        <div id="cdNote" class="note muted small-text">core.elf strips the flash header in front of the ELF magic; the raw image is the whole stored blob (use <code>--core-format raw</code> for it).</div>
+      </div>
+      <div class="card wide">
+        <div class="card-head"><h2>Decode on your PC</h2></div>
+        <p class="muted small-text" style="margin: 0 0 8px;">Run inside an ESP-IDF shell, next to the build that produced the running firmware:</p>
+        <div class="cmdrow"><pre id="cmdCoredump">espcoredump.py info_corefile --core core.elf --core-format elf build/esp-usb-ble-hid.elf</pre><button class="small" data-copy="cmdCoredump" type="button">Copy</button></div>
+      </div>
+    </section>
+  </main>
+
+  <section class="logpanel" aria-label="Log">
+    <div class="loghead">
+      <h2>Log</h2>
+      <label><input type="checkbox" id="logFrames"> Log frames (hex)</label>
+      <button id="clearLogBtn" class="small" type="button">Clear log</button>
+    </div>
+    <div id="log" aria-live="polite"></div>
+  </section>
+
+  <!-- ==================================================================
+       Protocol layer: pure functions, no DOM access. Kept in its own script
+       so it can be unit-tested in node (see web/README.md).
+       ================================================================== -->
+  <script id="proto">
+    "use strict";
+
+    // ---- USB identity: the dongle enumerates as a Switch Pro Controller ----
+    const DEFAULT_VID = 0x057E, DEFAULT_PID = 0x2009;
+    const VENDOR_CLASS = 0xFF;
+
+    // ---- espp stream_frame v2 --------------------------------------------
+    // [magic u16 = 0x4F54 "OT"][flags u8][module u8][type u8][len u32][payload][crc32 u32]
+    const MAGIC0 = 0x54, MAGIC1 = 0x4F;
+    const HEADER_SIZE = 9, CRC_SIZE = 4;
+    const MAX_PAYLOAD = 4096;
+    const MAX_FRAME = HEADER_SIZE + MAX_PAYLOAD + CRC_SIZE;
+    const FLAGS_VERSION = 1;
+    const FLAGS_REQUEST = (FLAGS_VERSION << 4) | 0;   // 0x10: version 1, request
+    const FLAGS_REPLY_BIT = 0x01;                      // bit0 set on device->host replies
+    const FLAG_CORRELATION = 0x02;                     // bit1: optional u16 correlation id after `type`
+
+    // ---- dispatcher modules on this device --------------------------------
+    const MODULE = { OTA: 0x00, COREDUMP: 0x04, DEVICE: 0x10, DISCOVERY: 0xFF };
+    const T_LIST_MODULES = 0x00;
+
+    // device_config_protocol.hpp
+    const DEV = { GET_INFO: 0x01, GET_SETTINGS: 0x02, SET_SETTINGS: 0x03, RESET_SETTINGS: 0x04, ACTION: 0x05,
+                  GET_BONDS: 0x06, FORGET_BOND: 0x07,
+                  INFO: 0x81, SETTINGS: 0x82, OK: 0x83, ERROR: 0x84, BONDS: 0x85 };
+    const DEV_ERROR_CODE = { 1: "malformed", 2: "invalid value", 3: "unknown request", 4: "failed", 5: "not found" };
+    const DEV_KEY = { invert_left_y: 1, invert_right_y: 2, swap_ab: 3, swap_xy: 4,
+                      deadzone_percent: 5, led_brightness: 6, ble_name: 7 };
+    const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
+    const DEV_PROTOCOL_VERSION = 1;
+    const DEV_MAX_DEADZONE = 50, DEV_MAX_BLE_NAME = 31;
+    const INFO_FLAG = { USB_MOUNTED: 0x01, BLE_CONNECTED: 0x02, BLE_SCANNING: 0x04, PAIRING: 0x08 };
+
+    // ota_stream_protocol.hpp
+    const OTA = { BEGIN: 0x01, DATA: 0x02, FINISH: 0x03, ABORT: 0x04, OK: 0x05, ERROR: 0x06, PROGRESS: 0x07,
+                  GET_STATUS: 0x08, MARK_VALID: 0x09, MARK_INVALID: 0x0A, STATUS: 0x0B };
+    const OTA_STATUS_PENDING_VERIFY = 0x01, OTA_STATUS_ROLLBACK_SUPPORTED = 0x02;
+
+    // coredump_service.hpp
+    const CD = { GET_SUMMARY: 0x40, GET_SIZE: 0x41, READ: 0x42, ERASE: 0x43,
+                 SUMMARY: 0xC0, SIZE: 0xC1, DATA: 0xC2, OK: 0xC3, ERROR: 0xC4 };
+    const CD_MAX_READ = MAX_PAYLOAD - 4;   // DATA payload = u32 offset + bytes
+
+    const MODULE_SPEC = {
+      [MODULE.DEVICE]: {
+        label: "Device", errorType: DEV.ERROR, parseError: parseDeviceError,
+        names: { 0x01: "GET_INFO", 0x02: "GET_SETTINGS", 0x03: "SET_SETTINGS", 0x04: "RESET_SETTINGS", 0x05: "ACTION",
+                 0x06: "GET_BONDS", 0x07: "FORGET_BOND",
+                 0x81: "INFO", 0x82: "SETTINGS", 0x83: "OK", 0x84: "ERROR", 0x85: "BONDS" },
+      },
+      [MODULE.OTA]: {
+        label: "OTA", errorType: OTA.ERROR, parseError: parseCodeMessageError,
+        names: { 0x01: "BEGIN", 0x02: "DATA", 0x03: "FINISH", 0x04: "ABORT", 0x05: "OK", 0x06: "ERROR", 0x07: "PROGRESS",
+                 0x08: "GET_STATUS", 0x09: "MARK_VALID", 0x0A: "MARK_INVALID", 0x0B: "STATUS" },
+      },
+      [MODULE.COREDUMP]: {
+        label: "CoreDump", errorType: CD.ERROR, parseError: parseCodeMessageError,
+        names: { 0x40: "GET_SUMMARY", 0x41: "GET_SIZE", 0x42: "READ", 0x43: "ERASE",
+                 0xC0: "SUMMARY", 0xC1: "SIZE", 0xC2: "DATA", 0xC3: "OK", 0xC4: "ERROR" },
+      },
+      [MODULE.DISCOVERY]: { label: "Discovery", errorType: -1, parseError: null, names: { 0x00: "LIST_MODULES" } },
+    };
+    function typeName(module, type) {
+      const spec = MODULE_SPEC[module];
+      const n = spec && spec.names[type];
+      return n ? n : ("0x" + type.toString(16).padStart(2, "0"));
+    }
+    function moduleName(module) {
+      const spec = MODULE_SPEC[module];
+      return spec ? spec.label : ("module 0x" + module.toString(16).padStart(2, "0"));
+    }
+
+    // ---- CRC-32 (zlib / IEEE 802.3). Golden: crc32("123456789") === 0xCBF43926.
+    const CRC_TABLE = (() => {
+      const table = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? ((c >>> 1) ^ 0xEDB88320) : (c >>> 1);
+        table[i] = c >>> 0;
+      }
+      return table;
+    })();
+    function crc32(bytes) {
+      let c = 0xFFFFFFFF;
+      for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+      return (~c) >>> 0;
+    }
+    if (crc32(new TextEncoder().encode("123456789")) !== 0xCBF43926) {
+      throw new Error("CRC-32 self-test failed");
+    }
+
+    // ---- frame builder: always a v1 request (reply bit clear) ---------------
+    function buildFrame(module, type, payload) {
+      payload = payload || new Uint8Array(0);
+      if (payload.length > MAX_PAYLOAD) throw new Error("payload exceeds " + MAX_PAYLOAD + " bytes");
+      const frame = new Uint8Array(HEADER_SIZE + payload.length + CRC_SIZE);
+      const view = new DataView(frame.buffer);
+      view.setUint16(0, 0x4F54, true);   // magic 'T''O' on the wire
+      frame[2] = FLAGS_REQUEST;
+      frame[3] = module & 0xFF;
+      frame[4] = type & 0xFF;
+      view.setUint32(5, payload.length, true);
+      frame.set(payload, HEADER_SIZE);
+      view.setUint32(HEADER_SIZE + payload.length,
+                     crc32(frame.subarray(0, HEADER_SIZE + payload.length)), true);
+      return frame;
+    }
+
+    // ---- incremental parser: yields verified frames + skipped (non-frame) bytes
+    class StreamParser {
+      constructor() { this.buf = new Uint8Array(0); this.lastActivity = 0; }
+      reset() { this.buf = new Uint8Array(0); }
+      // feed(chunk) -> { frames: [{flags, reply, correlation, module, type, payload}], text: Uint8Array }
+      feed(chunk) {
+        const merged = new Uint8Array(this.buf.length + chunk.length);
+        merged.set(this.buf, 0); merged.set(chunk, this.buf.length);
+        const frames = [];
+        const textRanges = [];
+        let textLen = 0;
+        const skip = (start, end) => {
+          if (end <= start) return;
+          const last = textRanges[textRanges.length - 1];
+          if (last && last[1] === start) last[1] = end;
+          else textRanges.push([start, end]);
+          textLen += end - start;
+        };
+        let pos = 0;
+        for (;;) {
+          const runStart = pos;
+          while (pos < merged.length &&
+                 !(merged[pos] === MAGIC0 && (pos + 1 >= merged.length || merged[pos + 1] === MAGIC1))) {
+            pos++;
+          }
+          skip(runStart, pos);
+          if (merged.length - pos < 3) break;
+          const flags = merged[pos + 2];
+          const ext = (flags & FLAG_CORRELATION) ? 2 : 0;
+          const headerSize = HEADER_SIZE + ext;
+          if (merged.length - pos < headerSize) break;
+          const view = new DataView(merged.buffer, merged.byteOffset + pos);
+          const len = view.getUint32(5 + ext, true);
+          if (len > MAX_PAYLOAD) { skip(pos, pos + 1); pos++; continue; }
+          const total = headerSize + len + CRC_SIZE;
+          if (merged.length - pos < total) break;
+          const expected = view.getUint32(headerSize + len, true);
+          const actual = crc32(merged.subarray(pos, pos + headerSize + len));
+          if (actual !== expected) { skip(pos, pos + 1); pos++; continue; }
+          const correlation = ext ? (merged[pos + 5] | (merged[pos + 6] << 8)) : null;
+          frames.push({ flags,
+                        reply: (flags & FLAGS_REPLY_BIT) !== 0,
+                        correlation,
+                        module: merged[pos + 3],
+                        type: merged[pos + 4],
+                        payload: merged.slice(pos + headerSize, pos + headerSize + len) });
+          pos += total;
+        }
+        this.buf = merged.slice(pos);
+        this.lastActivity = Date.now();
+        const text = new Uint8Array(textLen);
+        let off = 0;
+        for (const [start, end] of textRanges) { text.set(merged.subarray(start, end), off); off += end - start; }
+        return { frames, text };
+      }
+    }
+
+    // ---- little-endian helpers ---------------------------------------------
+    function u32(value) {
+      const p = new Uint8Array(4);
+      new DataView(p.buffer).setUint32(0, value >>> 0, true);
+      return p;
+    }
+    function readU32(payload, offset) {
+      return new DataView(payload.buffer, payload.byteOffset + offset, 4).getUint32(0, true);
+    }
+    const utf8 = new TextDecoder("utf-8", { fatal: false });
+
+    // Soft-failing cursor (mirrors device_config::Reader; throws on truncation).
+    class Reader {
+      constructor(bytes) { this.b = bytes; this.i = 0; }
+      get done() { return this.i >= this.b.length; }
+      need(n) { if (this.i + n > this.b.length) throw new Error("truncated payload"); }
+      u8() { this.need(1); return this.b[this.i++]; }
+      u16() { this.need(2); const v = this.b[this.i] | (this.b[this.i + 1] << 8); this.i += 2; return v; }
+      u32() { this.need(4); const v = readU32(this.b, this.i); this.i += 4; return v; }
+      bytes(n) { this.need(n); const s = this.b.subarray(this.i, this.i + n); this.i += n; return s; }
+      str() { const n = this.u8(); return utf8.decode(this.bytes(n)); }
+    }
+
+    // ---- dispatcher discovery (module 0xFF / ListModules) -------------------
+    // [version u8][reserved u8][device str][fw str][count u8] then count x [id u8][name str][app str][desc str]
+    function parseDiscovery(payload) {
+      const r = new Reader(payload);
+      const version = r.u8(); r.u8();
+      const device = r.str(), fw = r.str();
+      const count = r.u8();
+      const modules = [];
+      for (let m = 0; m < count; m++) modules.push({ id: r.u8(), name: r.str(), app: r.str(), desc: r.str() });
+      return { version, device, fw, modules };
+    }
+
+    // INFO / SETTINGS / BONDS payloads start with the schema version; a different
+    // version means the layout changed and must not be decoded.
+    function checkVersion(what, version) {
+      if (version !== DEV_PROTOCOL_VERSION)
+        throw new Error(what + " payload version " + version + " is not supported (this console speaks v" + DEV_PROTOCOL_VERSION + ")");
+    }
+
+    // ---- device_config: INFO ------------------------------------------------
+    function parseInfo(payload) {
+      const r = new Reader(payload);
+      const version = r.u8();
+      checkVersion("INFO", version);
+      const flags = r.u8(), battery = r.u8(), bonds = r.u8(), uptime = r.u32();
+      const project = r.str(), firmware = r.str(), hardware = r.str(), idf = r.str(), controller = r.str();
+      return {
+        version, flags,
+        usbMounted: !!(flags & INFO_FLAG.USB_MOUNTED),
+        bleConnected: !!(flags & INFO_FLAG.BLE_CONNECTED),
+        bleScanning: !!(flags & INFO_FLAG.BLE_SCANNING),
+        pairing: !!(flags & INFO_FLAG.PAIRING),
+        battery, bonds, uptime, project, firmware, hardware, idf, controller,
+      };
+    }
+
+    // ---- device_config: SETTINGS TLV ------------------------------------------
+    // [version u8][count u8] then count x [key u8][len u8][value]. Partial lists are legal.
+    const SETTING_KEYS = Object.keys(DEV_KEY);
+    const SETTING_KIND = { invert_left_y: "bool", invert_right_y: "bool", swap_ab: "bool", swap_xy: "bool",
+                           deadzone_percent: "u8", led_brightness: "u8", ble_name: "str" };
+    function encodeSettings(values) {
+      const out = [DEV_PROTOCOL_VERSION, 0];
+      let count = 0;
+      for (const key of SETTING_KEYS) {
+        if (!(key in values) || values[key] === undefined) continue;
+        const v = values[key];
+        const id = DEV_KEY[key];
+        switch (SETTING_KIND[key]) {
+          case "bool": out.push(id, 1, v ? 1 : 0); break;
+          case "u8": {
+            const n = Number(v);
+            if (!Number.isInteger(n) || n < 0 || n > 255) throw new Error(key + " must be an integer 0..255");
+            out.push(id, 1, n); break;
+          }
+          case "str": {
+            const bytes = new TextEncoder().encode(String(v));
+            if (bytes.length > 255) throw new Error(key + " is too long");
+            out.push(id, bytes.length, ...bytes); break;
+          }
+        }
+        count++;
+      }
+      out[1] = count;
+      return new Uint8Array(out);
+    }
+    function decodeSettings(payload) {
+      const r = new Reader(payload);
+      const version = r.u8();
+      checkVersion("SETTINGS", version);
+      const count = r.u8();
+      const values = {}, unknown = [];
+      const byId = {};
+      for (const k of SETTING_KEYS) byId[DEV_KEY[k]] = k;
+      for (let i = 0; i < count; i++) {
+        const id = r.u8(), len = r.u8();
+        const value = r.bytes(len);
+        const key = byId[id];
+        if (!key) { unknown.push(id); continue; }
+        switch (SETTING_KIND[key]) {
+          case "bool":
+            if (value.length !== 1) throw new Error("bad length for " + key);
+            values[key] = value[0] !== 0; break;
+          case "u8":
+            if (value.length !== 1) throw new Error("bad length for " + key);
+            values[key] = value[0]; break;
+          case "str":
+            values[key] = utf8.decode(value); break;
+        }
+      }
+      return { version, values, unknown };
+    }
+    // Client-side mirror of Settings::validate() for a single field.
+    function validateSetting(key, value) {
+      if (key === "deadzone_percent" && (value < 0 || value > DEV_MAX_DEADZONE)) return "deadzone must be 0.." + DEV_MAX_DEADZONE + " %";
+      if (key === "led_brightness" && (value < 0 || value > 100)) return "LED brightness must be 0..100 %";
+      if (key === "ble_name") {
+        if (!value.length || value.length > DEV_MAX_BLE_NAME) return "BLE name must be 1.." + DEV_MAX_BLE_NAME + " characters";
+        for (const ch of value) { const c = ch.charCodeAt(0); if (c < 0x20 || c >= 0x7F) return "BLE name must be printable ASCII"; }
+      }
+      return "";
+    }
+
+    // ---- device_config: BONDS (paired controllers) ---------------------------------
+    // [version u8][count u8] then count x [addr 6B][addr_type u8][connected u8][label str].
+    // `addr` is the BLE identity address in NimBLE order (least-significant byte
+    // first); keep the raw bytes for FORGET_BOND and render byte[5] first.
+    const BOND_ADDRESS_SIZE = 6;
+    function bondAddressString(addr) {
+      let s = "";
+      for (let i = BOND_ADDRESS_SIZE - 1; i >= 0; i--) s += addr[i].toString(16).padStart(2, "0").toUpperCase() + (i ? ":" : "");
+      return s;
+    }
+    function parseBonds(payload) {
+      const r = new Reader(payload);
+      const version = r.u8();
+      checkVersion("BONDS", version);
+      const count = r.u8();
+      const bonds = [];
+      for (let i = 0; i < count; i++) {
+        const address = new Uint8Array(r.bytes(BOND_ADDRESS_SIZE));   // copy: payload buffers get reused
+        const addressType = r.u8();
+        const connected = r.u8() !== 0;
+        const label = r.str();
+        bonds.push({ address, addressType, addressTypeName: addressType === 0 ? "public" : addressType === 1 ? "random" : ("type " + addressType),
+                     connected, label, mac: bondAddressString(address) });
+      }
+      return { version, bonds };
+    }
+    // FORGET_BOND payload: [addr 6B][addr_type u8], the raw bytes exactly as received in BONDS.
+    function encodeForgetBond(bond) {
+      const address = bond.address;
+      if (!address || address.length !== BOND_ADDRESS_SIZE) throw new Error("bond address must be " + BOND_ADDRESS_SIZE + " bytes");
+      const out = new Uint8Array(BOND_ADDRESS_SIZE + 1);
+      out.set(address, 0);
+      out[BOND_ADDRESS_SIZE] = bond.addressType & 0xFF;
+      return out;
+    }
+
+    // ---- error payloads -------------------------------------------------------
+    // device_config ERROR: [request u8][code u32][utf8 message]
+    function parseDeviceError(payload) {
+      if (payload.length < 5) return { request: null, code: 0, message: "(malformed error reply)" };
+      return { request: payload[0], code: readU32(payload, 1), message: utf8.decode(payload.subarray(5)) };
+    }
+    // OTA / coredump ERROR: [code u32][utf8 message]
+    function parseCodeMessageError(payload) {
+      if (payload.length < 4) return { request: null, code: 0, message: "(malformed error reply)" };
+      return { request: null, code: readU32(payload, 0), message: utf8.decode(payload.subarray(4)) };
+    }
+
+    // ---- OTA STATUS: [flags u8][version str][project str] ------------------------
+    function parseOtaStatus(payload) {
+      if (!payload || payload.length < 1) return null;
+      let i = 1;
+      const readStr = () => {
+        if (i >= payload.length) return "";
+        const n = payload[i++]; const s = utf8.decode(payload.subarray(i, i + n)); i += n; return s;
+      };
+      const version = readStr(), project = readStr();
+      return {
+        flags: payload[0],
+        pendingVerify: !!(payload[0] & OTA_STATUS_PENDING_VERIFY),
+        rollbackSupported: !!(payload[0] & OTA_STATUS_ROLLBACK_SUPPORTED),
+        version, project,
+        firmware: (project && version) ? (project + " " + version) : (project || version || "(unknown)"),
+      };
+    }
+
+    // The stored core dump is [flash header][ELF core file][checksum]; slice from
+    // the ELF magic (searching the first 1 KiB) so the result opens as an ELF.
+    function extractElf(image) {
+      const limit = Math.min(image.length - 4, 1024);
+      for (let i = 0; i <= limit; i++) {
+        if (image[i] === 0x7F && image[i + 1] === 0x45 && image[i + 2] === 0x4C && image[i + 3] === 0x46)
+          return image.subarray(i);
+      }
+      return null;
+    }
+
+    // Exported for node-side unit checks (harmless in the browser).
+    const DongleProto = { crc32, buildFrame, StreamParser, encodeSettings, decodeSettings, parseInfo,
+                          parseBonds, encodeForgetBond, bondAddressString,
+                          parseDiscovery, parseDeviceError, parseCodeMessageError, parseOtaStatus, extractElf,
+                          MODULE, DEV, OTA, CD, DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE };
+    if (typeof module !== "undefined" && module.exports) module.exports = DongleProto;
+  </script>
+
+  <!-- ==================================================================
+       UI + transport
+       ================================================================== -->
+  <script id="app">
+    "use strict";
+
+    const DISCOVERY_TIMEOUT_MS = 800;
+    const CMD_TIMEOUT_MS = 5000;
+    const INFO_REFRESH_MS = 2000;
+    const OTA_DATA_TIMEOUT_MS = 5000, OTA_BEGIN_TIMEOUT_MS = 60000, OTA_FINISH_TIMEOUT_MS = 60000;
+    const CD_READ_CHUNK = 2048;          // <= CD_MAX_READ (4092)
+    const CD_ERASE_TIMEOUT_MS = 20000;
+    const REBOOT_TIMEOUT_MS = 3000;
+    const ESP_IMAGE_MAGIC = 0xE9;
+    const MAX_IMAGE_SIZE = 64 * 1024 * 1024;
+    const AUTO_RECONNECT_WINDOW_MS = 90000;
+
+    // ---- elements --------------------------------------------------------------
+    const els = {};
+    for (const id of ["status", "devBadge", "connectBtn", "anyBtn", "unsupported",
+                      "infoAuto", "infoBtn", "bUsb", "bBle", "bScan", "bPair",
+                      "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iHardware", "iIdf", "infoNote",
+                      "bondsCount", "bondsRefresh", "bondsList", "bondsConfirm", "bondsNote",
+                      "settingsDirty", "settingsReload", "settingsForm", "settingsApply", "settingsReset", "settingsConfirm", "settingsNote",
+                      "actPair", "actForget", "actReboot", "actionConfirm", "actionNote",
+                      "otaStatusBtn", "otaFw", "otaRollback", "verifyPanel", "verifyText", "markValidBtn", "rollbackBtn",
+                      "markValidBtn2", "rollbackBtn2", "otaConfirm", "otaStatusNote",
+                      "fileInput", "fileInfo", "chunkSize", "uploadBtn", "abortBtn", "otaFill", "otaBytes", "otaPercent", "otaRate", "otaNote",
+                      "cdInfo", "cdRefreshBtn", "cdReport", "cdElfBtn", "cdRawBtn", "cdEraseBtn", "cdConfirm", "cdFill", "cdBytes", "cdPercent", "cdRate", "cdNote",
+                      "cmdCoredump", "logFrames", "clearLogBtn", "log"]) {
+      els[id] = document.getElementById(id);
+    }
+    const tabButtons = Array.from(document.querySelectorAll('[role="tab"]'));
+    const tabPanels = { device: document.getElementById("tab-device"), firmware: document.getElementById("tab-firmware"), coredump: document.getElementById("tab-coredump") };
+    const TAB_MODULE = { device: MODULE.DEVICE, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
+
+    // ---- logging ---------------------------------------------------------------
+    function logLine(cls, text) {
+      const line = document.createElement("div");
+      const time = document.createElement("span");
+      time.className = "t";
+      time.textContent = new Date().toLocaleTimeString() + " ";
+      const body = document.createElement("span");
+      body.className = cls;
+      body.textContent = text;
+      line.appendChild(time); line.appendChild(body);
+      els.log.appendChild(line);
+      while (els.log.childNodes.length > 600) els.log.removeChild(els.log.firstChild);
+      els.log.scrollTop = els.log.scrollHeight;
+    }
+    els.clearLogBtn.addEventListener("click", () => { els.log.textContent = ""; });
+    function hex(bytes, max) {
+      const n = Math.min(bytes.length, max || 32);
+      let s = "";
+      for (let i = 0; i < n; i++) s += bytes[i].toString(16).padStart(2, "0") + " ";
+      if (bytes.length > n) s += "… (" + bytes.length + " B)";
+      return s.trim();
+    }
+    function setStatus(state, text) {
+      els.status.className = "pill" + (state ? " " + state : "");
+      els.status.textContent = text;
+    }
+    function setNote(el, cls, text) {
+      el.className = "note small-text " + (cls || "muted");
+      el.textContent = text || "";
+    }
+    function formatUptime(s) {
+      const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+      const parts = [];
+      if (d) parts.push(d + "d");
+      if (d || h) parts.push(h + "h");
+      if (d || h || m) parts.push(m + "m");
+      parts.push(sec + "s");
+      return parts.join(" ");
+    }
+    for (const btn of document.querySelectorAll("button[data-copy]")) {
+      btn.addEventListener("click", async () => {
+        const text = document.getElementById(btn.dataset.copy).textContent;
+        try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+        catch (_) { btn.textContent = "Select + copy manually"; }
+        setTimeout(() => { btn.textContent = "Copy"; }, 1400);
+      });
+    }
+
+    // In-page confirmation (no browser modal dialogs): renders a small dialog strip in
+    // `slot`, resolves true/false, restores focus to the triggering button.
+    function askConfirm(slot, triggerBtn, message, okLabel) {
+      return new Promise((resolve) => {
+        slot.textContent = "";
+        const box = document.createElement("div");
+        box.className = "confirm-box";
+        box.setAttribute("role", "alertdialog");
+        box.setAttribute("aria-label", message);
+        const text = document.createElement("span"); text.textContent = message;
+        const ok = document.createElement("button"); ok.type = "button"; ok.className = "danger solid small"; ok.textContent = okLabel;
+        const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "small"; cancel.textContent = "Cancel";
+        const done = (v) => { box.remove(); try { triggerBtn.focus(); } catch (_) {} resolve(v); };
+        ok.addEventListener("click", () => done(true));
+        cancel.addEventListener("click", () => done(false));
+        box.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); done(false); } });
+        box.append(text, ok, cancel);
+        slot.appendChild(box);
+        cancel.focus();
+      });
+    }
+
+    // ---- tabs ------------------------------------------------------------------
+    let activeTab = "device";
+    function selectTab(name) {
+      const btn = tabButtons.find((b) => b.dataset.tab === name);
+      if (!btn || btn.disabled) return;
+      activeTab = name;
+      for (const b of tabButtons) {
+        const on = b.dataset.tab === name;
+        b.setAttribute("aria-selected", on ? "true" : "false");
+        b.tabIndex = on ? 0 : -1;
+        tabPanels[b.dataset.tab].hidden = !on;
+      }
+      try { localStorage.setItem("dongle_console.tab", name); } catch (_) {}
+    }
+    for (const b of tabButtons) {
+      b.addEventListener("click", () => { selectTab(b.dataset.tab); b.focus(); });
+      b.addEventListener("keydown", (e) => {
+        const enabled = tabButtons.filter((t) => !t.disabled);
+        const i = enabled.indexOf(b);
+        if (i < 0) return;
+        let next = null;
+        if (e.key === "ArrowRight") next = enabled[(i + 1) % enabled.length];
+        else if (e.key === "ArrowLeft") next = enabled[(i - 1 + enabled.length) % enabled.length];
+        else if (e.key === "Home") next = enabled[0];
+        else if (e.key === "End") next = enabled[enabled.length - 1];
+        if (next) { e.preventDefault(); selectTab(next.dataset.tab); next.focus(); }
+      });
+    }
+    try { const saved = localStorage.getItem("dongle_console.tab"); if (saved && tabPanels[saved]) selectTab(saved); } catch (_) {}
+
+    // Mark each tab with the discovery result; a missing module disables its tab.
+    let discovered = null; // { device, fw, modules } or null (unknown)
+    function moduleAvailable(id) {
+      return !discovered || discovered.modules.some((m) => m.id === id);
+    }
+    function applyDiscoveryToTabs() {
+      for (const b of tabButtons) {
+        const id = TAB_MODULE[b.dataset.tab];
+        b.classList.remove("present", "missing");
+        if (!transport || !discovered) { b.disabled = false; b.title = ""; continue; }
+        const present = moduleAvailable(id);
+        b.classList.add(present ? "present" : "missing");
+        b.disabled = !present;
+        b.title = present ? "" : "This firmware does not advertise dispatcher module 0x" + id.toString(16).padStart(2, "0");
+      }
+      const active = tabButtons.find((b) => b.dataset.tab === activeTab);
+      if (active && active.disabled) {
+        const first = tabButtons.find((b) => !b.disabled);
+        if (first) selectTab(first.dataset.tab);
+      }
+    }
+
+    // ---- WebUSB transport --------------------------------------------------------
+    // Persistent RX pump (one transferIn always pending) feeding the shared
+    // parser; transferOut loops until every byte is written; reset() aborts the
+    // pump, resets the device and restarts the pump (link recovery).
+    class UsbTransport {
+      constructor(device) {
+        this.device = device; this.iface = null; this.epIn = null; this.epOut = null;
+        this.inPacketSize = 64; this.closing = false; this.pumpGen = 0; this.onData = null; this.resetting = false;
+      }
+      async open() {
+        const device = this.device;
+        await device.open();
+        try {
+          if (device.configuration === null) await device.selectConfiguration(1);
+          const config = device.configuration;
+          if (!config) throw new Error("device has no active USB configuration");
+          let found = null;
+          for (const itf of config.interfaces) {
+            for (const alt of itf.alternates) {
+              if (alt.interfaceClass !== VENDOR_CLASS) continue;
+              let inEp = null, outEp = null;
+              for (const ep of alt.endpoints) {
+                if (ep.type !== "bulk") continue;
+                if (ep.direction === "in" && inEp === null) inEp = ep;
+                else if (ep.direction === "out" && outEp === null) outEp = ep;
+              }
+              if (inEp && outEp) { found = { itf: itf.interfaceNumber, alt: alt.alternateSetting, inEp, outEp }; break; }
+            }
+            if (found) break;
+          }
+          if (!found) throw new Error("no vendor-specific (0xFF) interface with a bulk IN+OUT endpoint pair was found — is this the dongle, and does its firmware enable the WebUSB vendor interface?");
+          await device.claimInterface(found.itf);
+          if (found.alt !== 0) await device.selectAlternateInterface(found.itf, found.alt);
+          this.iface = found.itf; this.epIn = found.inEp.endpointNumber; this.epOut = found.outEp.endpointNumber;
+          this.inPacketSize = found.inEp.packetSize || 64;
+        } catch (e) {
+          try { await device.close(); } catch (_) {}
+          throw e;
+        }
+      }
+      describe() {
+        const d = this.device;
+        return (d.productName || "USB device") + " (" + d.vendorId.toString(16).padStart(4, "0") + ":" +
+               d.productId.toString(16).padStart(4, "0") + ")";
+      }
+      async send(bytes) {
+        // transferOut() may report "ok" with bytesWritten smaller than the buffer;
+        // keep sending the unsent suffix so a request frame is never truncated.
+        let remaining = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        while (remaining.length > 0) {
+          const result = await this.device.transferOut(this.epOut, remaining);
+          if (result.status === "stall") {
+            try { await this.device.clearHalt("out", this.epOut); } catch (_) {}
+            const e = new Error("OUT endpoint stalled"); e.stalled = true; throw e;
+          }
+          if (result.status !== "ok") throw new Error("USB write failed: " + result.status);
+          const written = result.bytesWritten || 0;
+          if (written <= 0) throw new Error("USB write made no progress");
+          remaining = remaining.subarray(written);
+        }
+      }
+      startPump(onData) {
+        this.onData = onData;
+        const gen = ++this.pumpGen;
+        (async () => {
+          for (;;) {
+            let result;
+            try { result = await this.device.transferIn(this.epIn, MAX_FRAME); }
+            catch (e) {
+              if (this.closing || this.resetting || gen !== this.pumpGen) return;
+              onTransportGone(this, "USB read error: " + e.message);
+              return;
+            }
+            if (this.closing || gen !== this.pumpGen) return;
+            if (result.status === "stall") { try { await this.device.clearHalt("in", this.epIn); } catch (_) {} continue; }
+            if (result.status === "babble") { logLine("warn", "IN endpoint babble (device sent more than one frame's worth)"); continue; }
+            if (result.data && result.data.byteLength)
+              onData(new Uint8Array(result.data.buffer, result.data.byteOffset, result.data.byteLength));
+          }
+        })();
+      }
+      // Recover a desynced link: WebUSB transfers cannot be cancelled, so reset
+      // the device (aborts every pending transfer, endpoints return to a clean
+      // state, the browser restores the configuration and interface claims).
+      async reset() {
+        this.resetting = true;
+        try { await this.device.reset(); }
+        finally { this.resetting = false; }
+        if (!this.closing) this.startPump(this.onData);
+      }
+      async close() {
+        this.closing = true;
+        this.pumpGen++;
+        if (this.iface !== null) { try { await this.device.releaseInterface(this.iface); } catch (_) {} }
+        try { await this.device.close(); } catch (_) {}
+      }
+    }
+
+    let transport = null;
+    const parser = new StreamParser();
+    let lastDeviceIds = null;     // { vendorId, productId, serial } of the last connected dongle (auto-reconnect)
+    let expectRestart = false;    // a reboot we asked for is coming; a disconnect is not an error
+    let expectRestartUntil = 0;
+
+    if (!navigator.usb) {
+      els.unsupported.hidden = false;
+      els.connectBtn.disabled = true;
+      els.anyBtn.disabled = true;
+    }
+
+    // WebUSB requires `filters`; the "any device" path uses `[]` (Chromium) and
+    // falls back to `[{}]` for implementations that reject an empty list.
+    async function requestUsbDevice(anyDevice) {
+      const dongle = { filters: [{ vendorId: DEFAULT_VID, productId: DEFAULT_PID }] };
+      if (!anyDevice) return navigator.usb.requestDevice(dongle);
+      try { return await navigator.usb.requestDevice({ filters: [] }); }
+      catch (e) {
+        if (e && e.name === "TypeError") return navigator.usb.requestDevice({ filters: [{}] });
+        throw e;
+      }
+    }
+
+    async function connect(anyDevice) {
+      if (transport) return;
+      let device;
+      try {
+        device = await requestUsbDevice(anyDevice);
+      } catch (e) {
+        if (e && e.name === "NotFoundError") logLine("sys", "Device selection cancelled — no device chosen.");
+        else logLine("err", "Device selection failed: " + (e && e.message ? e.message : e));
+        return;
+      }
+      await openTransport(device);
+    }
+
+    async function openTransport(device) {
+      const t = new UsbTransport(device);
+      setStatus("busy", "Opening…");
+      try {
+        await t.open();
+      } catch (e) {
+        logLine("err", "Could not open " + t.describe() + ": " + e.message);
+        setStatus("error", "Open failed");
+        return false;
+      }
+      transport = t;
+      parser.reset();
+      const reconnected = expectRestart;
+      expectRestart = false;
+      // Every dongle shares the VID/PID; the firmware-assigned USB serial number
+      // (derived from the MAC) is what identifies THIS dongle across a reboot.
+      const serial = (device.serialNumber || "").trim();
+      lastDeviceIds = { vendorId: device.vendorId, productId: device.productId, serial };
+      t.startPump(handleRxBytes);
+      setStatus("connected", "Connected");
+      updateUI();
+      logLine("ok", (reconnected ? "Reconnected to " : "Connected to ") + t.describe() +
+              (serial ? " (serial " + serial + ")" : " (no USB serial number)") +
+              " — vendor interface " + t.iface + ", bulk IN 0x" +
+              t.epIn.toString(16) + " (" + t.inPacketSize + " B) / OUT 0x" + t.epOut.toString(16) + ".");
+      if (!serial) logLine("warn", "This dongle reports no USB serial number; an automatic reconnect after a reboot can only match by VID/PID, which every dongle shares.");
+      await afterConnect();
+      return true;
+    }
+
+    async function disconnect() {
+      if (!transport) return;
+      const t = transport;
+      transport = null;
+      failPending(new Error("disconnected"));
+      await t.close();
+      parser.reset();
+      discovered = null;
+      updateUI();
+      setStatus("", "Disconnected");
+      logLine("sys", "Disconnected.");
+    }
+    function onTransportGone(t, why) {
+      if (transport !== t) return;
+      transport = null;
+      failPending(Object.assign(new Error("transport lost"), { transportLost: true }));
+      Promise.resolve(t.close()).catch(() => {});
+      parser.reset();
+      discovered = null;
+      updateUI();
+      if (expectRestart) {
+        setStatus("busy", "Dongle restarting…");
+        logLine("sys", "USB link dropped as expected — the dongle is restarting. Waiting for it to come back…");
+        expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+        setTimeout(() => {
+          if (transport || !expectRestart) return;
+          expectRestart = false;
+          setStatus("", "Disconnected");
+          logLine("warn", "The dongle did not re-enumerate within " + (AUTO_RECONNECT_WINDOW_MS / 1000) + " s. Replug it and use “Connect dongle”.");
+        }, AUTO_RECONNECT_WINDOW_MS + 500);
+      } else {
+        setStatus("", "Disconnected");
+        logLine("err", why || "USB device disconnected.");
+      }
+    }
+    if (navigator.usb && navigator.usb.addEventListener) {
+      navigator.usb.addEventListener("disconnect", (e) => {
+        if (transport && e.device === transport.device) onTransportGone(transport, "USB device disconnected.");
+      });
+      // After a reboot we asked for, the (already permitted) device reappears:
+      // reopen it without a click — WebUSB only needs a gesture for requestDevice.
+      navigator.usb.addEventListener("connect", async (e) => {
+        if (transport || !expectRestart || Date.now() > expectRestartUntil) return;
+        const d = e.device;
+        if (!lastDeviceIds) return;
+        if (d.vendorId !== lastDeviceIds.vendorId || d.productId !== lastDeviceIds.productId) return;
+        const name = (d.productName || "USB device") + " (" + d.vendorId.toString(16).padStart(4, "0") + ":" + d.productId.toString(16).padStart(4, "0") + ")";
+        const serial = (d.serialNumber || "").trim();
+        if (lastDeviceIds.serial) {
+          if (serial !== lastDeviceIds.serial) {
+            logLine("warn", "Ignoring " + name + " (serial " + (serial || "none") + "): not the dongle that was updated (serial " + lastDeviceIds.serial + ").");
+            return;
+          }
+          logLine("sys", "Dongle is back (serial " + serial + "); reconnecting…");
+        } else {
+          logLine("warn", "A dongle matching VID/PID appeared" + (serial ? " (serial " + serial + ")" : "") +
+                  "; the updated dongle had no USB serial, so this match is by VID/PID only. Reconnecting…");
+        }
+        await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
+        if (transport) return;
+        const ok = await openTransport(d);
+        if (!ok) logLine("warn", "Automatic reconnect failed — use “Connect dongle”.");
+      });
+    }
+
+    els.connectBtn.addEventListener("click", async () => {
+      if (transport) await disconnect(); else await connect(false);
+    });
+    els.anyBtn.addEventListener("click", async () => { if (!transport) await connect(true); });
+
+    // ---- RX routing + serialized transactions ---------------------------------------
+    let pendingTxn = null;   // { module, stages: [Set], frames: [], resolve, reject, timer, quiet }
+    let txnChain = Promise.resolve();
+    let busy = false;        // a long operation (OTA upload / dump download) owns the link
+
+    function handleRxBytes(bytes) {
+      const { frames, text } = parser.feed(bytes);
+      if (text.length && els.logFrames.checked) logLine("warn", "skipped " + text.length + " non-frame byte(s): " + hex(text, 24));
+      for (const f of frames) dispatchFrame(f);
+    }
+
+    function failPending(err) {
+      if (!pendingTxn) return;
+      clearTimeout(pendingTxn.timer);
+      const p = pendingTxn; pendingTxn = null;
+      p.reject(err);
+    }
+
+    function dispatchFrame(f) {
+      const quiet = pendingTxn && pendingTxn.quiet;
+      if (els.logFrames.checked && !quiet)
+        logLine("rx", moduleName(f.module) + " " + typeName(f.module, f.type) +
+                (f.correlation !== null ? " #" + f.correlation : "") + " " + hex(f.payload));
+      if (f.module === MODULE.OTA && f.reply && f.type === OTA.PROGRESS && f.payload.length === 8) {
+        otaProgress(readU32(f.payload, 0), readU32(f.payload, 4) || null);
+        return;
+      }
+      if (pendingTxn && f.reply && f.module === pendingTxn.module) {
+        const spec = MODULE_SPEC[f.module];
+        if (spec && f.type === spec.errorType) {
+          const info = spec.parseError(f.payload);
+          const e = new Error(info.message || ("device error code " + info.code));
+          e.deviceError = true; e.code = info.code; e.request = info.request;
+          failPending(e);
+          return;
+        }
+        const stage = pendingTxn.stages[pendingTxn.frames.length];
+        if (stage && stage.has(f.type)) {
+          pendingTxn.frames.push(f);
+          if (pendingTxn.frames.length === pendingTxn.stages.length) {
+            clearTimeout(pendingTxn.timer);
+            const p = pendingTxn; pendingTxn = null;
+            p.resolve(p.frames);
+          }
+          return;
+        }
+      }
+      if (!els.logFrames.checked || quiet)
+        logLine("warn", "Unsolicited " + moduleName(f.module) + " " + typeName(f.module, f.type) + " (" + f.payload.length + " B) ignored.");
+    }
+
+    // Send one request and await its reply/replies. `opts.expect` is a list of
+    // reply types (one stage) or a list of lists (consecutive stages, e.g. OK then
+    // SETTINGS). Resolves with the array of matched frames. Rejects on the
+    // module's ERROR reply (e.deviceError), timeout (e.timeout) or link loss.
+    function transact(module, type, payload, opts) {
+      opts = opts || {};
+      const stages = (opts.expect && opts.expect.length && Array.isArray(opts.expect[0]))
+        ? opts.expect.map((s) => new Set(s)) : [new Set(opts.expect || [])];
+      const timeoutMs = opts.timeoutMs || CMD_TIMEOUT_MS;
+      const label = moduleName(module) + " " + typeName(module, type);
+      const attempt = () => new Promise((resolve, reject) => {
+        if (!transport) { reject(Object.assign(new Error("not connected"), { transportLost: true })); return; }
+        let frame;
+        try { frame = buildFrame(module, type, payload); } catch (e) { reject(e); return; }
+        if (els.logFrames.checked && !opts.quiet) logLine("tx", label + " " + hex(frame));
+        pendingTxn = {
+          module, stages, frames: [], resolve, reject, quiet: !!opts.quiet,
+          timer: setTimeout(() => {
+            if (!pendingTxn) return;
+            const p = pendingTxn; pendingTxn = null;
+            p.reject(Object.assign(new Error(label + " timed out after " + timeoutMs + " ms"), { timeout: true }));
+          }, timeoutMs),
+        };
+        transport.send(frame).catch((e) => {
+          e.sendFailed = true;
+          failPending(Object.assign(new Error("send failed: " + e.message), { sendFailed: true, stalled: !!e.stalled }));
+        });
+      });
+      const run = async () => {
+        try {
+          return await attempt();
+        } catch (e) {
+          if (e && e.timeout && !opts.noRecover && transport) await recoverLink(label + " timeout");
+          throw e;
+        }
+      };
+      const result = txnChain.then(run, run);
+      txnChain = result.then(() => {}, () => {});
+      return result;
+    }
+
+    async function recoverLink(reason) {
+      if (!transport) return;
+      logLine("warn", "Recovering link (" + reason + "): resetting the USB device…");
+      const t = transport;
+      try {
+        await t.reset();
+        parser.reset();
+        logLine("sys", "USB reset complete; link resynchronized.");
+      } catch (e) {
+        logLine("err", "USB reset failed (" + e.message + "); disconnecting.");
+        onTransportGone(t, "link recovery failed");
+      }
+    }
+
+    // ---- post-connect sequence --------------------------------------------------------
+    async function afterConnect() {
+      await runDiscovery();
+      if (!transport) return;
+      if (moduleAvailable(MODULE.DEVICE)) {
+        await refreshInfo(false);
+        await refreshBonds(false);
+        await loadSettings();
+      }
+      if (moduleAvailable(MODULE.OTA)) await checkOtaStatus(true);
+      if (moduleAvailable(MODULE.COREDUMP) && activeTab === "coredump") await refreshCoreDump();
+      if (transport) setStatus("connected", "Connected");
+    }
+
+    async function runDiscovery() {
+      discovered = null;
+      try {
+        const [reply] = await transact(MODULE.DISCOVERY, T_LIST_MODULES, null, { expect: [T_LIST_MODULES], timeoutMs: DISCOVERY_TIMEOUT_MS, noRecover: true });
+        discovered = parseDiscovery(reply.payload);
+        const names = discovered.modules.map((m) => m.name + " (0x" + m.id.toString(16).padStart(2, "0") + ")").join(", ") || "none";
+        logLine("sys", "Discovery: " + (discovered.device || "(unnamed device)") + (discovered.fw ? " fw " + discovered.fw : "") + " — modules: " + names + ".");
+        for (const [tab, id] of Object.entries(TAB_MODULE)) {
+          if (!moduleAvailable(id)) logLine("warn", "Module 0x" + id.toString(16).padStart(2, "0") + " (" + tab + " tab) is not advertised by this firmware; that tab is disabled.");
+        }
+      } catch (e) {
+        logLine("warn", "No discovery reply (" + e.message + "). Assuming all modules are present.");
+      }
+      updateUI();
+    }
+
+    // ---- UI state -------------------------------------------------------------------
+    function updateUI() {
+      const connected = !!transport;
+      els.connectBtn.textContent = connected ? "Disconnect" : "Connect dongle";
+      els.connectBtn.classList.toggle("danger", connected);
+      els.connectBtn.classList.toggle("primary", !connected);
+      els.anyBtn.hidden = connected;
+      if (connected) {
+        els.devBadge.hidden = false;
+        const name = discovered && discovered.device ? discovered.device : transport.describe();
+        els.devBadge.textContent = "";
+        const n = document.createElement("span"); n.textContent = name;
+        els.devBadge.appendChild(n);
+        if (discovered && discovered.fw) { const fw = document.createElement("span"); fw.className = "fw"; fw.textContent = discovered.fw; els.devBadge.appendChild(fw); }
+        els.devBadge.title = transport.describe() + " · vendor interface " + transport.iface;
+      } else {
+        els.devBadge.hidden = true;
+      }
+      applyDiscoveryToTabs();
+
+      const dev = connected && moduleAvailable(MODULE.DEVICE) && !busy;
+      els.infoBtn.disabled = !dev;
+      els.bondsRefresh.disabled = !dev;
+      for (const b of els.bondsList.querySelectorAll("button")) b.disabled = !dev;
+      els.settingsReload.disabled = !dev;
+      for (const input of els.settingsForm.querySelectorAll("input")) input.disabled = !dev || !deviceSettings;
+      els.settingsApply.disabled = !dev || !deviceSettings || !settingsDirtyKeys().length || !!settingsInvalid();
+      els.settingsReset.disabled = !dev || !deviceSettings;
+      els.actPair.disabled = !dev; els.actForget.disabled = !dev; els.actReboot.disabled = !dev;
+      els.infoAuto.textContent = dev ? "auto-refresh 2 s" : "auto-refresh paused";
+
+      const ota = connected && moduleAvailable(MODULE.OTA);
+      const file = els.fileInput.files && els.fileInput.files[0];
+      els.uploadBtn.disabled = !(ota && file && !busy);
+      els.abortBtn.disabled = !uploading;
+      els.otaStatusBtn.disabled = !ota || busy;
+      els.markValidBtn2.disabled = !ota || busy;
+      els.rollbackBtn2.disabled = !ota || busy;
+      els.markValidBtn.disabled = !ota || busy;
+      els.rollbackBtn.disabled = !ota || busy;
+      els.chunkSize.disabled = uploading;
+
+      const cd = connected && moduleAvailable(MODULE.COREDUMP);
+      els.cdRefreshBtn.disabled = !cd || busy;
+      els.cdElfBtn.disabled = !cd || busy || !dumpSize;
+      els.cdRawBtn.disabled = !cd || busy || !dumpSize;
+      els.cdEraseBtn.disabled = !cd || busy || !dumpSize;
+    }
+
+    // =====================================================================
+    // Device tab (module 0x10)
+    // =====================================================================
+    let lastInfo = null;
+    let infoInFlight = false;
+
+    function renderInfo(info) {
+      lastInfo = info;
+      const badge = (el, on, hot) => { el.classList.toggle("on", !!on && !hot); el.classList.toggle("hot", !!hot); };
+      badge(els.bUsb, info.usbMounted, false);
+      badge(els.bBle, info.bleConnected, false);
+      badge(els.bScan, info.bleScanning, false);
+      badge(els.bPair, info.pairing, info.pairing);
+      els.bUsb.textContent = info.usbMounted ? "USB mounted" : "USB not mounted";
+      els.bBle.textContent = info.bleConnected ? "Controller connected" : "No controller";
+      els.bScan.textContent = info.bleScanning ? "Scanning" : "Idle";
+      els.bPair.textContent = info.pairing ? "Pairing mode" : "Not pairing";
+      els.iController.textContent = info.controller || (info.bleConnected ? "(serial unknown)" : "none");
+      if (info.bleConnected && info.battery > 0) {
+        els.iBattery.textContent = info.battery + " %";
+        els.iBatteryMeter.hidden = false;
+        els.iBatteryMeter.firstElementChild.style.width = Math.min(100, info.battery) + "%";
+        els.iBatteryMeter.classList.toggle("low", info.battery <= 20);
+      } else {
+        els.iBattery.textContent = info.bleConnected ? "unknown" : "—";
+        els.iBatteryMeter.hidden = true;
+      }
+      els.iBonds.textContent = info.bonds + (info.bonds === 1 ? " controller" : " controllers");
+      els.iUptime.textContent = formatUptime(info.uptime);
+      els.iProject.textContent = info.project || "—";
+      els.iFirmware.textContent = info.firmware || "—";
+      els.iHardware.textContent = info.hardware || "—";
+      els.iIdf.textContent = info.idf || "—";
+      setNote(els.infoNote, "muted", "Updated " + new Date().toLocaleTimeString() + (info.version !== DEV_PROTOCOL_VERSION ? " · protocol v" + info.version : ""));
+    }
+
+    async function refreshInfo(quiet) {
+      if (!transport || infoInFlight || !moduleAvailable(MODULE.DEVICE)) return;
+      infoInFlight = true;
+      try {
+        const [reply] = await transact(MODULE.DEVICE, DEV.GET_INFO, null, { expect: [DEV.INFO], quiet });
+        renderInfo(parseInfo(reply.payload));
+      } catch (e) {
+        if (!(e && e.transportLost)) { logLine("err", "Status read failed: " + e.message); setNote(els.infoNote, "err", "Status read failed: " + e.message); }
+      } finally { infoInFlight = false; }
+    }
+    els.infoBtn.addEventListener("click", () => refreshInfo(false));
+    setInterval(async () => {
+      if (!transport || busy || pendingTxn || infoInFlight || bondsInFlight || document.hidden) return;
+      await refreshInfo(true);
+      if (!transport || busy || pendingTxn) return;
+      await refreshBonds(true);
+    }, INFO_REFRESH_MS);
+
+    // ---- paired controllers (bonds) ----------------------------------------------
+    let bonds = [];
+    let bondsInFlight = false;
+    let bondsRendered = "";   // cache key of the last rendered list (skip DOM churn on quiet polls)
+
+    function renderBonds(list) {
+      bonds = list;
+      const key = JSON.stringify(list.map((b) => [b.mac, b.addressType, b.connected, b.label]));
+      els.bondsCount.textContent = list.length ? (list.length + (list.length === 1 ? " controller" : " controllers")) : "";
+      if (key === bondsRendered) return;
+      bondsRendered = key;
+      els.bondsList.textContent = "";
+      if (!list.length) {
+        const li = document.createElement("li");
+        li.className = "bond-empty muted";
+        li.textContent = "No paired controllers — hold the dongle's button or click Start pairing.";
+        els.bondsList.appendChild(li);
+        return;
+      }
+      list.forEach((b, i) => {
+        // Name-first: `label` is the name the controller reported the last time it
+        // connected (persisted by the dongle); "" = never learned.
+        const li = document.createElement("li");
+        const who = document.createElement("div"); who.className = "who";
+        const name = document.createElement("div");
+        name.className = "name" + (b.label ? "" : " unknown");
+        name.textContent = b.label || "Unknown controller";
+        if (!b.label) name.title = "The dongle has not learned this controller's name yet — it is filled in the next time the controller connects.";
+        const meta = document.createElement("div"); meta.className = "meta";
+        const mac = document.createElement("span"); mac.className = "mac"; mac.textContent = b.mac;
+        const type = document.createElement("span"); type.className = "badge"; type.textContent = b.addressTypeName;
+        type.title = "BLE address type " + b.addressType;
+        meta.append(mac, type);
+        if (b.connected) { const c = document.createElement("span"); c.className = "badge on"; c.textContent = "connected"; meta.appendChild(c); }
+        who.append(name, meta);
+        li.appendChild(who);
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "danger small"; btn.textContent = "Forget";
+        btn.setAttribute("aria-label", "Forget " + (b.label ? b.label : "the controller at " + b.mac));
+        btn.disabled = !transport || busy;
+        btn.addEventListener("click", () => forgetBond(i, btn));
+        li.appendChild(btn);
+        els.bondsList.appendChild(li);
+      });
+    }
+
+    async function refreshBonds(quiet) {
+      if (!transport || bondsInFlight || !moduleAvailable(MODULE.DEVICE)) return;
+      bondsInFlight = true;
+      try {
+        const [reply] = await transact(MODULE.DEVICE, DEV.GET_BONDS, null, { expect: [DEV.BONDS], quiet });
+        renderBonds(parseBonds(reply.payload).bonds);
+        if (!quiet) setNote(els.bondsNote, "muted", "");
+      } catch (e) {
+        if (e && e.transportLost) return;
+        if (e && e.deviceError && e.code === 3) {
+          // older firmware without GET_BONDS: say so once, stop polling it
+          if (bondsRendered !== "unsupported") { setNote(els.bondsNote, "warn", "This firmware does not support listing paired controllers (update it)."); bondsRendered = "unsupported"; }
+          return;
+        }
+        logLine("err", "Paired-controller list failed: " + e.message);
+        setNote(els.bondsNote, "err", "List failed: " + e.message);
+      } finally { bondsInFlight = false; }
+    }
+    els.bondsRefresh.addEventListener("click", () => refreshBonds(false));
+
+    async function forgetBond(index, btn) {
+      const b = bonds[index];
+      if (!b || !transport) return;
+      const who = b.label ? "‘" + b.label + "’" : "the controller at " + b.mac;
+      const ok = await askConfirm(els.bondsConfirm, btn,
+        "Forget " + who + (b.connected ? " (currently connected)" : "") + "? It must be paired again to reconnect.",
+        "Forget controller");
+      if (!ok || !transport) return;
+      try {
+        const [, list] = await transact(MODULE.DEVICE, DEV.FORGET_BOND, encodeForgetBond(b), { expect: [[DEV.OK], [DEV.BONDS]] });
+        renderBonds(parseBonds(list.payload).bonds);
+        logLine("ok", "Forgot " + who + (b.label ? " (" + b.mac + ")" : "") + ".");
+        setNote(els.bondsNote, "ok", "Forgot " + who + ".");
+        refreshInfo(true);
+      } catch (e) {
+        const msg = (e && e.deviceError) ? "Dongle refused: " + e.message + (e.code === 5 ? " (it may already be gone — refreshing)" : "") : "Forget failed: " + e.message;
+        logLine("err", msg);
+        setNote(els.bondsNote, "err", msg);
+        if (e && e.deviceError && e.code === 5) refreshBonds(true);
+      }
+    }
+
+    // ---- settings --------------------------------------------------------------
+    let deviceSettings = null;   // authoritative values from the last SETTINGS reply
+    const settingInputs = {};
+    for (const input of els.settingsForm.querySelectorAll("input[data-key]")) settingInputs[input.dataset.key] = input;
+
+    function formValue(key) {
+      const input = settingInputs[key];
+      switch (SETTING_KIND[key]) {
+        case "bool": return input.checked;
+        case "u8": return Number(input.value);
+        case "str": return input.value;
+      }
+    }
+    function renderSettings(values) {
+      deviceSettings = Object.assign({}, values);
+      for (const key of SETTING_KEYS) {
+        const input = settingInputs[key];
+        if (!(key in values)) continue;
+        if (SETTING_KIND[key] === "bool") input.checked = !!values[key];
+        else input.value = values[key];
+      }
+      updateSliderOutputs();
+      settingInputs.ble_name.classList.remove("invalid");
+      onSettingsInput();
+    }
+    function updateSliderOutputs() {
+      document.getElementById("o_deadzone_percent").textContent = settingInputs.deadzone_percent.value + " %";
+      document.getElementById("o_led_brightness").textContent = settingInputs.led_brightness.value + " %";
+    }
+    function settingsDirtyKeys() {
+      if (!deviceSettings) return [];
+      return SETTING_KEYS.filter((k) => (k in deviceSettings) && formValue(k) !== deviceSettings[k]);
+    }
+    function settingsInvalid() {
+      for (const key of SETTING_KEYS) {
+        if (!(key in settingInputs)) continue;
+        const why = validateSetting(key, formValue(key));
+        if (why) return why;
+      }
+      return "";
+    }
+    function onSettingsInput() {
+      updateSliderOutputs();
+      const dirty = settingsDirtyKeys();
+      const why = settingsInvalid();
+      settingInputs.ble_name.classList.toggle("invalid", !!validateSetting("ble_name", formValue("ble_name")));
+      els.settingsDirty.hidden = !dirty.length;
+      els.settingsDirty.textContent = dirty.length + (dirty.length === 1 ? " unsaved change" : " unsaved changes");
+      if (why) setNote(els.settingsNote, "err", why);
+      else if (dirty.length && dirty.includes("ble_name")) setNote(els.settingsNote, "warn", "The new BLE name takes effect after the dongle reboots.");
+      else if (!deviceSettings) setNote(els.settingsNote, "muted", "");
+      else setNote(els.settingsNote, "muted", dirty.length ? "" : "Settings match the dongle.");
+      updateUI();
+    }
+    els.settingsForm.addEventListener("input", onSettingsInput);
+    els.settingsForm.addEventListener("submit", (e) => { e.preventDefault(); if (!els.settingsApply.disabled) applySettings(); });
+
+    async function loadSettings() {
+      if (!transport) return;
+      try {
+        const [reply] = await transact(MODULE.DEVICE, DEV.GET_SETTINGS, null, { expect: [DEV.SETTINGS] });
+        const decoded = decodeSettings(reply.payload);
+        renderSettings(decoded.values);
+        if (decoded.unknown.length) logLine("warn", "SETTINGS carried unknown key(s) " + decoded.unknown.join(", ") + " (newer firmware?) — left untouched.");
+        logLine("sys", "Settings loaded from the dongle.");
+      } catch (e) {
+        if (!(e && e.transportLost)) { logLine("err", "Settings read failed: " + e.message); setNote(els.settingsNote, "err", "Settings read failed: " + e.message); }
+      }
+      updateUI();
+    }
+    els.settingsReload.addEventListener("click", loadSettings);
+
+    async function applySettings() {
+      const keys = settingsDirtyKeys();
+      if (!keys.length || !transport) return;
+      const why = settingsInvalid();
+      if (why) { setNote(els.settingsNote, "err", why); return; }
+      const partial = {};
+      for (const k of keys) partial[k] = formValue(k);
+      els.settingsApply.disabled = true;
+      try {
+        const payload = encodeSettings(partial);
+        const [, settings] = await transact(MODULE.DEVICE, DEV.SET_SETTINGS, payload, { expect: [[DEV.OK], [DEV.SETTINGS]] });
+        renderSettings(decodeSettings(settings.payload).values);
+        logLine("ok", "Applied " + keys.length + " setting(s): " + keys.join(", ") + ".");
+        setNote(els.settingsNote, "ok", "Saved. " + (keys.includes("ble_name") ? "The BLE name applies after a reboot." : ""));
+      } catch (e) {
+        const msg = (e && e.deviceError) ? "Dongle rejected the settings: " + e.message : "Apply failed: " + e.message;
+        logLine("err", msg);
+        setNote(els.settingsNote, "err", msg);
+      }
+      updateUI();
+    }
+    els.settingsApply.addEventListener("click", applySettings);
+
+    els.settingsReset.addEventListener("click", async () => {
+      if (!transport) return;
+      const ok = await askConfirm(els.settingsConfirm, els.settingsReset, "Reset every setting to the firmware defaults?", "Reset to defaults");
+      if (!ok || !transport) return;
+      try {
+        const [, settings] = await transact(MODULE.DEVICE, DEV.RESET_SETTINGS, null, { expect: [[DEV.OK], [DEV.SETTINGS]] });
+        renderSettings(decodeSettings(settings.payload).values);
+        logLine("ok", "Settings reset to defaults.");
+        setNote(els.settingsNote, "ok", "Defaults restored.");
+      } catch (e) {
+        logLine("err", "Reset failed: " + e.message);
+        setNote(els.settingsNote, "err", "Reset failed: " + e.message);
+      }
+      updateUI();
+    });
+
+    // ---- actions ---------------------------------------------------------------
+    async function sendAction(action, label) {
+      const [ok] = await transact(MODULE.DEVICE, DEV.ACTION, new Uint8Array([action]), { expect: [DEV.OK], timeoutMs: action === DEV_ACTION.REBOOT ? REBOOT_TIMEOUT_MS : CMD_TIMEOUT_MS, noRecover: action === DEV_ACTION.REBOOT });
+      if (ok.payload.length && ok.payload[0] !== DEV.ACTION) logLine("warn", label + ": OK acknowledged request 0x" + ok.payload[0].toString(16) + " (expected ACTION)");
+      return ok;
+    }
+    els.actPair.addEventListener("click", async () => {
+      if (!transport) return;
+      try {
+        await sendAction(DEV_ACTION.START_PAIRING, "Start pairing");
+        logLine("ok", "Pairing mode started — put the controller in pairing mode now.");
+        setNote(els.actionNote, "ok", "Pairing mode started. Hold the controller's sync button until it pairs.");
+        await refreshInfo(true);
+        refreshBonds(true);
+      } catch (e) {
+        logLine("err", "Start pairing failed: " + e.message);
+        setNote(els.actionNote, "err", "Start pairing failed: " + e.message);
+      }
+    });
+    els.actForget.addEventListener("click", async () => {
+      if (!transport) return;
+      const n = bonds.length ? bonds.length : (lastInfo ? lastInfo.bonds : null);
+      const ok = await askConfirm(els.actionConfirm, els.actForget,
+        "Forget " + (n !== null ? n + " paired controller" + (n === 1 ? "" : "s") : "every paired controller") + "? Each one must be paired again.",
+        "Forget all controllers");
+      if (!ok || !transport) return;
+      try {
+        await sendAction(DEV_ACTION.CLEAR_BONDS, "Forget all controllers");
+        logLine("ok", "All BLE bonds cleared.");
+        setNote(els.actionNote, "ok", "All paired controllers were forgotten.");
+        await refreshInfo(true);
+        refreshBonds(true);
+      } catch (e) {
+        logLine("err", "Forget all controllers failed: " + e.message);
+        setNote(els.actionNote, "err", "Forget all controllers failed: " + e.message);
+      }
+    });
+    els.actReboot.addEventListener("click", async () => {
+      if (!transport) return;
+      const ok = await askConfirm(els.actionConfirm, els.actReboot, "Reboot the dongle now? The USB link drops for a few seconds.", "Reboot");
+      if (!ok || !transport) return;
+      expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+      try {
+        await sendAction(DEV_ACTION.REBOOT, "Reboot");
+        logLine("ok", "Reboot acknowledged; the dongle is restarting.");
+        setNote(els.actionNote, "muted", "Rebooting… the console reconnects automatically when the dongle re-enumerates.");
+      } catch (e) {
+        if (e && (e.timeout || e.transportLost)) {
+          logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
+        } else {
+          expectRestart = false;
+          logLine("err", "Reboot failed: " + e.message);
+          setNote(els.actionNote, "err", "Reboot failed: " + e.message);
+        }
+      }
+    });
+
+    // =====================================================================
+    // Firmware tab (module 0 = espp OTA)
+    // =====================================================================
+    let uploading = false;
+    let abortRequested = false;
+    let awaitingVerify = null;   // { before } after a flash, until the next status check
+    let lastOtaStatus = null;
+
+    function otaProgress(written, total) {
+      const t = total || 0;
+      els.otaBytes.textContent = written.toLocaleString() + " / " + (t ? t.toLocaleString() : "?") + " bytes";
+      if (t > 0) {
+        const percent = Math.min(100, (written / t) * 100);
+        els.otaFill.style.width = percent.toFixed(1) + "%";
+        els.otaPercent.textContent = percent.toFixed(1) + "%";
+      }
+    }
+
+    function renderOtaStatus(st) {
+      lastOtaStatus = st;
+      els.otaFw.textContent = st.firmware;
+      if (!st.rollbackSupported) els.otaRollback.textContent = "not supported by this bootloader";
+      else if (st.pendingVerify) els.otaRollback.textContent = "PENDING VERIFY — rolls back on the next reset unless confirmed";
+      else els.otaRollback.textContent = "image confirmed";
+      const showPanel = st.rollbackSupported && st.pendingVerify;
+      els.verifyPanel.hidden = !showPanel;
+      if (showPanel) {
+        const before = awaitingVerify && awaitingVerify.before;
+        els.verifyText.textContent = "The dongle booted new firmware and is responding" +
+          (before ? " (previous: " + before + ")" : "") + ". Now running " + st.firmware +
+          ". Confirm it to cancel the automatic rollback, or roll back now.";
+      }
+      els.markValidBtn2.hidden = showPanel;
+      els.rollbackBtn2.hidden = showPanel;
+    }
+
+    async function checkOtaStatus(quietLog) {
+      if (!transport || !moduleAvailable(MODULE.OTA)) return null;
+      try {
+        const [reply] = await transact(MODULE.OTA, OTA.GET_STATUS, null, { expect: [OTA.STATUS], quiet: quietLog });
+        const st = parseOtaStatus(reply.payload);
+        if (!st) throw new Error("empty STATUS reply");
+        renderOtaStatus(st);
+        const pending = st.rollbackSupported && st.pendingVerify;
+        if (awaitingVerify) {
+          if (!st.rollbackSupported) logLine("ok", "Reconnected; running " + st.firmware + " (no rollback to confirm).");
+          else if (!st.pendingVerify) logLine("ok", "Reconnected; running " + st.firmware + " (already confirmed).");
+          if (!pending) awaitingVerify = null;
+        } else if (!quietLog) {
+          logLine("sys", "Running firmware: " + st.firmware + " — " + els.otaRollback.textContent + ".");
+        }
+        if (pending) {
+          logLine("warn", "Running " + st.firmware + " is PENDING VERIFY — confirm it in the Firmware tab or it rolls back on the next reset.");
+          if (awaitingVerify) selectTab("firmware");
+        }
+        setNote(els.otaStatusNote, "muted", "Checked " + new Date().toLocaleTimeString() + ".");
+        return st;
+      } catch (e) {
+        if (!(e && e.transportLost)) { logLine("err", "Firmware status failed: " + e.message); setNote(els.otaStatusNote, "err", "Status failed: " + e.message); }
+        return null;
+      }
+    }
+    els.otaStatusBtn.addEventListener("click", () => checkOtaStatus(false));
+
+    async function markValid() {
+      if (!transport) return;
+      try {
+        await transact(MODULE.OTA, OTA.MARK_VALID, null, { expect: [OTA.OK] });
+        awaitingVerify = null;
+        logLine("ok", "Running image confirmed; rollback cancelled.");
+        setNote(els.otaStatusNote, "ok", "Running image confirmed.");
+        await checkOtaStatus(true);
+      } catch (e) {
+        logLine("err", "Confirm failed: " + e.message);
+        setNote(els.otaStatusNote, "err", "Confirm failed: " + e.message);
+      }
+    }
+    els.markValidBtn.addEventListener("click", markValid);
+    els.markValidBtn2.addEventListener("click", markValid);
+
+    async function rollBack(trigger) {
+      if (!transport) return;
+      const ok = await askConfirm(els.otaConfirm, trigger, "Roll back to the previous firmware image and reboot the dongle?", "Roll back and reboot");
+      if (!ok || !transport) return;
+      // The device does not reply OK to MARK_INVALID: it reboots. Only a missing
+      // reply (timeout / link loss) counts as success; ERROR, stall or a send
+      // failure means the rollback was refused or never delivered.
+      expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+      awaitingVerify = null;
+      try {
+        await transact(MODULE.OTA, OTA.MARK_INVALID, null, { expect: [], timeoutMs: REBOOT_TIMEOUT_MS, noRecover: true });
+        expectRestart = false;
+        logLine("err", "Rollback not performed: the dongle replied instead of rebooting.");
+      } catch (e) {
+        if (e && (e.deviceError || e.stalled || e.sendFailed)) {
+          expectRestart = false;
+          logLine("err", "Rollback failed: " + e.message);
+          setNote(els.otaStatusNote, "err", "Rollback failed: " + e.message);
+        } else {
+          logLine("ok", "Rollback accepted; the dongle is rebooting into the previous image.");
+          setNote(els.otaStatusNote, "muted", "Rolling back… the console reconnects when the dongle re-enumerates.");
+        }
+      }
+    }
+    els.rollbackBtn.addEventListener("click", () => rollBack(els.rollbackBtn));
+    els.rollbackBtn2.addEventListener("click", () => rollBack(els.rollbackBtn2));
+
+    // ---- file selection --------------------------------------------------------
+    els.fileInput.addEventListener("change", () => {
+      const file = els.fileInput.files && els.fileInput.files[0];
+      if (!file) { els.fileInfo.textContent = "No file selected."; els.fileInfo.className = "muted small-text"; updateUI(); return; }
+      els.fileInfo.textContent = file.name + " — " + file.size.toLocaleString() + " bytes";
+      els.fileInfo.className = "muted small-text";
+      if (file.size === 0) { els.fileInfo.textContent += " — empty file, cannot flash."; els.fileInfo.className = "small-text note err"; }
+      else if (file.size > MAX_IMAGE_SIZE) { els.fileInfo.textContent += " — larger than any ESP flash, cannot flash."; els.fileInfo.className = "small-text note err"; }
+      updateUI();
+    });
+
+    // ---- upload flow: BEGIN -> DATA... -> FINISH (ABORT on request / failure) -----
+    els.uploadBtn.addEventListener("click", async () => {
+      const file = els.fileInput.files && els.fileInput.files[0];
+      if (!transport || !file || busy) return;
+      if (file.size === 0) { logLine("err", "Refusing to flash an empty file."); return; }
+      if (file.size > MAX_IMAGE_SIZE) { logLine("err", "Refusing to flash: file is larger than any ESP flash."); return; }
+      let image;
+      try { image = new Uint8Array(await file.arrayBuffer()); }
+      catch (e) { logLine("err", "Could not read " + file.name + ": " + e.message); return; }
+      if (image[0] !== ESP_IMAGE_MAGIC) {
+        logLine("warn", file.name + " starts with 0x" + image[0].toString(16).padStart(2, "0") + ", not the ESP image magic 0xE9 — " +
+                "this does not look like an app image; the dongle will reject it on the first chunk.");
+      }
+      const chunkSize = Math.min(MAX_PAYLOAD, Math.max(64, Number(els.chunkSize.value) || 1024));
+
+      busy = true; uploading = true; abortRequested = false; expectRestart = false;
+      updateUI();
+      els.otaFill.className = "progress-fill"; els.otaFill.style.width = "0%";
+      els.otaPercent.textContent = "0%"; els.otaRate.textContent = "-";
+      setNote(els.otaNote, "muted", "");
+      setStatus("busy", "Flashing…");
+      const startedAt = Date.now();
+      let sent = 0;
+
+      let beforeFirmware = lastOtaStatus ? lastOtaStatus.firmware : "";
+      if (!beforeFirmware) { const st0 = await checkOtaStatus(true); if (st0) beforeFirmware = st0.firmware; }
+
+      try {
+        logLine("sys", "BEGIN: " + file.name + ", " + image.length.toLocaleString() + " bytes (the dongle erases its update partition — this takes a few seconds)…");
+        await transact(MODULE.OTA, OTA.BEGIN, u32(image.length), { expect: [OTA.OK], timeoutMs: OTA_BEGIN_TIMEOUT_MS, quiet: true });
+        logLine("sys", "Dongle ready; streaming " + chunkSize + " B chunks, one in flight…");
+        while (sent < image.length) {
+          if (abortRequested) throw Object.assign(new Error("aborted by user"), { userAbort: true });
+          const chunk = image.subarray(sent, Math.min(sent + chunkSize, image.length));
+          const [ok] = await transact(MODULE.OTA, OTA.DATA, chunk, { expect: [OTA.OK], timeoutMs: OTA_DATA_TIMEOUT_MS, quiet: true });
+          sent += chunk.length;
+          const received = ok.payload.length === 4 ? readU32(ok.payload, 0) : null;
+          otaProgress(received !== null ? received : sent, image.length);
+          const elapsed = (Date.now() - startedAt) / 1000;
+          if (elapsed > 0.5) els.otaRate.textContent = ((sent / 1024) / elapsed).toFixed(1) + " KiB/s";
+        }
+        logLine("sys", "FINISH: dongle is validating (SHA-256) and activating the image…");
+        setNote(els.otaNote, "muted", "Validating image on the dongle…");
+        await transact(MODULE.OTA, OTA.FINISH, null, { expect: [OTA.OK], timeoutMs: OTA_FINISH_TIMEOUT_MS, quiet: true });
+        expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+        awaitingVerify = { before: beforeFirmware };
+        els.otaFill.className = "progress-fill done"; els.otaFill.style.width = "100%";
+        setStatus("connected", "Update complete");
+        setNote(els.otaNote, "ok", "Update complete — the dongle is restarting into the new firmware. It boots pending-verify; " +
+                "once it reconnects, confirm it in “Running image” (the firmware must not confirm itself).");
+        logLine("ok", "Update complete (" + sent.toLocaleString() + " bytes in " + ((Date.now() - startedAt) / 1000).toFixed(1) + " s). Dongle restarting — expect a USB disconnect, then an automatic reconnect.");
+      } catch (e) {
+        els.otaFill.className = "progress-fill failed";
+        if (e && e.userAbort) {
+          logLine("sys", "Sending ABORT…");
+          try {
+            await transact(MODULE.OTA, OTA.ABORT, null, { expect: [OTA.OK] });
+            logLine("sys", "Update aborted; the dongle discarded the partial image.");
+          } catch (abortErr) { logLine("err", "Abort delivery failed: " + abortErr.message); }
+          setNote(els.otaNote, "warn", "Update aborted.");
+        } else {
+          logLine("err", "Update failed: " + e.message);
+          setNote(els.otaNote, "err", "Update failed: " + e.message);
+          if (transport) { try { await transact(MODULE.OTA, OTA.ABORT, null, { expect: [OTA.OK] }); } catch (_) {} }
+        }
+        if (transport) setStatus(e && e.userAbort ? "connected" : "error", e && e.userAbort ? "Connected" : "Update failed");
+      } finally {
+        busy = false; uploading = false;
+        updateUI();
+      }
+    });
+    els.abortBtn.addEventListener("click", () => {
+      if (!uploading) return;
+      abortRequested = true;
+      logLine("sys", "Abort requested; stopping after the in-flight chunk…");
+    });
+
+    // =====================================================================
+    // Crash dump tab (module 4 = espp CoreDumpService)
+    // =====================================================================
+    let dumpSize = 0;
+    let lastReport = "";
+
+    function cdProgress(read, total) {
+      els.cdBytes.textContent = read.toLocaleString() + " / " + total.toLocaleString() + " bytes";
+      const percent = total ? Math.min(100, (read / total) * 100) : 0;
+      els.cdFill.style.width = percent.toFixed(1) + "%";
+      els.cdPercent.textContent = percent.toFixed(1) + "%";
+    }
+
+    async function refreshCoreDump() {
+      if (!transport || !moduleAvailable(MODULE.COREDUMP) || busy) return;
+      busy = true; updateUI();
+      try {
+        const [summary] = await transact(MODULE.COREDUMP, CD.GET_SUMMARY, null, { expect: [CD.SUMMARY] });
+        lastReport = summary.payload.length ? utf8.decode(summary.payload) : "";
+        const [size] = await transact(MODULE.COREDUMP, CD.GET_SIZE, null, { expect: [CD.SIZE] });
+        dumpSize = size.payload.length === 4 ? readU32(size.payload, 0) : 0;
+        if (lastReport) {
+          els.cdReport.textContent = lastReport;
+          logLine("warn", "Crash report received (" + lastReport.split("\n").length + " lines).");
+        } else {
+          els.cdReport.textContent = "(clean boot history — no crash to report)";
+          logLine("sys", "Clean boot history: no crash to report.");
+        }
+        els.cdInfo.textContent = dumpSize ? "core dump in flash: " + dumpSize.toLocaleString() + " bytes" : "no core dump image stored";
+        if (transport) setStatus("connected", "Connected");
+      } catch (e) {
+        if (!(e && e.transportLost)) { logLine("err", "Crash summary failed: " + e.message); setNote(els.cdNote, "err", "Summary failed: " + e.message); }
+      } finally { busy = false; updateUI(); }
+    }
+    els.cdRefreshBtn.addEventListener("click", refreshCoreDump);
+    tabButtons.find((b) => b.dataset.tab === "coredump").addEventListener("click", () => {
+      if (transport && !lastReport && !dumpSize && moduleAvailable(MODULE.COREDUMP)) refreshCoreDump();
+    });
+
+    async function downloadImage() {
+      const size = dumpSize;
+      const image = new Uint8Array(size);
+      const startedAt = Date.now();
+      let read = 0;
+      els.cdFill.className = "progress-fill";
+      while (read < size) {
+        const length = Math.min(CD_READ_CHUNK, CD_MAX_READ, size - read);
+        const payload = new Uint8Array(6);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, read, true);
+        view.setUint16(4, length, true);
+        const [reply] = await transact(MODULE.COREDUMP, CD.READ, payload, { expect: [CD.DATA], quiet: true });
+        if (reply.payload.length < 4) throw new Error("malformed DATA reply");
+        const offset = readU32(reply.payload, 0);
+        const bytes = reply.payload.subarray(4);
+        if (offset !== read || bytes.length !== length)
+          throw new Error("DATA reply mismatch (expected " + length + " B @ " + read + ", got " + bytes.length + " B @ " + offset + ")");
+        image.set(bytes, read);
+        read += bytes.length;
+        cdProgress(read, size);
+        const elapsed = (Date.now() - startedAt) / 1000;
+        if (elapsed > 0.5) els.cdRate.textContent = ((read / 1024) / elapsed).toFixed(1) + " KiB/s";
+      }
+      els.cdFill.className = "progress-fill done";
+      return image;
+    }
+    function saveBlob(bytes, filename) {
+      const blob = new Blob([bytes], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+    async function doDownload(raw) {
+      if (!transport || !dumpSize || busy) return;
+      busy = true; updateUI(); setStatus("busy", "Downloading…");
+      try {
+        const image = await downloadImage();
+        if (raw) {
+          saveBlob(image, "coredump_raw.bin");
+          logLine("ok", "Saved coredump_raw.bin (" + image.length.toLocaleString() + " bytes).");
+          setNote(els.cdNote, "ok", "Saved coredump_raw.bin. Decode with: espcoredump.py info_corefile --core coredump_raw.bin --core-format raw build/esp-usb-ble-hid.elf");
+        } else {
+          const elf = extractElf(image);
+          if (!elf) {
+            saveBlob(image, "coredump_raw.bin");
+            logLine("warn", "No ELF magic in the image (BIN-format core dump?); saved coredump_raw.bin instead — decode with --core-format raw.");
+            setNote(els.cdNote, "warn", "No ELF header found; saved the raw image as coredump_raw.bin. Use --core-format raw.");
+          } else {
+            saveBlob(elf, "core.elf");
+            logLine("ok", "Saved core.elf (" + elf.length.toLocaleString() + " bytes). Decode with the espcoredump.py command below.");
+            setNote(els.cdNote, "ok", "Saved core.elf. Run the espcoredump.py command below to decode it.");
+          }
+        }
+      } catch (e) {
+        els.cdFill.className = "progress-fill failed";
+        logLine("err", "Download failed: " + e.message);
+        setNote(els.cdNote, "err", "Download failed: " + e.message);
+      } finally {
+        busy = false; updateUI();
+        if (transport) setStatus("connected", "Connected");
+      }
+    }
+    els.cdElfBtn.addEventListener("click", () => doDownload(false));
+    els.cdRawBtn.addEventListener("click", () => doDownload(true));
+
+    els.cdEraseBtn.addEventListener("click", async () => {
+      if (!transport || !dumpSize || busy) return;
+      const ok = await askConfirm(els.cdConfirm, els.cdEraseBtn, "Erase the stored core dump (" + dumpSize.toLocaleString() + " bytes) from flash?", "Erase dump");
+      if (!ok || !transport) return;
+      busy = true; updateUI(); setStatus("busy", "Erasing…");
+      try {
+        await transact(MODULE.COREDUMP, CD.ERASE, null, { expect: [CD.OK], timeoutMs: CD_ERASE_TIMEOUT_MS });
+        logLine("ok", "Core dump erased.");
+        dumpSize = 0; lastReport = "";
+        els.cdInfo.textContent = "no core dump image stored";
+        setNote(els.cdNote, "ok", "Stored core dump erased.");
+      } catch (e) {
+        logLine("err", "Erase failed: " + e.message);
+        setNote(els.cdNote, "err", "Erase failed: " + e.message);
+      } finally {
+        busy = false; updateUI();
+        if (transport) setStatus("connected", "Connected");
+      }
+      await refreshCoreDump();
+    });
+
+    // ---- ready ------------------------------------------------------------------------
+    updateUI();
+    logLine("sys", "Dongle Console ready. Plug in the dongle and click “Connect dongle” (it shows up as a Nintendo Switch Pro Controller, 057e:2009).");
+  </script>
+</body>
+</html>

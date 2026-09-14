@@ -5,9 +5,9 @@ on: [pull_request]
 env:
   APP_NAME: 'ESP USB BLE HID'
   IDF_TARGET: 'esp32s3'
-  IDF_VERSION: 'v5.5.1'
+  IDF_VERSION: 'v6.1'
   IDF_COMPONENT_MANAGER: "1" # whether to enable the component manager or not
-  FLASH_TOTAL_OVERRIDE: '2097152' # 2MB flash app partition for main app
+  FLASH_TOTAL_OVERRIDE: '1900544' # 0x1D0000: one OTA app slot (partitions.csv)
 
 jobs:
   build:
@@ -25,7 +25,11 @@ jobs:
         target: ${{ env.IDF_TARGET }}
         path: '.'
 
+    # Informational: the delta step rebuilds the BASE ref with this workflow's
+    # IDF, so a base that predates an IDF bump (e.g. main on v5.5 vs v6.1 here)
+    # cannot build. The "Build main" step above is the correctness gate.
     - name: Determine Size Delta
+      continue-on-error: true
       uses: esp-cpp/esp-idf-size-delta@v1
       with:
         app_name: ${{ env.APP_NAME }}

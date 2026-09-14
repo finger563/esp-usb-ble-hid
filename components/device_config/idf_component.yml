@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf:
+    version: '>=5.0'
+  espp/base_component: '>=1.3.2'
+  espp/dispatcher: '>=1.3.2'
+  espp/stream_frame: '>=1.3.2'

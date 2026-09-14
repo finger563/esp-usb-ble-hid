@@ -41,7 +41,7 @@ void ui_MainScreen_screen_init(void) {
   lv_obj_set_style_blend_mode(ui_XboxIcon, LV_BLEND_MODE_ADDITIVE, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_image_recolor(ui_XboxIcon, lv_color_hex(0xFFFFFF),
                                  LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_image_recolor_opa(ui_XboxIcon, 256, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_image_recolor_opa(ui_XboxIcon, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 
   ui_BtIcon = lv_image_create(ui_Container2);
   lv_image_set_src(ui_BtIcon, &ui_img_bt_png);

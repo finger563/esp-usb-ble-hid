@@ -15,3 +15,25 @@ menu "Hardware Configuration"
 
     endchoice
 endmenu
+
+menu "USB Configuration"
+    config DONGLE_USB_VENDOR_INTERFACE
+        bool "Add a vendor (WebUSB) interface for the dongle console"
+        default y
+        help
+            Adds a vendor-class interface next to the Switch Pro HID interface.
+            It carries the espp dispatcher stream (device configuration, OTA
+            firmware update and crash-dump download) used by the browser
+            console (web/dongle_console.html). Disable this to present a plain
+            single-interface HID gamepad, e.g. if a host refuses the composite
+            device.
+
+    config DONGLE_USB_CDC_CONSOLE
+        bool "Add a CDC-ACM interface carrying the log console"
+        default n
+        help
+            Adds a USB serial (CDC-ACM) interface and routes the ESP console
+            (logs) to it, so `idf.py monitor` / any serial terminal works over
+            the same USB cable. Off by default to keep the device descriptor
+            minimal for the Nintendo Switch.
+endmenu

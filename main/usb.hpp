@@ -1,36 +1,37 @@
 #pragma once
 
-#include <cstdint>
-#include <vector>
+// USB side of the bridge, built on espp::UsbDevice:
+//  - a HID interface presenting the Nintendo Switch Pro controller
+//    (espp::SwitchPro owns the handshake / report protocol),
+//  - optionally a vendor (WebUSB) interface carrying the espp dispatcher stream
+//    (device configuration, OTA, crash dumps -- see services.hpp),
+//  - optionally a CDC-ACM interface carrying the log console.
 
-#include "logger.hpp"
+#include <functional>
+#include <memory>
+#include <span>
 
-#include "gamepad_device.hpp"
+#include "dispatcher.hpp"
+#include "switch_pro.hpp"
 
-#include "bsp.hpp"
+/// The dispatcher for the vendor stream. Register modules on it BEFORE
+/// start_usb() (registrations are also allowed later; the dispatcher defers
+/// them safely).
+espp::Dispatcher &usb_dispatcher();
 
-extern "C" {
-#include <class/hid/hid_device.h>
-#include <tinyusb.h>
-#include <tusb.h>
-}
+/// Called from the RX worker when vendor bytes had to be dropped (the parser
+/// has already been reset); services use it to abort an in-flight transfer.
+/// May be set from any task at any time (the worker takes a copy under a lock).
+void usb_set_rx_overflow_callback(std::function<void()> callback);
 
-#include "tinyusb_default_config.h"
+/// Bring up the USB device. The controller's input report is streamed to the
+/// host from a dedicated sender task once the host enables reports; update it
+/// with controller->update_input_report().
+bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl);
 
-void start_usb_gamepad(const std::shared_ptr<GamepadDevice> &gamepad_device);
-bool send_hid_report(uint8_t report_id, const std::vector<uint8_t> &report);
-void stop_usb_gamepad();
+/// Whether the USB host has configured (mounted) the device.
+bool usb_is_mounted();
 
-// debugging
-
-#if HAS_DISPLAY
-
-// Set this to 1 to turn on debugging for USB using the GUI
-#define DEBUG_USB 0
-
-#if DEBUG_USB
-#include "gui.hpp"
-void set_gui(std::shared_ptr<Gui> gui_ptr);
-#endif // DEBUG_USB
-
-#endif // HAS_DISPLAY
+/// Write a complete frame to the vendor interface (no-op if it is disabled).
+/// Safe to call from any task except the TinyUSB task.
+bool usb_write_vendor(std::span<const uint8_t> frame);

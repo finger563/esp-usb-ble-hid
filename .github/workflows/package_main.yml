@@ -10,9 +10,9 @@ on:
 env:
   APP_NAME: 'ESP USB BLE HID'
   IDF_TARGET: 'esp32s3'
-  IDF_VERSION: 'v5.5.1'
+  IDF_VERSION: 'v6.1'
   IDF_COMPONENT_MANAGER: "1" # whether to enable the component manager or not
-  FLASH_TOTAL_OVERRIDE: '2097152' # 2MB flash app partition for main app
+  FLASH_TOTAL_OVERRIDE: '1900544' # 0x1D0000: one OTA app slot (partitions.csv)
 
 jobs:
   build:
@@ -61,8 +61,10 @@ jobs:
           build/flash_args
 
     - name: Determine Size Delta
-      # only run this if the release is published
+      # only run this if the release is published. Informational: it rebuilds
+      # the previous tag with this workflow's IDF, which fails across an IDF bump.
       if: ${{ github.event.release && github.event.action == 'published' }}
+      continue-on-error: true
       uses: esp-cpp/esp-idf-size-delta@v1
       with:
         app_name: ${{ env.APP_NAME }}

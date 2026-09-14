@@ -15,9 +15,16 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=8192
 
-# Partition Table
+# Partition Table (nvs + otadata + two OTA app slots + coredump)
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_PARTITION_TABLE_MD5=y
+
+# OTA: a freshly updated image boots PENDING_VERIFY and is rolled back on the
+# next reset unless the host confirms it from the dongle console.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 #
 # BT config
@@ -45,10 +52,23 @@ CONFIG_BT_NIMBLE_MAX_CCCDS=128
 CONFIG_NIMBLE_CPP_LOG_LEVEL_NONE=y
 
 #
-# TinyUSB config
+# TinyUSB config (espp usb_device: HID gamepad + vendor/WebUSB console stream;
+# the CDC class must be compiled in for usb_device even when no CDC function is
+# configured -- it is only added to the descriptor with DONGLE_USB_CDC_CONSOLE)
 #
 CONFIG_TINYUSB_HID_COUNT=1
+# the Switch Pro reports are 64 bytes (the default 16 truncates them)
+CONFIG_TINYUSB_HID_BUFSIZE=64
+CONFIG_TINYUSB_VENDOR_COUNT=1
+CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=4096
+CONFIG_TINYUSB_VENDOR_TX_BUFSIZE=4096
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=1
+CONFIG_TINYUSB_CDC_TX_BUFSIZE=4096
 
-# Coredump support
+# Coredump support (to the coredump partition, ELF format, readable over USB
+# from the dongle console)
 CONFIG_ESP_COREDUMP_ENABLE=y
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
