@@ -261,6 +261,8 @@ void services_init(espp::Dispatcher &dispatcher, const ServicesCallbacks &callba
           },
       .info = callbacks.info,
       .on_action = callbacks.on_action,
+      .bonds = callbacks.bonds,
+      .forget_bond = callbacks.forget_bond,
       .log_level = espp::Logger::Verbosity::INFO});
   dispatcher.register_module(
       DeviceConfig::kModule,

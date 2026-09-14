@@ -18,19 +18,29 @@
 //   0x02 GET_SETTINGS  (no payload)      0x82 SETTINGS  (see Settings::serialize)
 //   0x03 SET_SETTINGS  (Settings TLVs)   0x83 OK        [request u8]
 //   0x04 RESET_SETTINGS(no payload)      0x84 ERROR     [request u8][code u32][utf8 message]
-//   0x05 ACTION        [action u8]
+//   0x05 ACTION        [action u8]       0x85 BONDS     (see serialize_bonds)
+//   0x06 GET_BONDS     (no payload)
+//   0x07 FORGET_BOND   [addr 6B][type u8]
 //
 // SET_SETTINGS carries the same TLV list as SETTINGS and may be *partial*: only
 // the keys present are changed. On success the device replies OK and then a
 // full SETTINGS so the host always ends with the authoritative values.
+// FORGET_BOND replies OK and then a fresh BONDS list.
+//
+// Versioning: INFO / SETTINGS / BONDS payloads start with kProtocolVersion.
+// Within a version, payloads only ever grow compatibly (new TLV keys, which
+// receivers ignore); a different version means the layout changed and the
+// parsers reject it (nullopt) rather than mis-decode it.
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace device_config {
@@ -47,11 +57,14 @@ enum class Msg : uint8_t {
   SetSettings = 0x03,
   ResetSettings = 0x04,
   Action = 0x05,
+  GetBonds = 0x06,
+  ForgetBond = 0x07,
   // replies (request | 0x80)
   Info = 0x81,
   Settings = 0x82,
   Ok = 0x83,
   Error = 0x84,
+  Bonds = 0x85,
 };
 
 /// Settings TLV keys. Booleans are one byte (0/1).
@@ -77,6 +90,7 @@ enum class ErrorCode : uint32_t {
   InvalidValue = 2,   ///< a setting is out of range
   UnknownRequest = 3, ///< unknown message type / action
   Failed = 4,         ///< the device could not perform the request
+  NotFound = 5,       ///< the referenced bond does not exist
 };
 
 static constexpr uint8_t kMaxDeadzonePercent = 50;
@@ -206,6 +220,8 @@ struct Settings {
     const auto count = r.u8();
     if (!version || !count)
       return std::nullopt;
+    if (*version != kProtocolVersion)
+      return std::nullopt; // a different layout: refuse rather than mis-decode
     Settings s = base;
     for (uint8_t i = 0; i < *count; ++i) {
       const auto key = r.u8();
@@ -317,6 +333,8 @@ struct Info {
     const auto uptime = r.u32();
     if (!version || !flags || !battery || !bonds || !uptime)
       return std::nullopt;
+    if (*version != kProtocolVersion)
+      return std::nullopt; // a different layout: refuse rather than mis-decode
     Info i;
     i.usb_mounted = *flags & kFlagUsbMounted;
     i.ble_connected = *flags & kFlagBleConnected;
@@ -337,6 +355,92 @@ struct Info {
     return i;
   }
 };
+
+// ---- Bonds (paired controllers) ---------------------------------------------------
+
+/// One paired (bonded) controller.
+struct BondInfo {
+  std::array<uint8_t, 6>
+      address{};           ///< BLE identity address, as stored (little-endian, NimBLE order)
+  uint8_t address_type{0}; ///< BLE address type (0 public, 1 random)
+  bool connected{false};   ///< this controller is the one currently connected
+  std::string label;       ///< e.g. the connected controller's serial ("" if unknown)
+
+  bool operator==(const BondInfo &) const = default;
+
+  /// Human-readable MAC ("AA:BB:CC:DD:EE:FF", most-significant byte first).
+  std::string address_string() const {
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string s;
+    for (int i = 5; i >= 0; --i) {
+      s.push_back(hex[address[i] >> 4]);
+      s.push_back(hex[address[i] & 0x0F]);
+      if (i)
+        s.push_back(':');
+    }
+    return s;
+  }
+};
+
+static constexpr size_t kBondAddressSize = 6;
+
+/// BONDS payload: [version u8][count u8] then count x [addr 6B][type u8][connected u8][label str]
+inline std::vector<uint8_t> serialize_bonds(const std::vector<BondInfo> &bonds) {
+  std::vector<uint8_t> out;
+  put_u8(out, kProtocolVersion);
+  put_u8(out, static_cast<uint8_t>(std::min<size_t>(bonds.size(), 255)));
+  size_t n = 0;
+  for (const auto &b : bonds) {
+    if (n++ == 255)
+      break;
+    out.insert(out.end(), b.address.begin(), b.address.end());
+    put_u8(out, b.address_type);
+    put_u8(out, b.connected ? 1 : 0);
+    put_str(out, b.label);
+  }
+  return out;
+}
+
+inline std::optional<std::vector<BondInfo>> parse_bonds(std::span<const uint8_t> payload) {
+  Reader r(payload);
+  const auto version = r.u8();
+  const auto count = r.u8();
+  if (!version || !count || *version != kProtocolVersion)
+    return std::nullopt;
+  std::vector<BondInfo> bonds;
+  for (uint8_t i = 0; i < *count; ++i) {
+    BondInfo b;
+    const auto addr = r.bytes(kBondAddressSize);
+    const auto type = r.u8();
+    const auto connected = r.u8();
+    auto label = r.str();
+    if (!addr || !type || !connected || !label)
+      return std::nullopt;
+    std::copy(addr->begin(), addr->end(), b.address.begin());
+    b.address_type = *type;
+    b.connected = *connected != 0;
+    b.label = std::move(*label);
+    bonds.push_back(std::move(b));
+  }
+  return bonds;
+}
+
+/// FORGET_BOND payload: [addr 6B][type u8]
+inline std::vector<uint8_t> make_forget_bond_payload(const std::array<uint8_t, 6> &address,
+                                                     uint8_t address_type) {
+  std::vector<uint8_t> out(address.begin(), address.end());
+  put_u8(out, address_type);
+  return out;
+}
+
+inline std::optional<std::pair<std::array<uint8_t, 6>, uint8_t>>
+parse_forget_bond_payload(std::span<const uint8_t> payload) {
+  if (payload.size() != kBondAddressSize + 1)
+    return std::nullopt;
+  std::array<uint8_t, 6> address{};
+  std::copy(payload.begin(), payload.begin() + kBondAddressSize, address.begin());
+  return std::make_pair(address, payload[kBondAddressSize]);
+}
 
 // ---- OK / ERROR ------------------------------------------------------------------
 

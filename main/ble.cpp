@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "ble.hpp"
 #include "bsp.hpp"
 #include "status_led.hpp"
@@ -324,6 +326,47 @@ bool is_ble_scanning() { return NimBLEDevice::getScan()->isScanning(); }
 bool is_ble_pairing() { return is_pairing; }
 
 uint8_t ble_bond_count() { return static_cast<uint8_t>(NimBLEDevice::getNumBonds()); }
+
+// The identity addresses of the connected clients (a bond is keyed by the
+// identity address, not the possibly-random connection address).
+static std::vector<NimBLEAddress> connected_identity_addresses() {
+  std::vector<NimBLEAddress> out;
+  for (auto *client : NimBLEDevice::getConnectedClients()) {
+    if (client->isConnected())
+      out.push_back(client->getConnInfo().getIdAddress());
+  }
+  return out;
+}
+
+std::vector<BleBond> ble_bonds() {
+  std::vector<BleBond> bonds;
+  const auto connected = connected_identity_addresses();
+  const int count = NimBLEDevice::getNumBonds();
+  for (int i = 0; i < count; ++i) {
+    const NimBLEAddress addr = NimBLEDevice::getBondedAddress(i);
+    BleBond b;
+    std::copy(addr.getVal(), addr.getVal() + b.address.size(), b.address.begin());
+    b.address_type = addr.getType();
+    b.connected = std::find(connected.begin(), connected.end(), addr) != connected.end();
+    bonds.push_back(b);
+  }
+  return bonds;
+}
+
+bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type) {
+  const NimBLEAddress addr(address.data(), address_type);
+  if (!NimBLEDevice::isBonded(addr))
+    return false;
+  // drop the live connection first if it is this controller (the client would
+  // otherwise re-bond)
+  for (auto *client : NimBLEDevice::getConnectedClients()) {
+    if (client->isConnected() && client->getConnInfo().getIdAddress() == addr) {
+      client->disconnect();
+      subscribed = false;
+    }
+  }
+  return NimBLEDevice::deleteBond(addr);
+}
 
 void ble_clear_bonds() {
   // drop the live connection first (its client would otherwise re-bond)

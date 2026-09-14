@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <NimBLEDevice.h>
 
@@ -23,6 +25,17 @@ bool is_ble_scanning();
 bool is_ble_pairing();
 /// Number of bonded (paired) controllers.
 uint8_t ble_bond_count();
+/// One bonded (paired) controller.
+struct BleBond {
+  std::array<uint8_t, 6> address{}; ///< identity address bytes (NimBLE order)
+  uint8_t address_type{0};          ///< BLE address type
+  bool connected{false};            ///< currently connected
+};
+/// The bonded (paired) controllers.
+std::vector<BleBond> ble_bonds();
+/// Forget one bond (disconnecting it first if it is the connected controller).
+/// Returns false if no such bond exists.
+bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type);
 /// Disconnect any connected controller and forget every bond.
 void ble_clear_bonds();
 std::string get_connected_client_serial_number();

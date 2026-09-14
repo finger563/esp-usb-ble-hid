@@ -169,6 +169,34 @@ static bool device_action(device_config::Action action, std::string &error) {
   return false;
 }
 
+static std::vector<device_config::BondInfo> device_bonds() {
+  std::vector<device_config::BondInfo> bonds;
+  for (const auto &b : ble_bonds()) {
+    device_config::BondInfo info;
+    info.address = b.address;
+    info.address_type = b.address_type;
+    info.connected = b.connected;
+    // the only per-controller detail we have is the connected one's serial
+    if (b.connected)
+      info.label = get_serial_number();
+    bonds.push_back(std::move(info));
+  }
+  return bonds;
+}
+
+static bool device_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type,
+                               std::string &error) {
+  if (!ble_forget_bond(address, address_type)) {
+    error = "no such paired controller";
+    return false;
+  }
+  if (ble_bond_count() == 0) {
+    // nothing left to reconnect to: enter pairing mode
+    start_ble_reconnection_thread(notifyCB);
+  }
+  return true;
+}
+
 static void apply_settings(const device_config::Settings &s) {
   set_led_brightness_percent(s.led_brightness);
   // the other settings are read per input report (push_inputs); the BLE name
@@ -215,9 +243,11 @@ extern "C" void app_main(void) {
   // vendor stream). Registered before USB starts so the modules exist as soon
   // as the host can talk to us.
   logger.info("Services initialization");
-  services_init(
-      usb_dispatcher(),
-      {.info = device_info, .on_action = device_action, .on_settings_changed = apply_settings});
+  services_init(usb_dispatcher(), {.info = device_info,
+                                   .on_action = device_action,
+                                   .bonds = device_bonds,
+                                   .forget_bond = device_forget_bond,
+                                   .on_settings_changed = apply_settings});
   const auto settings = services_settings();
   apply_settings(settings);
   if (const auto report = services_crash_report(); !report.empty())

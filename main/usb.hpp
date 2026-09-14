@@ -21,6 +21,7 @@ espp::Dispatcher &usb_dispatcher();
 
 /// Called from the RX worker when vendor bytes had to be dropped (the parser
 /// has already been reset); services use it to abort an in-flight transfer.
+/// May be set from any task at any time (the worker takes a copy under a lock).
 void usb_set_rx_overflow_callback(std::function<void()> callback);
 
 /// Bring up the USB device. The controller's input report is streamed to the

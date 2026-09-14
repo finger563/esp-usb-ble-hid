@@ -202,7 +202,9 @@ Settings are stored in NVS and survive updates:
 Actions: **Start pairing** (same as holding the button), **Forget all
 controllers**, **Reboot**. The status card shows USB / BLE state, the connected
 controller's serial and battery, the number of paired controllers, uptime and
-the firmware / hardware / IDF versions.
+the firmware / hardware / IDF versions. The **Paired controllers** card lists
+every bonded controller (address, which one is connected, its serial when
+known) and can forget them individually.
 
 ### Firmware update (OTA over USB)
 

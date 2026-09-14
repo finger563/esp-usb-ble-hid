@@ -16,6 +16,7 @@
 // are copied out under a mutex, so settings() may be read from any task (e.g.
 // the BLE notification path reads them for every report).
 
+#include <array>
 #include <functional>
 #include <mutex>
 #include <span>
@@ -32,6 +33,7 @@ class DeviceConfig : public espp::BaseComponent {
 public:
   using Settings = device_config::Settings;
   using Info = device_config::Info;
+  using BondInfo = device_config::BondInfo;
   using Action = device_config::Action;
   using Msg = device_config::Msg;
   using ErrorCode = device_config::ErrorCode;
@@ -47,6 +49,11 @@ public:
   using info_fn = std::function<Info()>;
   /// Performs an action; on failure return false and set @p error.
   using action_fn = std::function<bool(Action action, std::string &error)>;
+  /// Returns the paired (bonded) controllers.
+  using bonds_fn = std::function<std::vector<BondInfo>()>;
+  /// Forgets one bond; on failure return false and set @p error.
+  using forget_bond_fn = std::function<bool(const std::array<uint8_t, 6> &address,
+                                            uint8_t address_type, std::string &error)>;
 
   struct Config {
     send_fn send{nullptr};
@@ -54,6 +61,8 @@ public:
     settings_changed_fn on_settings_changed{nullptr};
     info_fn info{nullptr};
     action_fn on_action{nullptr};
+    bonds_fn bonds{nullptr};
+    forget_bond_fn forget_bond{nullptr};
     espp::Logger::Verbosity log_level{espp::Logger::Verbosity::WARN};
   };
 
@@ -63,13 +72,16 @@ public:
       , on_settings_changed_(config.on_settings_changed)
       , info_(config.info)
       , on_action_(config.on_action)
+      , bonds_(config.bonds)
+      , forget_bond_(config.forget_bond)
       , settings_(config.initial) {}
 
-  /// How the module advertises itself in dispatcher discovery.
+  /// How the module advertises itself in dispatcher discovery. (Firmware update
+  /// and crash dumps are separate modules with their own discovery entries.)
   static espp::Dispatcher::ModuleInfo module_info() {
     return {.name = "Device Config",
             .app = "dongle_console.html",
-            .description = "Dongle settings, status, pairing and firmware update"};
+            .description = "Dongle status, settings, paired controllers and actions"};
   }
 
   /// A copy of the current settings (thread-safe).
@@ -134,6 +146,24 @@ public:
       send(Msg::Ok, device_config::make_ok_payload(request));
       break;
     }
+    case Msg::GetBonds:
+      send_bonds();
+      break;
+    case Msg::ForgetBond: {
+      const auto target = device_config::parse_forget_bond_payload(frame.payload);
+      if (!target) {
+        send_error(request, ErrorCode::Malformed, "FORGET_BOND payload must be [addr 6B][type u8]");
+        break;
+      }
+      std::string error;
+      if (!forget_bond_ || !forget_bond_(target->first, target->second, error)) {
+        send_error(request, ErrorCode::NotFound, error.empty() ? "no such bond" : error);
+        break;
+      }
+      send(Msg::Ok, device_config::make_ok_payload(request));
+      send_bonds();
+      break;
+    }
     default:
       send_error(request, ErrorCode::UnknownRequest, "unknown request");
       break;
@@ -163,10 +193,17 @@ protected:
     send(Msg::Error, device_config::make_error_payload(request, code, message));
   }
 
+  void send_bonds() {
+    const std::vector<BondInfo> bonds = bonds_ ? bonds_() : std::vector<BondInfo>{};
+    send(Msg::Bonds, device_config::serialize_bonds(bonds));
+  }
+
   send_fn send_;
   settings_changed_fn on_settings_changed_;
   info_fn info_;
   action_fn on_action_;
+  bonds_fn bonds_;
+  forget_bond_fn forget_bond_;
 
   mutable std::mutex mutex_;
   Settings settings_;

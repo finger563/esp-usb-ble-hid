@@ -85,6 +85,9 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
 // flight, so a well-behaved host queues at most ~one frame; the cap protects
 // against a misbehaving host.
 static espp::Dispatcher dispatcher;
+// set from the app task, invoked from the RX worker: guard it so it may be
+// (re)set at any time without racing the worker
+static std::mutex rx_overflow_callback_mutex;
 static std::function<void()> rx_overflow_callback;
 static std::mutex rx_mutex;
 static std::condition_variable rx_cv;
@@ -126,8 +129,13 @@ static bool rx_worker_fn(std::mutex &, std::condition_variable &) {
   if (overflowed) {
     logger.warn("vendor RX overflow: frames dropped");
     dispatcher.reset();
-    if (rx_overflow_callback)
-      rx_overflow_callback();
+    std::function<void()> callback;
+    {
+      std::lock_guard<std::mutex> lock(rx_overflow_callback_mutex);
+      callback = rx_overflow_callback;
+    }
+    if (callback)
+      callback(); // invoked outside the lock: it may send frames / block
     return false; // the dropped chunks are gone; nothing to parse
   }
   for (const auto &chunk : chunks)
@@ -140,6 +148,7 @@ static bool rx_worker_fn(std::mutex &, std::condition_variable &) {
 espp::Dispatcher &usb_dispatcher() { return dispatcher; }
 
 void usb_set_rx_overflow_callback(std::function<void()> callback) {
+  std::lock_guard<std::mutex> lock(rx_overflow_callback_mutex);
   rx_overflow_callback = std::move(callback);
 }
 

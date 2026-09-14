@@ -227,6 +227,18 @@
     .meter i { display: block; height: 100%; background: var(--ok); width: 0; }
     .meter.low i { background: var(--danger); }
 
+    /* ---- paired controllers ---- */
+    .bonds { list-style: none; margin: 0; padding: 0; }
+    .bonds li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+    .bonds li:last-child { border-bottom: none; }
+    .bonds .mac { font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.03em; }
+    .bonds .label { color: var(--ink-2); overflow-wrap: anywhere; }
+    .bonds .badge { padding: 1px 8px; font-size: 11px; }
+    .bonds .badge::before { display: none; }
+    .bonds .badge.on::before { display: inline-block; }
+    .bonds li button { margin-left: auto; }
+    .bonds .bond-empty { display: block; padding: 6px 0; }
+
     /* ---- settings form ---- */
     .form { display: grid; gap: 10px; }
     .field { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--line); }
@@ -352,6 +364,19 @@
           <dt>ESP-IDF</dt><dd id="iIdf" class="mono">—</dd>
         </dl>
         <div id="infoNote" class="note muted small-text">Connect the dongle to read its status.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Paired controllers</h2>
+          <span id="bondsCount" class="muted small-text"></span>
+          <button id="bondsRefresh" class="small" type="button" disabled>Refresh</button>
+        </div>
+        <ul id="bondsList" class="bonds" aria-label="Paired controllers">
+          <li class="bond-empty muted">Connect the dongle to list its paired controllers.</li>
+        </ul>
+        <div id="bondsConfirm" class="confirm-slot"></div>
+        <div id="bondsNote" class="note muted small-text"></div>
       </div>
 
       <div class="card">
@@ -530,7 +555,9 @@
 
     // device_config_protocol.hpp
     const DEV = { GET_INFO: 0x01, GET_SETTINGS: 0x02, SET_SETTINGS: 0x03, RESET_SETTINGS: 0x04, ACTION: 0x05,
-                  INFO: 0x81, SETTINGS: 0x82, OK: 0x83, ERROR: 0x84 };
+                  GET_BONDS: 0x06, FORGET_BOND: 0x07,
+                  INFO: 0x81, SETTINGS: 0x82, OK: 0x83, ERROR: 0x84, BONDS: 0x85 };
+    const DEV_ERROR_CODE = { 1: "malformed", 2: "invalid value", 3: "unknown request", 4: "failed", 5: "not found" };
     const DEV_KEY = { invert_left_y: 1, invert_right_y: 2, swap_ab: 3, swap_xy: 4,
                       deadzone_percent: 5, led_brightness: 6, ble_name: 7 };
     const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
@@ -552,7 +579,8 @@
       [MODULE.DEVICE]: {
         label: "Device", errorType: DEV.ERROR, parseError: parseDeviceError,
         names: { 0x01: "GET_INFO", 0x02: "GET_SETTINGS", 0x03: "SET_SETTINGS", 0x04: "RESET_SETTINGS", 0x05: "ACTION",
-                 0x81: "INFO", 0x82: "SETTINGS", 0x83: "OK", 0x84: "ERROR" },
+                 0x06: "GET_BONDS", 0x07: "FORGET_BOND",
+                 0x81: "INFO", 0x82: "SETTINGS", 0x83: "OK", 0x84: "ERROR", 0x85: "BONDS" },
       },
       [MODULE.OTA]: {
         label: "OTA", errorType: OTA.ERROR, parseError: parseCodeMessageError,
@@ -704,10 +732,19 @@
       return { version, device, fw, modules };
     }
 
+    // INFO / SETTINGS / BONDS payloads start with the schema version; a different
+    // version means the layout changed and must not be decoded.
+    function checkVersion(what, version) {
+      if (version !== DEV_PROTOCOL_VERSION)
+        throw new Error(what + " payload version " + version + " is not supported (this console speaks v" + DEV_PROTOCOL_VERSION + ")");
+    }
+
     // ---- device_config: INFO ------------------------------------------------
     function parseInfo(payload) {
       const r = new Reader(payload);
-      const version = r.u8(), flags = r.u8(), battery = r.u8(), bonds = r.u8(), uptime = r.u32();
+      const version = r.u8();
+      checkVersion("INFO", version);
+      const flags = r.u8(), battery = r.u8(), bonds = r.u8(), uptime = r.u32();
       const project = r.str(), firmware = r.str(), hardware = r.str(), idf = r.str(), controller = r.str();
       return {
         version, flags,
@@ -751,7 +788,9 @@
     }
     function decodeSettings(payload) {
       const r = new Reader(payload);
-      const version = r.u8(), count = r.u8();
+      const version = r.u8();
+      checkVersion("SETTINGS", version);
+      const count = r.u8();
       const values = {}, unknown = [];
       const byId = {};
       for (const k of SETTING_KEYS) byId[DEV_KEY[k]] = k;
@@ -782,6 +821,42 @@
         for (const ch of value) { const c = ch.charCodeAt(0); if (c < 0x20 || c >= 0x7F) return "BLE name must be printable ASCII"; }
       }
       return "";
+    }
+
+    // ---- device_config: BONDS (paired controllers) ---------------------------------
+    // [version u8][count u8] then count x [addr 6B][addr_type u8][connected u8][label str].
+    // `addr` is the BLE identity address in NimBLE order (least-significant byte
+    // first); keep the raw bytes for FORGET_BOND and render byte[5] first.
+    const BOND_ADDRESS_SIZE = 6;
+    function bondAddressString(addr) {
+      let s = "";
+      for (let i = BOND_ADDRESS_SIZE - 1; i >= 0; i--) s += addr[i].toString(16).padStart(2, "0").toUpperCase() + (i ? ":" : "");
+      return s;
+    }
+    function parseBonds(payload) {
+      const r = new Reader(payload);
+      const version = r.u8();
+      checkVersion("BONDS", version);
+      const count = r.u8();
+      const bonds = [];
+      for (let i = 0; i < count; i++) {
+        const address = new Uint8Array(r.bytes(BOND_ADDRESS_SIZE));   // copy: payload buffers get reused
+        const addressType = r.u8();
+        const connected = r.u8() !== 0;
+        const label = r.str();
+        bonds.push({ address, addressType, addressTypeName: addressType === 0 ? "public" : addressType === 1 ? "random" : ("type " + addressType),
+                     connected, label, mac: bondAddressString(address) });
+      }
+      return { version, bonds };
+    }
+    // FORGET_BOND payload: [addr 6B][addr_type u8], the raw bytes exactly as received in BONDS.
+    function encodeForgetBond(bond) {
+      const address = bond.address;
+      if (!address || address.length !== BOND_ADDRESS_SIZE) throw new Error("bond address must be " + BOND_ADDRESS_SIZE + " bytes");
+      const out = new Uint8Array(BOND_ADDRESS_SIZE + 1);
+      out.set(address, 0);
+      out[BOND_ADDRESS_SIZE] = bond.addressType & 0xFF;
+      return out;
     }
 
     // ---- error payloads -------------------------------------------------------
@@ -827,8 +902,9 @@
 
     // Exported for node-side unit checks (harmless in the browser).
     const DongleProto = { crc32, buildFrame, StreamParser, encodeSettings, decodeSettings, parseInfo,
+                          parseBonds, encodeForgetBond, bondAddressString,
                           parseDiscovery, parseDeviceError, parseCodeMessageError, parseOtaStatus, extractElf,
-                          MODULE, DEV, OTA, CD, DEV_KEY, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE };
+                          MODULE, DEV, OTA, CD, DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE };
     if (typeof module !== "undefined" && module.exports) module.exports = DongleProto;
   </script>
 
@@ -854,6 +930,7 @@
     for (const id of ["status", "devBadge", "connectBtn", "anyBtn", "unsupported",
                       "infoAuto", "infoBtn", "bUsb", "bBle", "bScan", "bPair",
                       "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iHardware", "iIdf", "infoNote",
+                      "bondsCount", "bondsRefresh", "bondsList", "bondsConfirm", "bondsNote",
                       "settingsDirty", "settingsReload", "settingsForm", "settingsApply", "settingsReset", "settingsConfirm", "settingsNote",
                       "actPair", "actForget", "actReboot", "actionConfirm", "actionNote",
                       "otaStatusBtn", "otaFw", "otaRollback", "verifyPanel", "verifyText", "markValidBtn", "rollbackBtn",
@@ -1317,6 +1394,7 @@
       if (!transport) return;
       if (moduleAvailable(MODULE.DEVICE)) {
         await refreshInfo(false);
+        await refreshBonds(false);
         await loadSettings();
       }
       if (moduleAvailable(MODULE.OTA)) await checkOtaStatus(true);
@@ -1362,6 +1440,8 @@
 
       const dev = connected && moduleAvailable(MODULE.DEVICE) && !busy;
       els.infoBtn.disabled = !dev;
+      els.bondsRefresh.disabled = !dev;
+      for (const b of els.bondsList.querySelectorAll("button")) b.disabled = !dev;
       els.settingsReload.disabled = !dev;
       for (const input of els.settingsForm.querySelectorAll("input")) input.disabled = !dev || !deviceSettings;
       els.settingsApply.disabled = !dev || !deviceSettings || !settingsDirtyKeys().length || !!settingsInvalid();
@@ -1434,10 +1514,89 @@
       } finally { infoInFlight = false; }
     }
     els.infoBtn.addEventListener("click", () => refreshInfo(false));
-    setInterval(() => {
-      if (!transport || busy || pendingTxn || infoInFlight || document.hidden) return;
-      refreshInfo(true);
+    setInterval(async () => {
+      if (!transport || busy || pendingTxn || infoInFlight || bondsInFlight || document.hidden) return;
+      await refreshInfo(true);
+      if (!transport || busy || pendingTxn) return;
+      await refreshBonds(true);
     }, INFO_REFRESH_MS);
+
+    // ---- paired controllers (bonds) ----------------------------------------------
+    let bonds = [];
+    let bondsInFlight = false;
+    let bondsRendered = "";   // cache key of the last rendered list (skip DOM churn on quiet polls)
+
+    function renderBonds(list) {
+      bonds = list;
+      const key = JSON.stringify(list.map((b) => [b.mac, b.addressType, b.connected, b.label]));
+      els.bondsCount.textContent = list.length ? (list.length + (list.length === 1 ? " controller" : " controllers")) : "";
+      if (key === bondsRendered) return;
+      bondsRendered = key;
+      els.bondsList.textContent = "";
+      if (!list.length) {
+        const li = document.createElement("li");
+        li.className = "bond-empty muted";
+        li.textContent = "No paired controllers — hold the dongle's button or click Start pairing.";
+        els.bondsList.appendChild(li);
+        return;
+      }
+      list.forEach((b, i) => {
+        const li = document.createElement("li");
+        const mac = document.createElement("span"); mac.className = "mac"; mac.textContent = b.mac;
+        const type = document.createElement("span"); type.className = "badge"; type.textContent = b.addressTypeName;
+        type.title = "BLE address type " + b.addressType;
+        li.append(mac, type);
+        if (b.connected) { const c = document.createElement("span"); c.className = "badge on"; c.textContent = "connected"; li.appendChild(c); }
+        if (b.label) { const l = document.createElement("span"); l.className = "label"; l.textContent = b.label; li.appendChild(l); }
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "danger small"; btn.textContent = "Forget";
+        btn.setAttribute("aria-label", "Forget controller " + b.mac);
+        btn.disabled = !transport || busy;
+        btn.addEventListener("click", () => forgetBond(i, btn));
+        li.appendChild(btn);
+        els.bondsList.appendChild(li);
+      });
+    }
+
+    async function refreshBonds(quiet) {
+      if (!transport || bondsInFlight || !moduleAvailable(MODULE.DEVICE)) return;
+      bondsInFlight = true;
+      try {
+        const [reply] = await transact(MODULE.DEVICE, DEV.GET_BONDS, null, { expect: [DEV.BONDS], quiet });
+        renderBonds(parseBonds(reply.payload).bonds);
+        if (!quiet) setNote(els.bondsNote, "muted", "");
+      } catch (e) {
+        if (e && e.transportLost) return;
+        if (e && e.deviceError && e.code === 3) {
+          // older firmware without GET_BONDS: say so once, stop polling it
+          if (bondsRendered !== "unsupported") { setNote(els.bondsNote, "warn", "This firmware does not support listing paired controllers (update it)."); bondsRendered = "unsupported"; }
+          return;
+        }
+        logLine("err", "Paired-controller list failed: " + e.message);
+        setNote(els.bondsNote, "err", "List failed: " + e.message);
+      } finally { bondsInFlight = false; }
+    }
+    els.bondsRefresh.addEventListener("click", () => refreshBonds(false));
+
+    async function forgetBond(index, btn) {
+      const b = bonds[index];
+      if (!b || !transport) return;
+      const what = b.mac + (b.label ? " (" + b.label + ")" : "") + (b.connected ? ", the connected controller," : "");
+      const ok = await askConfirm(els.bondsConfirm, btn, "Forget " + what + "? It must be paired again to reconnect.", "Forget controller");
+      if (!ok || !transport) return;
+      try {
+        const [, list] = await transact(MODULE.DEVICE, DEV.FORGET_BOND, encodeForgetBond(b), { expect: [[DEV.OK], [DEV.BONDS]] });
+        renderBonds(parseBonds(list.payload).bonds);
+        logLine("ok", "Forgot controller " + b.mac + ".");
+        setNote(els.bondsNote, "ok", "Forgot " + b.mac + ".");
+        refreshInfo(true);
+      } catch (e) {
+        const msg = (e && e.deviceError) ? "Dongle refused: " + e.message + (e.code === 5 ? " (it may already be gone — refreshing)" : "") : "Forget failed: " + e.message;
+        logLine("err", msg);
+        setNote(els.bondsNote, "err", msg);
+        if (e && e.deviceError && e.code === 5) refreshBonds(true);
+      }
+    }
 
     // ---- settings --------------------------------------------------------------
     let deviceSettings = null;   // authoritative values from the last SETTINGS reply
@@ -1562,7 +1721,8 @@
         await sendAction(DEV_ACTION.START_PAIRING, "Start pairing");
         logLine("ok", "Pairing mode started — put the controller in pairing mode now.");
         setNote(els.actionNote, "ok", "Pairing mode started. Hold the controller's sync button until it pairs.");
-        refreshInfo(true);
+        await refreshInfo(true);
+        refreshBonds(true);
       } catch (e) {
         logLine("err", "Start pairing failed: " + e.message);
         setNote(els.actionNote, "err", "Start pairing failed: " + e.message);
@@ -1570,7 +1730,7 @@
     });
     els.actForget.addEventListener("click", async () => {
       if (!transport) return;
-      const n = lastInfo ? lastInfo.bonds : null;
+      const n = bonds.length ? bonds.length : (lastInfo ? lastInfo.bonds : null);
       const ok = await askConfirm(els.actionConfirm, els.actForget,
         "Forget " + (n !== null ? n + " paired controller" + (n === 1 ? "" : "s") : "every paired controller") + "? Each one must be paired again.",
         "Forget all controllers");
@@ -1579,7 +1739,8 @@
         await sendAction(DEV_ACTION.CLEAR_BONDS, "Forget all controllers");
         logLine("ok", "All BLE bonds cleared.");
         setNote(els.actionNote, "ok", "All paired controllers were forgotten.");
-        refreshInfo(true);
+        await refreshInfo(true);
+        refreshBonds(true);
       } catch (e) {
         logLine("err", "Forget all controllers failed: " + e.message);
         setNote(els.actionNote, "err", "Forget all controllers failed: " + e.message);

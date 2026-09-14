@@ -6,8 +6,10 @@
 //   module 0x10  device configuration        (DeviceConfig, components/device_config)
 // plus the persisted settings (NVS) the rest of the app reads.
 
+#include <array>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "dispatcher.hpp"
 
@@ -18,6 +20,12 @@ struct ServicesCallbacks {
   std::function<device_config::Info()> info{nullptr};
   /// Perform a config-module action (pairing / clear bonds / reboot).
   std::function<bool(device_config::Action, std::string &error)> on_action{nullptr};
+  /// The paired controllers.
+  std::function<std::vector<device_config::BondInfo>()> bonds{nullptr};
+  /// Forget one paired controller.
+  std::function<bool(const std::array<uint8_t, 6> &address, uint8_t address_type,
+                     std::string &error)>
+      forget_bond{nullptr};
   /// Called whenever the settings changed (already persisted); apply them.
   std::function<void(const device_config::Settings &)> on_settings_changed{nullptr};
 };

@@ -32,6 +32,11 @@ advertise is disabled.
   the connected controller's serial and battery, number of paired controllers,
   uptime, project, firmware, hardware and ESP-IDF version. Auto-refreshes every
   2 s while connected (pauses while another transfer is running).
+- **Paired controllers** — one row per BLE bond: MAC address, address type
+  (public / random), a *connected* badge for the controller currently in use
+  and its serial number when known. **Forget** on a row drops that bond only
+  (in-page confirmation). The list refreshes after connecting, after any
+  action and quietly alongside the 2 s status poll.
 - **Settings** — stick Y-axis inversion, A/B and X/Y swaps, radial stick
   deadzone (0–50 %), status-LED brightness, BLE device name (applies after a
   reboot). **Apply changes** sends only the keys you changed; the form always
@@ -78,5 +83,5 @@ truncated). **Clear log** empties it.
 
 The first `<script id="proto">` block is DOM-free and exports its functions
 when loaded under node (`module.exports`), so the frame codec, discovery /
-INFO parsers and the settings TLV encoder / decoder can be unit-checked by
+INFO / BONDS parsers and the settings TLV encoder / decoder can be unit-checked by
 extracting that block into a `.js` file and `require`-ing it.

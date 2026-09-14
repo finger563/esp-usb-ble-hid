@@ -103,6 +103,41 @@ int main() {
   }
   CHECK(!dc::Info::parse(std::span<const uint8_t>(ib.data(), ib.size() - 1)).has_value());
 
+  // ---- version gating: a different payload version is refused, not mis-decoded ----
+  {
+    auto v2 = s.serialize();
+    v2[0] = dc::kProtocolVersion + 1;
+    CHECK(!dc::Settings::parse(v2, dc::Settings{}).has_value());
+    auto i2 = info.serialize();
+    i2[0] = dc::kProtocolVersion + 1;
+    CHECK(!dc::Info::parse(i2).has_value());
+  }
+
+  // ---- Bonds round trip ----
+  {
+    std::vector<dc::BondInfo> bonds(2);
+    bonds[0].address = {0x66, 0x55, 0x44, 0x33, 0x22, 0x11};
+    bonds[0].address_type = 1;
+    bonds[0].connected = true;
+    bonds[0].label = "0123456789";
+    bonds[1].address = {0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99};
+    CHECK(bonds[0].address_string() == "11:22:33:44:55:66");
+    const auto bb = dc::serialize_bonds(bonds);
+    CHECK(bb[0] == dc::kProtocolVersion && bb[1] == 2);
+    CHECK(bb.size() == 2 + 2 * (6 + 1 + 1 + 1) + 10);
+    const auto back_bonds = dc::parse_bonds(bb);
+    CHECK(back_bonds.has_value() && *back_bonds == bonds);
+    CHECK(!dc::parse_bonds(std::span<const uint8_t>(bb.data(), bb.size() - 1)).has_value());
+    CHECK(dc::parse_bonds(dc::serialize_bonds({})).has_value() &&
+          dc::parse_bonds(dc::serialize_bonds({}))->empty());
+    // FORGET_BOND payload
+    const auto fb = dc::make_forget_bond_payload(bonds[1].address, 0);
+    CHECK(fb.size() == 7);
+    const auto pf = dc::parse_forget_bond_payload(fb);
+    CHECK(pf && pf->first == bonds[1].address && pf->second == 0);
+    CHECK(!dc::parse_forget_bond_payload(std::vector<uint8_t>{1, 2, 3}).has_value());
+  }
+
   // ---- OK / ERROR payloads ----
   CHECK(dc::make_ok_payload(dc::Msg::SetSettings) == std::vector<uint8_t>{0x03});
   const auto err = dc::make_error_payload(dc::Msg::Action, dc::ErrorCode::Failed, "nope");
