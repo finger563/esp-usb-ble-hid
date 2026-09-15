@@ -971,7 +971,8 @@
       if (typeof str !== "string") return null;
       let s = str.trim();
       if (/^v\d/i.test(s)) s = s.slice(1);
-      if (!/^\d+\.\d+/.test(s)) {
+      // the whole string must be a version token; otherwise look for one inside it
+      if (!/^\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.]+)*$/.test(s)) {
         const m = VERSION_TOKEN.exec(str);
         if (!m) return null;
         s = m[1];
@@ -1385,6 +1386,15 @@
       return true;
     }
 
+    // Everything learned from the connected dongle is per-connection: the next
+    // dongle (or the same one after an update) must not inherit it, or the
+    // update check could compare the release against the previous firmware.
+    function forgetDeviceState() {
+      discovered = null;
+      lastInfo = null;
+      lastOtaStatus = null;
+      clearLink();
+    }
     async function disconnect() {
       if (!transport) return;
       const t = transport;
@@ -1392,8 +1402,7 @@
       failPending(new Error("disconnected"));
       await t.close();
       parser.reset();
-      discovered = null;
-      clearLink();
+      forgetDeviceState();
       updateUI();
       setStatus("", "Disconnected");
       logLine("sys", "Disconnected.");
@@ -1404,8 +1413,7 @@
       failPending(Object.assign(new Error("transport lost"), { transportLost: true }));
       Promise.resolve(t.close()).catch(() => {});
       parser.reset();
-      discovered = null;
-      clearLink();
+      forgetDeviceState();
       updateUI();
       if (expectRestart) {
         setStatus("busy", "Dongle restarting…");
@@ -1714,7 +1722,10 @@
         }
       }
       let usbText = "not mounted", usbTone = "";
-      if (info.usbMounted) {
+      if (info.usbMounted && !stats) {
+        // older firmware reports neither the handshake state nor the counters
+        usbText = "mounted (this firmware reports no handshake state)";
+      } else if (info.usbMounted) {
         if (info.usbHidReady) {
           usbText = "handshake done" + (stats ? ", " + info.usbHidReports.toLocaleString() + (info.usbHidReports === 1 ? " report" : " reports") + " sent" : "");
           usbTone = "ok";

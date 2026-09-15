@@ -139,11 +139,20 @@ static void reset_link_state(const std::string &why) {
   }
 }
 
-// Every subscribed characteristic notifies through here: count it, then hand
-// it to the app.
+// Every subscribed characteristic notifies through here: count it if it is a
+// HID input report (the battery level also notifies through here, and must not
+// keep the "controller is sending inputs" diagnostics fresh), then hand it to
+// the app.
 static void on_notify(NimBLERemoteCharacteristic *chr, uint8_t *data, size_t len, bool is_notify) {
-  notification_count.fetch_add(1);
-  last_notify_us.store(esp_timer_get_time());
+  bool is_input_report = false;
+  {
+    std::lock_guard<std::mutex> lk(report_map_mutex);
+    is_input_report = report_ids.contains(chr);
+  }
+  if (is_input_report) {
+    notification_count.fetch_add(1);
+    last_notify_us.store(esp_timer_get_time());
+  }
   if (notify_callback)
     notify_callback(chr, data, len, is_notify);
 }
@@ -352,10 +361,18 @@ static ScanCallbacks scanCallbacks;
 // report for the Xbox button). The report id of each comes from its Report
 // Reference descriptor (0x2908: [report_id][report_type], type 1 = input);
 // without that descriptor the characteristic is assumed to be the main input
-// report. Returns the number of characteristics subscribed; `why` explains a
-// zero result.
+// report. All-or-nothing: if any input report cannot be subscribed the attempt
+// fails (a partial subscription could leave the gamepad report itself silent
+// while the link is reported up), and the next attempt starts over. Returns the
+// number of characteristics subscribed; `why` explains a zero result.
 static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
   static constexpr bool refresh = true;
+  {
+    // refreshing the services replaces the characteristic objects: never keep
+    // the previous attempt's (dangling) entries
+    std::lock_guard<std::mutex> lk(report_map_mutex);
+    report_ids.clear();
+  }
   const auto &services = client->getServices(refresh);
   auto *svc = client->getService(hid_service_uuid);
   if (!svc) {
@@ -390,11 +407,15 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
                     chr->getHandle());
     ++count;
   }
+  if (failed) {
+    why = fmt::format("subscribing to {} of {} input reports failed", failed, count + failed);
+    std::lock_guard<std::mutex> lk(report_map_mutex);
+    report_ids.clear(); // the next attempt subscribes them all again
+    return 0;
+  }
   if (count == 0) {
     if (report_chars == 0)
       why = "HID service has no notifying Report characteristic";
-    else if (failed)
-      why = fmt::format("subscribing to the input report failed ({} of {})", failed, report_chars);
     else
       why = fmt::format("no input report among {} Report characteristics", report_chars);
   }
