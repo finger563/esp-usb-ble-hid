@@ -53,8 +53,10 @@ advertise is disabled.
   (in-page confirmation). The list refreshes after connecting, after any
   action and quietly alongside the 2 s status poll.
 - **Settings** — stick Y-axis inversion, A/B and X/Y swaps, radial stick
-  deadzone (0–50 %), status-LED brightness, BLE device name (applies after a
-  reboot). **Apply changes** sends only the keys you changed; the form always
+  deadzone (0–50 %), status-LED brightness, the LED level held while a
+  controller is connected (default 25 % of that brightness; 0 = off while
+  playing), an optional blink-on-every-input debugging mode (off by default),
+  BLE device name (applies after a reboot). **Apply changes** sends only the keys you changed; the form always
   re-renders from the dongle's reply. **Reset to defaults** restores the
   firmware defaults.
 - **Actions** — *Start pairing* (same as holding the dongle's button), *Forget

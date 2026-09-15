@@ -27,10 +27,12 @@ int main() {
   s.deadzone_percent = 12;
   s.led_brightness = 40;
   s.ble_name = "My Dongle";
+  s.led_connected_brightness = 15;
+  s.led_activity_blink = true;
   CHECK(s.validate().empty());
   const auto bytes = s.serialize();
   CHECK(bytes[0] == dc::kProtocolVersion);
-  CHECK(bytes[1] == 7); // seven TLVs
+  CHECK(bytes[1] == 9); // nine TLVs
   const auto back = dc::Settings::parse(bytes, dc::Settings{});
   CHECK(back.has_value());
   CHECK(back && *back == s);
@@ -39,7 +41,21 @@ int main() {
   {
     std::vector<uint8_t> partial{dc::kProtocolVersion, 1, uint8_t(dc::Key::Deadzone), 1, 25};
     const auto r = dc::Settings::parse(partial, s);
-    CHECK(r && r->deadzone_percent == 25 && r->swap_ab == true && r->ble_name == "My Dongle");
+    CHECK(r && r->deadzone_percent == 25 && r->swap_ab == true && r->ble_name == "My Dongle" &&
+          r->led_connected_brightness == 15 && r->led_activity_blink);
+  }
+  // ---- LED settings: defaults, range, bool strictness ----
+  {
+    CHECK(dc::Settings{}.led_connected_brightness == 25 && !dc::Settings{}.led_activity_blink);
+    dc::Settings bad;
+    bad.led_connected_brightness = 101;
+    CHECK(!bad.validate().empty());
+    std::vector<uint8_t> blink2{dc::kProtocolVersion, 1, uint8_t(dc::Key::LedActivityBlink), 1, 2};
+    CHECK(!dc::Settings::parse(blink2, dc::Settings{}).has_value());
+    std::vector<uint8_t> level{dc::kProtocolVersion, 1, uint8_t(dc::Key::LedConnectedBrightness), 1,
+                               60};
+    const auto l = dc::Settings::parse(level, dc::Settings{});
+    CHECK(l && l->led_connected_brightness == 60 && !l->led_activity_blink);
   }
   // ---- unknown key is ignored (forward compatible) ----
   {

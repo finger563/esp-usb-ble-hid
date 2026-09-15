@@ -76,6 +76,10 @@ enum class Key : uint8_t {
   Deadzone = 0x05,      ///< u8 percent 0..kMaxDeadzonePercent: radial stick deadzone
   LedBrightness = 0x06, ///< u8 percent 0..100: status LED brightness
   BleName = 0x07,       ///< string 1..kMaxBleNameLength: BLE device name (applies after reboot)
+  LedConnectedBrightness = 0x08, ///< u8 percent 0..100: steady LED level while a controller is
+                                 ///< connected, relative to LedBrightness (default 25)
+  LedActivityBlink = 0x09,       ///< u8 bool: toggle the LED on every input report instead of
+                                 ///< holding it steady (debugging aid; default 0)
 };
 
 enum class Action : uint8_t {
@@ -168,6 +172,8 @@ struct Settings {
   uint8_t deadzone_percent{0};
   uint8_t led_brightness{100};
   std::string ble_name{"Switch"};
+  uint8_t led_connected_brightness{25};
+  bool led_activity_blink{false};
 
   bool operator==(const Settings &) const = default;
 
@@ -178,6 +184,8 @@ struct Settings {
       return "deadzone must be 0.." + std::to_string(kMaxDeadzonePercent) + " %";
     if (led_brightness > 100)
       return "led brightness must be 0..100 %";
+    if (led_connected_brightness > 100)
+      return "led connected brightness must be 0..100 %";
     if (ble_name.empty() || ble_name.size() > kMaxBleNameLength)
       return "ble name must be 1.." + std::to_string(kMaxBleNameLength) + " characters";
     const bool unprintable = std::any_of(ble_name.begin(), ble_name.end(), [](char c) {
@@ -193,7 +201,7 @@ struct Settings {
     std::vector<uint8_t> out;
     out.reserve(32 + ble_name.size());
     put_u8(out, kProtocolVersion);
-    put_u8(out, 7);
+    put_u8(out, 9);
     auto tlv_u8 = [&](Key k, uint8_t v) {
       put_u8(out, static_cast<uint8_t>(k));
       put_u8(out, 1);
@@ -207,6 +215,8 @@ struct Settings {
     tlv_u8(Key::LedBrightness, led_brightness);
     put_u8(out, static_cast<uint8_t>(Key::BleName));
     put_str(out, ble_name);
+    tlv_u8(Key::LedConnectedBrightness, led_connected_brightness);
+    tlv_u8(Key::LedActivityBlink, led_activity_blink ? 1 : 0);
     return out;
   }
 
@@ -266,6 +276,12 @@ struct Settings {
         break;
       case Key::BleName:
         s.ble_name.assign(value->begin(), value->end());
+        break;
+      case Key::LedConnectedBrightness:
+        ok = as_u8(s.led_connected_brightness);
+        break;
+      case Key::LedActivityBlink:
+        ok = as_bool(s.led_activity_blink);
         break;
       default:
         break; // unknown key: ignore

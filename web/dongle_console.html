@@ -445,6 +445,18 @@
             <label for="s_led_brightness">Status LED brightness</label>
             <output id="o_led_brightness" for="s_led_brightness">100 %</output>
             <input type="range" id="s_led_brightness" data-key="led_brightness" min="0" max="100" step="1" value="100" disabled>
+            <span class="hint">Overall brightness: scanning, pairing and connected.</span>
+          </div>
+          <div class="field slider">
+            <label for="s_led_connected_brightness">LED level while connected</label>
+            <output id="o_led_connected_brightness" for="s_led_connected_brightness">25 %</output>
+            <input type="range" id="s_led_connected_brightness" data-key="led_connected_brightness" min="0" max="100" step="1" value="25" disabled>
+            <span class="hint">Steady level once a controller is connected, as a share of the brightness above. 0 turns it off while playing.</span>
+          </div>
+          <div class="field">
+            <label for="s_led_activity_blink">Blink LED on every input</label>
+            <span class="switch"><input type="checkbox" id="s_led_activity_blink" data-key="led_activity_blink" disabled><i></i></span>
+            <span class="hint">Debugging aid: toggles the LED with each report forwarded to the host instead of holding it steady.</span>
           </div>
           <div class="field text">
             <label for="s_ble_name">BLE device name</label>
@@ -603,7 +615,8 @@
                   INFO: 0x81, SETTINGS: 0x82, OK: 0x83, ERROR: 0x84, BONDS: 0x85 };
     const DEV_ERROR_CODE = { 1: "malformed", 2: "invalid value", 3: "unknown request", 4: "failed", 5: "not found" };
     const DEV_KEY = { invert_left_y: 1, invert_right_y: 2, swap_ab: 3, swap_xy: 4,
-                      deadzone_percent: 5, led_brightness: 6, ble_name: 7 };
+                      deadzone_percent: 5, led_brightness: 6, ble_name: 7,
+                      led_connected_brightness: 8, led_activity_blink: 9 };
     const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
     const DEV_PROTOCOL_VERSION = 1;
     const DEV_MAX_DEADZONE = 50, DEV_MAX_BLE_NAME = 31;
@@ -822,7 +835,8 @@
     // [version u8][count u8] then count x [key u8][len u8][value]. Partial lists are legal.
     const SETTING_KEYS = Object.keys(DEV_KEY);
     const SETTING_KIND = { invert_left_y: "bool", invert_right_y: "bool", swap_ab: "bool", swap_xy: "bool",
-                           deadzone_percent: "u8", led_brightness: "u8", ble_name: "str" };
+                           deadzone_percent: "u8", led_brightness: "u8", ble_name: "str",
+                           led_connected_brightness: "u8", led_activity_blink: "bool" };
     function encodeSettings(values) {
       const out = [DEV_PROTOCOL_VERSION, 0];
       let count = 0;
@@ -878,6 +892,7 @@
     function validateSetting(key, value) {
       if (key === "deadzone_percent" && (value < 0 || value > DEV_MAX_DEADZONE)) return "deadzone must be 0.." + DEV_MAX_DEADZONE + " %";
       if (key === "led_brightness" && (value < 0 || value > 100)) return "LED brightness must be 0..100 %";
+      if (key === "led_connected_brightness" && (value < 0 || value > 100)) return "LED level while connected must be 0..100 %";
       if (key === "ble_name") {
         if (!value.length || value.length > DEV_MAX_BLE_NAME) return "BLE name must be 1.." + DEV_MAX_BLE_NAME + " characters";
         for (const ch of value) { const c = ch.charCodeAt(0); if (c < 0x20 || c >= 0x7F) return "BLE name must be printable ASCII"; }
@@ -1894,6 +1909,7 @@
     function updateSliderOutputs() {
       document.getElementById("o_deadzone_percent").textContent = settingInputs.deadzone_percent.value + " %";
       document.getElementById("o_led_brightness").textContent = settingInputs.led_brightness.value + " %";
+      document.getElementById("o_led_connected_brightness").textContent = settingInputs.led_connected_brightness.value + " %";
     }
     function settingsDirtyKeys() {
       if (!deviceSettings) return [];

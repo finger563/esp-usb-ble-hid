@@ -64,7 +64,7 @@ https://github.com/user-attachments/assets/c81b947a-24a1-4a44-b5d0-5d4c274beb93
   ELF for `espcoredump.py`.
 - **Status you can see.** The T-Dongle-S3's screen shows USB / Bluetooth
   state and the connected controller's serial; the RGB LED breathes while
-  scanning and flickers with traffic.
+  scanning and holds a dim steady light while connected.
 
 ## Everyday use
 
@@ -72,7 +72,7 @@ https://github.com/user-attachments/assets/c81b947a-24a1-4a44-b5d0-5d4c274beb93
 |---|---|---|
 | LED pulsing blue, fast (1 s) | **Pairing** — will bond with the first BLE gamepad it finds | Put the controller in pairing mode |
 | LED pulsing blue, slow (3 s) | **Reconnecting** — looking for a remembered controller | Turn the controller on |
-| LED off, flickering with input | **Connected** — inputs are flowing to the Switch | Play |
+| LED steady, dimmed | **Connected** — inputs are flowing to the Switch (the level is a setting; a blink-per-input debug mode is optional) | Play |
 | Hold the button 3 s | Enter pairing mode (also available from the web console) | |
 
 A few things worth knowing:
@@ -107,8 +107,9 @@ too. Its only network access is the optional release check.
 - **Paired controllers** — every bond by the name the controller reports
   (learned when it connects), with its address and a per-row *Forget*.
 - **Settings** (stored in flash, survive updates) — invert left / right
-  stick Y, swap A/B, swap X/Y, stick deadzone (0–50 %), LED brightness, BLE
-  device name.
+  stick Y, swap A/B, swap X/Y, stick deadzone (0–50 %), LED brightness, the
+  LED level while a controller is connected (dim and steady by default; a
+  blink-on-every-input debugging mode is optional), BLE device name.
 - **Actions** — start pairing, forget all controllers, reboot.
 
 ### Firmware
