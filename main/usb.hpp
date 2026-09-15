@@ -32,6 +32,13 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl);
 /// Whether the USB host has configured (mounted) the device.
 bool usb_is_mounted();
 
+/// Whether the host has completed the Switch Pro handshake and enabled input
+/// reports (i.e. the streamed reports are actually being consumed).
+bool usb_hid_ready();
+
+/// Input reports accepted by the USB stack since boot (diagnostics).
+uint32_t usb_hid_reports_sent();
+
 /// Write a complete frame to the vendor interface (no-op if it is disabled).
 /// Safe to call from any task except the TinyUSB task.
 bool usb_write_vendor(std::span<const uint8_t> frame);

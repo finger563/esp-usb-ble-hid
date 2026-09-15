@@ -226,6 +226,25 @@
     .meter { display: inline-block; width: 90px; height: 8px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line); vertical-align: middle; margin-left: 8px; overflow: hidden; }
     .meter i { display: block; height: 100%; background: var(--ok); width: 0; }
     .meter.low i { background: var(--danger); }
+    .kv dd .badge { vertical-align: middle; margin-right: 6px; }
+    .kv dd.ok { color: var(--ok); }
+    .kv dd.warn { color: var(--warn); }
+
+    /* ---- link diagnostics (BLE input / USB output) ---- */
+    .link-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+    .link-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 6px; }
+    .link-block .note { margin-top: 6px; min-height: 0; }
+
+    /* ---- firmware update check (GitHub Releases) ---- */
+    .badge.new { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+    .badge.new::before { background: var(--warn); }
+    .badge.dev { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+    .badge.dev::before { background: var(--accent); }
+    .update-block { display: grid; gap: 8px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px dashed var(--line); }
+    .update-block .row { margin-top: 0; }
+    .update-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 1.4em; }
+    .update-line .badge { flex: none; }
+    .update-line.warn, .kv dd.warn { color: var(--warn); }
 
     /* ---- paired controllers ---- */
     .bonds { list-style: none; margin: 0; padding: 0; }
@@ -363,9 +382,18 @@
           <dt>Uptime</dt><dd id="iUptime">—</dd>
           <dt>Project</dt><dd id="iProject">—</dd>
           <dt>Firmware</dt><dd id="iFirmware" class="mono">—</dd>
+          <dt>Latest release</dt><dd id="iUpdate" class="muted">not checked</dd>
           <dt>Hardware</dt><dd id="iHardware">—</dd>
           <dt>ESP-IDF</dt><dd id="iIdf" class="mono">—</dd>
         </dl>
+        <div class="link-block" aria-label="Link diagnostics">
+          <div class="link-label">Link</div>
+          <dl class="kv">
+            <dt>BLE input</dt><dd id="lBle">—</dd>
+            <dt>USB output</dt><dd id="lUsb">—</dd>
+          </dl>
+          <div id="linkNote" class="note small-text muted" hidden></div>
+        </div>
         <div id="infoNote" class="note muted small-text">Connect the dongle to read its status.</div>
       </div>
 
@@ -470,7 +498,19 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>Update firmware</h2></div>
+        <div class="card-head">
+          <h2>Update firmware</h2>
+          <span id="updateChecked" class="muted small-text"></span>
+          <button id="checkUpdatesBtn" class="small" type="button" title="Query GitHub Releases for the latest published firmware">Check for updates</button>
+        </div>
+        <div class="update-block">
+          <div id="updateStatus" class="update-line small-text muted">Latest release: not checked yet.</div>
+          <div class="row">
+            <button id="installReleaseBtn" type="button" hidden disabled>Download and install</button>
+            <span id="installReleaseInfo" class="muted small-text" hidden></span>
+          </div>
+          <div id="installConfirm" class="confirm-slot"></div>
+        </div>
         <div class="row">
           <label class="filebtn">Choose .bin file<input type="file" id="fileInput" accept=".bin,application/octet-stream" aria-label="Firmware image (.bin)"></label>
           <span id="fileInfo" class="muted small-text">No file selected.</span>
@@ -566,7 +606,8 @@
     const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
     const DEV_PROTOCOL_VERSION = 1;
     const DEV_MAX_DEADZONE = 50, DEV_MAX_BLE_NAME = 31;
-    const INFO_FLAG = { USB_MOUNTED: 0x01, BLE_CONNECTED: 0x02, BLE_SCANNING: 0x04, PAIRING: 0x08 };
+    const INFO_FLAG = { USB_MOUNTED: 0x01, BLE_CONNECTED: 0x02, BLE_SCANNING: 0x04, PAIRING: 0x08, USB_HID_READY: 0x10 };
+    const INFO_NEVER = 0xFFFFFFFF;   // ble_last_notify_age_ms: no notification received yet
 
     // ota_stream_protocol.hpp
     const OTA = { BEGIN: 0x01, DATA: 0x02, FINISH: 0x03, ABORT: 0x04, OK: 0x05, ERROR: 0x06, PROGRESS: 0x07,
@@ -743,19 +784,29 @@
     }
 
     // ---- device_config: INFO ------------------------------------------------
+    // [version u8][flags u8][battery u8][bonds u8][uptime u32][project str][firmware str]
+    // [hardware str][idf str][controller str] then an OPTIONAL link-diagnostics trailer
+    // (older firmware stops before it): [ble_notifications u32][ble_last_notify_age_ms u32]
+    // [usb_hid_reports u32]. usb_hid_ready is flags bit4.
     function parseInfo(payload) {
       const r = new Reader(payload);
       const version = r.u8();
       checkVersion("INFO", version);
       const flags = r.u8(), battery = r.u8(), bonds = r.u8(), uptime = r.u32();
       const project = r.str(), firmware = r.str(), hardware = r.str(), idf = r.str(), controller = r.str();
+      const optU32 = () => (r.b.length - r.i >= 4 ? r.u32() : null);
+      const bleNotifications = optU32(), bleLastNotifyAgeMs = optU32(), usbHidReports = optU32();
       return {
         version, flags,
         usbMounted: !!(flags & INFO_FLAG.USB_MOUNTED),
         bleConnected: !!(flags & INFO_FLAG.BLE_CONNECTED),
         bleScanning: !!(flags & INFO_FLAG.BLE_SCANNING),
         pairing: !!(flags & INFO_FLAG.PAIRING),
+        usbHidReady: !!(flags & INFO_FLAG.USB_HID_READY),
         battery, bonds, uptime, project, firmware, hardware, idf, controller,
+        // link diagnostics: null when this firmware does not send the trailer
+        hasLinkStats: bleNotifications !== null && bleLastNotifyAgeMs !== null && usbHidReports !== null,
+        bleNotifications, bleLastNotifyAgeMs, usbHidReports,
       };
     }
 
@@ -903,10 +954,100 @@
       return null;
     }
 
+    // ---- firmware version comparison (GitHub Releases update check) ---------------
+    // Accepts `git describe` output ("v2.1.0", "2.1.0", "v2.1.0-3-gabc1234[-dirty]",
+    // "v2.1.0-rc1-2-g0123abc") or a longer string containing such a token
+    // ("esp-usb-ble-hid v2.1.0"). Returns null when no major.minor[.patch] is found.
+    const VERSION_TOKEN = /(?:^|[\s(\[:,])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.]+)*)(?=$|[\s)\],;])/;
+    function parseVersion(str) {
+      if (typeof str !== "string") return null;
+      let s = str.trim();
+      if (/^v\d/i.test(s)) s = s.slice(1);
+      if (!/^\d+\.\d+/.test(s)) {
+        const m = VERSION_TOKEN.exec(str);
+        if (!m) return null;
+        s = m[1];
+      }
+      const parts = s.split(/[.-]/);
+      const nums = [];
+      while (nums.length < 3 && parts.length && /^\d+$/.test(parts[0])) nums.push(Number(parts.shift()));
+      if (nums.length < 2) return null;
+      while (nums.length < 3) nums.push(0);
+      let commits = 0, hash = "", dirty = false;
+      if (parts.length && parts[parts.length - 1].toLowerCase() === "dirty") { dirty = true; parts.pop(); }
+      const n = parts.length;
+      if (n >= 2 && /^\d+$/.test(parts[n - 2]) && /^g[0-9a-f]+$/i.test(parts[n - 1])) {
+        commits = Number(parts[n - 2]); hash = parts[n - 1].slice(1); parts.splice(n - 2, 2);
+      }
+      if (parts.some((p) => p === "")) return null;
+      return { major: nums[0], minor: nums[1], patch: nums[2], pre: parts, commits, hash, dirty, raw: str.trim() };
+    }
+    // Numeric major.minor.patch, then pre-release identifiers (a version with a
+    // pre-release tag sorts before the same version without one). Ignores the
+    // `-N-g<hash>` dev suffix; see compareFirmware() for that.
+    function compareVersionCore(a, b) {
+      for (const k of ["major", "minor", "patch"]) if (a[k] !== b[k]) return a[k] < b[k] ? -1 : 1;
+      if (!a.pre.length || !b.pre.length) return a.pre.length === b.pre.length ? 0 : (a.pre.length ? -1 : 1);
+      for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+        const x = a.pre[i], y = b.pre[i];
+        if (x === undefined) return -1;
+        if (y === undefined) return 1;
+        const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+        if (xn && yn) { if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1; }
+        else if (xn !== yn) return xn ? -1 : 1;
+        else if (x !== y) return x < y ? -1 : 1;
+      }
+      return 0;
+    }
+    // Compare the running firmware (git describe) with the latest release tag.
+    //   status: "update"  - the release is newer than the running base version
+    //           "current" - same version, no dev suffix
+    //           "dev"     - a build with commits on top of the release (or newer) base
+    //           "ahead"   - a plain version newer than the latest release
+    //           "unknown" - one of the strings could not be parsed
+    function compareFirmware(running, latestTag) {
+      const r = parseVersion(running), l = parseVersion(latestTag);
+      if (!r || !l) return { status: "unknown", running: r, latest: l, cmp: null };
+      const cmp = compareVersionCore(r, l);
+      let status;
+      if (cmp < 0) status = "update";
+      else if (r.commits > 0 || r.dirty) status = "dev";
+      else status = cmp > 0 ? "ahead" : "current";
+      return { status, running: r, latest: l, cmp };
+    }
+
+    // ---- GitHub release JSON -> { tag, name, htmlUrl, publishedAt, asset } ----------
+    // The release workflow attaches build/*.bin; the app image is the one named
+    // after the project. Bootloader / partition-table / OTA-data images are never
+    // flashable through the OTA module.
+    const ASSET_SKIP = /bootloader|partition[-_]?table|partitions|ota_data/i;
+    function pickFirmwareAsset(assets) {
+      if (!Array.isArray(assets)) return null;
+      const bins = assets.filter((a) => a && typeof a.name === "string" && /\.bin$/i.test(a.name) &&
+                                        !ASSET_SKIP.test(a.name) &&
+                                        typeof a.browser_download_url === "string" && /^https:\/\/github\.com\//.test(a.browser_download_url));
+      const chosen = bins.find((a) => /esp-usb-ble-hid/i.test(a.name)) || bins[0];
+      if (!chosen) return null;
+      return { name: chosen.name, size: Number(chosen.size) > 0 ? Number(chosen.size) : 0, url: chosen.browser_download_url };
+    }
+    function normalizeRelease(json) {
+      if (!json || typeof json !== "object" || typeof json.tag_name !== "string" || !json.tag_name) return null;
+      const htmlUrl = typeof json.html_url === "string" && /^https:\/\/github\.com\//.test(json.html_url) ? json.html_url : "";
+      return {
+        tag: json.tag_name,
+        name: typeof json.name === "string" ? json.name : "",
+        htmlUrl,
+        publishedAt: typeof json.published_at === "string" ? json.published_at : "",
+        prerelease: !!json.prerelease,
+        asset: pickFirmwareAsset(json.assets),
+      };
+    }
+
     // Exported for node-side unit checks (harmless in the browser).
     const DongleProto = { crc32, buildFrame, StreamParser, encodeSettings, decodeSettings, parseInfo,
                           parseBonds, encodeForgetBond, bondAddressString,
                           parseDiscovery, parseDeviceError, parseCodeMessageError, parseOtaStatus, extractElf,
+                          parseVersion, compareVersionCore, compareFirmware, pickFirmwareAsset, normalizeRelease,
                           MODULE, DEV, OTA, CD, DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE };
     if (typeof module !== "undefined" && module.exports) module.exports = DongleProto;
   </script>
@@ -932,12 +1073,14 @@
     const els = {};
     for (const id of ["status", "devBadge", "connectBtn", "anyBtn", "unsupported",
                       "infoAuto", "infoBtn", "bUsb", "bBle", "bScan", "bPair",
-                      "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iHardware", "iIdf", "infoNote",
+                      "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iUpdate", "iHardware", "iIdf", "infoNote",
+                      "lBle", "lUsb", "linkNote",
                       "bondsCount", "bondsRefresh", "bondsList", "bondsConfirm", "bondsNote",
                       "settingsDirty", "settingsReload", "settingsForm", "settingsApply", "settingsReset", "settingsConfirm", "settingsNote",
                       "actPair", "actForget", "actReboot", "actionConfirm", "actionNote",
                       "otaStatusBtn", "otaFw", "otaRollback", "verifyPanel", "verifyText", "markValidBtn", "rollbackBtn",
                       "markValidBtn2", "rollbackBtn2", "otaConfirm", "otaStatusNote",
+                      "updateChecked", "checkUpdatesBtn", "updateStatus", "installReleaseBtn", "installReleaseInfo", "installConfirm",
                       "fileInput", "fileInfo", "chunkSize", "uploadBtn", "abortBtn", "otaFill", "otaBytes", "otaPercent", "otaRate", "otaNote",
                       "cdInfo", "cdRefreshBtn", "cdReport", "cdElfBtn", "cdRawBtn", "cdEraseBtn", "cdConfirm", "cdFill", "cdBytes", "cdPercent", "cdRate", "cdNote",
                       "cmdCoredump", "logFrames", "clearLogBtn", "log"]) {
@@ -1242,6 +1385,7 @@
       await t.close();
       parser.reset();
       discovered = null;
+      clearLink();
       updateUI();
       setStatus("", "Disconnected");
       logLine("sys", "Disconnected.");
@@ -1253,6 +1397,7 @@
       Promise.resolve(t.close()).catch(() => {});
       parser.reset();
       discovered = null;
+      clearLink();
       updateUI();
       if (expectRestart) {
         setStatus("busy", "Dongle restarting…");
@@ -1422,6 +1567,9 @@
       if (moduleAvailable(MODULE.OTA)) await checkOtaStatus(true);
       if (moduleAvailable(MODULE.COREDUMP) && activeTab === "coredump") await refreshCoreDump();
       if (transport) setStatus("connected", "Connected");
+      // Firmware version is known now (INFO / OTA STATUS): compare it with the
+      // latest GitHub release in the background (cached for 10 min).
+      checkForUpdates(false).catch(() => {});
     }
 
     async function runDiscovery() {
@@ -1481,6 +1629,8 @@
       els.markValidBtn.disabled = !ota || busy;
       els.rollbackBtn.disabled = !ota || busy;
       els.chunkSize.disabled = uploading;
+      els.checkUpdatesBtn.disabled = updateChecking;
+      els.installReleaseBtn.disabled = !(ota && !busy && latestRelease && latestRelease.asset);
 
       const cd = connected && moduleAvailable(MODULE.COREDUMP);
       els.cdRefreshBtn.disabled = !cd || busy;
@@ -1522,7 +1672,58 @@
       els.iFirmware.textContent = info.firmware || "—";
       els.iHardware.textContent = info.hardware || "—";
       els.iIdf.textContent = info.idf || "—";
+      renderLink(info);
       setNote(els.infoNote, "muted", "Updated " + new Date().toLocaleTimeString() + (info.version !== DEV_PROTOCOL_VERSION ? " · protocol v" + info.version : ""));
+      // The 2 s poll re-renders INFO constantly; only redo the release comparison
+      // when the firmware string actually changed (first INFO, or after an update).
+      if (info.firmware !== updateComparedWith) renderUpdateStatus();
+    }
+
+    // ---- link diagnostics: BLE input (controller -> dongle) / USB output (dongle -> host) ----
+    // Answers "controller connected but no inputs?": is the controller actually
+    // notifying, and has the USB host finished the Pro Controller handshake?
+    const BLE_STALE_MS = 5000;
+    function formatAge(ms) {
+      if (ms < 1000) return "<1 s ago";
+      if (ms < 10000) return (ms / 1000).toFixed(1) + " s ago";
+      if (ms < 120000) return Math.round(ms / 1000) + " s ago";
+      return formatUptime(Math.floor(ms / 1000)) + " ago";
+    }
+    function renderLink(info) {
+      const stats = !!info.hasLinkStats;
+      const problems = [];
+      let bleText = "—", bleTone = "";
+      if (info.bleConnected) {
+        if (!stats) { bleText = "connected (this firmware reports no link counters)"; }
+        else if (info.bleLastNotifyAgeMs === INFO_NEVER || info.bleNotifications === 0) {
+          bleText = "none since connect"; bleTone = "warn";
+          problems.push("Controller is connected but has not sent any input yet — press a button, or power-cycle it.");
+        } else {
+          const stale = info.bleLastNotifyAgeMs > BLE_STALE_MS;
+          bleText = info.bleNotifications.toLocaleString() + (info.bleNotifications === 1 ? " notification" : " notifications") + ", last " + formatAge(info.bleLastNotifyAgeMs);
+          bleTone = stale ? "warn" : "ok";
+          if (stale) problems.push("Controller is connected but has not sent input for " + Math.round(info.bleLastNotifyAgeMs / 1000) + " s — try a button, or power-cycle it.");
+        }
+      }
+      let usbText = "not mounted", usbTone = "";
+      if (info.usbMounted) {
+        if (info.usbHidReady) {
+          usbText = "handshake done" + (stats ? ", " + info.usbHidReports.toLocaleString() + (info.usbHidReports === 1 ? " report" : " reports") + " sent" : "");
+          usbTone = "ok";
+        } else {
+          usbText = "waiting for host handshake"; usbTone = "warn";
+          problems.push("Host has not enabled input reports yet — the Pro Controller handshake is not finished (if it stays like this, replug the dongle).");
+        }
+      }
+      els.lBle.textContent = bleText; els.lBle.className = bleTone;
+      els.lUsb.textContent = usbText; els.lUsb.className = usbTone;
+      els.linkNote.hidden = !problems.length;
+      setNote(els.linkNote, problems.length ? "warn" : "muted", problems.join(" "));
+    }
+    function clearLink() {
+      els.lBle.textContent = "—"; els.lBle.className = "";
+      els.lUsb.textContent = "—"; els.lUsb.className = "";
+      els.linkNote.hidden = true; setNote(els.linkNote, "muted", "");
     }
 
     async function refreshInfo(quiet) {
@@ -1918,16 +2119,15 @@
     });
 
     // ---- upload flow: BEGIN -> DATA... -> FINISH (ABORT on request / failure) -----
-    els.uploadBtn.addEventListener("click", async () => {
-      const file = els.fileInput.files && els.fileInput.files[0];
-      if (!transport || !file || busy) return;
-      if (file.size === 0) { logLine("err", "Refusing to flash an empty file."); return; }
-      if (file.size > MAX_IMAGE_SIZE) { logLine("err", "Refusing to flash: file is larger than any ESP flash."); return; }
-      let image;
-      try { image = new Uint8Array(await file.arrayBuffer()); }
-      catch (e) { logLine("err", "Could not read " + file.name + ": " + e.message); return; }
+    // Shared by the file picker ("Flash firmware") and the GitHub release installer
+    // ("Download and install"): `image` is the complete app .bin, `name` is only
+    // used for messages.
+    async function flashImage(name, image) {
+      if (!transport || busy || !moduleAvailable(MODULE.OTA)) return;
+      if (!image || image.length === 0) { logLine("err", "Refusing to flash an empty image (" + name + ")."); return; }
+      if (image.length > MAX_IMAGE_SIZE) { logLine("err", "Refusing to flash " + name + ": it is larger than any ESP flash."); return; }
       if (image[0] !== ESP_IMAGE_MAGIC) {
-        logLine("warn", file.name + " starts with 0x" + image[0].toString(16).padStart(2, "0") + ", not the ESP image magic 0xE9 — " +
+        logLine("warn", name + " starts with 0x" + image[0].toString(16).padStart(2, "0") + ", not the ESP image magic 0xE9 — " +
                 "this does not look like an app image; the dongle will reject it on the first chunk.");
       }
       const chunkSize = Math.min(MAX_PAYLOAD, Math.max(64, Number(els.chunkSize.value) || 1024));
@@ -1945,7 +2145,7 @@
       if (!beforeFirmware) { const st0 = await checkOtaStatus(true); if (st0) beforeFirmware = st0.firmware; }
 
       try {
-        logLine("sys", "BEGIN: " + file.name + ", " + image.length.toLocaleString() + " bytes (the dongle erases its update partition — this takes a few seconds)…");
+        logLine("sys", "BEGIN: " + name + ", " + image.length.toLocaleString() + " bytes (the dongle erases its update partition — this takes a few seconds)…");
         await transact(MODULE.OTA, OTA.BEGIN, u32(image.length), { expect: [OTA.OK], timeoutMs: OTA_BEGIN_TIMEOUT_MS, quiet: true });
         logLine("sys", "Dongle ready; streaming " + chunkSize + " B chunks, one in flight…");
         while (sent < image.length) {
@@ -1987,12 +2187,247 @@
         busy = false; uploading = false;
         updateUI();
       }
+    }
+    els.uploadBtn.addEventListener("click", async () => {
+      const file = els.fileInput.files && els.fileInput.files[0];
+      if (!transport || !file || busy) return;
+      if (file.size === 0) { logLine("err", "Refusing to flash an empty file."); return; }
+      if (file.size > MAX_IMAGE_SIZE) { logLine("err", "Refusing to flash: file is larger than any ESP flash."); return; }
+      let image;
+      try { image = new Uint8Array(await file.arrayBuffer()); }
+      catch (e) { logLine("err", "Could not read " + file.name + ": " + e.message); return; }
+      await flashImage(file.name, image);
     });
     els.abortBtn.addEventListener("click", () => {
       if (!uploading) return;
       abortRequested = true;
       logLine("sys", "Abort requested; stopping after the in-flight chunk…");
     });
+
+    // ---- update check against GitHub Releases ----------------------------------------
+    // The only network access on this page: GET the latest release (unauthenticated,
+    // CORS-enabled) and, on request, its app .bin asset. Results are cached in
+    // localStorage for RELEASE_CACHE_MS so a reload does not re-hit the API.
+    const GITHUB_REPO = "finger563/esp-usb-ble-hid";
+    const GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/" + GITHUB_REPO + "/releases/latest";
+    const RELEASE_CACHE_KEY = "dongle_console.latest_release";
+    const RELEASE_CACHE_MS = 10 * 60 * 1000;
+    let latestRelease = null;        // normalized release from the last successful check (or cache)
+    let latestCheckedAt = 0;
+    let updateCheckError = "";       // message of the last failed check ("" when the last check succeeded)
+    let updateChecking = false;
+    let updateComparedWith = null;   // firmware string the status line was last rendered against
+
+    function loadCachedRelease() {
+      try {
+        const raw = localStorage.getItem(RELEASE_CACHE_KEY);
+        if (!raw) return null;
+        const c = JSON.parse(raw);
+        if (!c || typeof c.checkedAt !== "number" || !c.release || typeof c.release.tag !== "string") return null;
+        return c;
+      } catch (_) { return null; }
+    }
+    function storeCachedRelease(release, checkedAt) {
+      try { localStorage.setItem(RELEASE_CACHE_KEY, JSON.stringify({ checkedAt, release })); } catch (_) {}
+    }
+    // INFO's `firmware` (git describe) is authoritative; fall back to the OTA
+    // STATUS version, then the discovery string, for firmware without module 0x10.
+    function runningFirmwareVersion() {
+      if (lastInfo && lastInfo.firmware) return lastInfo.firmware;
+      if (lastOtaStatus && lastOtaStatus.version) return lastOtaStatus.version;
+      if (discovered && discovered.fw) return discovered.fw;
+      return "";
+    }
+    function formatBytes(n) {
+      if (!(n > 0)) return "unknown size";
+      const kib = n / 1024;
+      return (kib >= 1024 ? (kib / 1024).toFixed(2) + " MiB" : kib.toFixed(0) + " KiB") + " (" + n.toLocaleString() + " bytes)";
+    }
+    function releaseDate(iso) { return /^\d{4}-\d{2}-\d{2}/.test(iso || "") ? iso.slice(0, 10) : ""; }
+    function releaseLink(rel) {
+      if (!rel.htmlUrl) return null;
+      const a = document.createElement("a");
+      a.href = rel.htmlUrl; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.textContent = "release notes ↗";
+      a.title = rel.name ? rel.name : rel.tag;
+      return a;
+    }
+
+    // Fills the Device INFO row (#iUpdate) and the Firmware tab line (#updateStatus)
+    // with the same status, and shows / hides the "Download and install" button.
+    function renderUpdateStatus() {
+      const rel = latestRelease;
+      const running = runningFirmwareVersion();
+      updateComparedWith = running || null;
+      let badge = "", badgeText = "", text = "", tone = "muted", link = null;
+      if (!rel) {
+        if (updateChecking) text = "Checking GitHub for the latest release…";
+        else if (updateCheckError) { text = "Update check failed: " + updateCheckError; tone = "warn"; }
+        else text = "Latest release: not checked yet.";
+      } else {
+        const when = releaseDate(rel.publishedAt);
+        const relLabel = rel.tag + (when ? " (released " + when + ")" : "");
+        const cmp = running ? compareFirmware(running, rel.tag) : null;
+        link = releaseLink(rel);
+        if (!cmp) {
+          text = "Latest release: " + relLabel + " — connect the dongle to compare with its firmware";
+        } else switch (cmp.status) {
+          case "update":
+            badge = "new"; badgeText = "Update available"; tone = "";
+            text = "Update available: " + relLabel; break;
+          case "current":
+            badge = "on"; badgeText = "Up to date"; tone = "";
+            text = "Up to date (" + rel.tag + ")"; break;
+          case "dev":
+            badge = "dev"; badgeText = "Development build"; tone = "";
+            text = "Running a development build (" + running + ") newer than the latest release " + rel.tag; break;
+          case "ahead":
+            badge = "dev"; badgeText = "Newer than release"; tone = "";
+            text = "Running " + running + ", newer than the latest release " + rel.tag; break;
+          default:
+            tone = "warn";
+            text = "Latest release: " + relLabel + " — cannot compare it with the running firmware “" + running + "”";
+        }
+      }
+      for (const [el, base] of [[els.iUpdate, ""], [els.updateStatus, "update-line small-text"]]) {
+        el.textContent = "";
+        el.className = (base + " " + tone).trim();
+        if (badgeText) { const b = document.createElement("span"); b.className = "badge " + badge; b.textContent = badgeText; el.appendChild(b); }
+        el.appendChild(document.createTextNode(text));
+        if (link) { el.appendChild(document.createTextNode(" — ")); el.appendChild(link.cloneNode(true)); }
+      }
+      if (updateChecking) els.updateChecked.textContent = "checking…";
+      else if (updateCheckError && rel) { els.updateChecked.textContent = "last check failed (showing cached result)"; els.updateChecked.title = updateCheckError; }
+      else { els.updateChecked.textContent = latestCheckedAt ? "checked " + new Date(latestCheckedAt).toLocaleTimeString() : ""; els.updateChecked.title = ""; }
+      els.updateChecked.className = "small-text " + (updateCheckError && rel ? "warn" : "muted");
+
+      const asset = rel && rel.asset;
+      els.installReleaseBtn.hidden = !asset;
+      els.installReleaseInfo.hidden = !asset;
+      if (asset) {
+        els.installReleaseBtn.textContent = "Download and install " + rel.tag;
+        els.installReleaseBtn.title = asset.url;
+        const cmp = running ? compareFirmware(running, rel.tag) : null;
+        els.installReleaseBtn.classList.toggle("primary", !!cmp && cmp.status === "update");
+        els.installReleaseInfo.textContent = asset.name + " · " + formatBytes(asset.size);
+      }
+      updateUI();
+    }
+
+    async function checkForUpdates(force) {
+      if (updateChecking) return;
+      if (!force) {
+        const cached = loadCachedRelease();
+        if (cached && Date.now() - cached.checkedAt < RELEASE_CACHE_MS) {
+          latestRelease = cached.release; latestCheckedAt = cached.checkedAt; updateCheckError = "";
+          logLine("sys", "Latest GitHub release: " + cached.release.tag + " (cached " + Math.max(0, Math.round((Date.now() - cached.checkedAt) / 60000)) + " min ago; “Check for updates” re-queries).");
+          renderUpdateStatus();
+          return;
+        }
+      }
+      if (typeof fetch !== "function") { updateCheckError = "fetch() is not available in this browser."; renderUpdateStatus(); return; }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) { updateCheckError = "the browser is offline."; logLine("warn", "Update check skipped: the browser is offline."); renderUpdateStatus(); return; }
+      updateChecking = true; updateCheckError = "";
+      renderUpdateStatus();
+      try {
+        const res = await fetch(GITHUB_LATEST_RELEASE_URL, { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
+        if (res.status === 403 || res.status === 429) {
+          const remaining = res.headers.get("x-ratelimit-remaining");
+          const reset = Number(res.headers.get("x-ratelimit-reset")) || 0;
+          if (remaining === "0" || res.status === 429)
+            throw new Error("GitHub API rate limit reached" + (reset ? " (resets at " + new Date(reset * 1000).toLocaleTimeString() + ")" : "") + " — try again later.");
+          throw new Error("GitHub API refused the request (HTTP 403).");
+        }
+        if (res.status === 404) throw new Error("no published release found for " + GITHUB_REPO + ".");
+        if (!res.ok) throw new Error("GitHub API returned HTTP " + res.status + ".");
+        const rel = normalizeRelease(await res.json());
+        if (!rel) throw new Error("unexpected release JSON from GitHub.");
+        latestRelease = rel; latestCheckedAt = Date.now();
+        storeCachedRelease(rel, latestCheckedAt);
+        logLine("sys", "Latest GitHub release: " + rel.tag + (rel.name && rel.name !== rel.tag ? " “" + rel.name + "”" : "") +
+                (releaseDate(rel.publishedAt) ? ", released " + releaseDate(rel.publishedAt) : "") +
+                (rel.asset ? " — app image " + rel.asset.name + " (" + formatBytes(rel.asset.size) + ")." : " — no app .bin asset attached; flash a local build instead."));
+      } catch (e) {
+        updateCheckError = (e && e.name === "TypeError")   // fetch() rejects with a TypeError on network / CORS failures
+          ? "could not reach api.github.com (offline, blocked, or CORS): " + e.message
+          : (e && e.message ? e.message : String(e));
+        logLine("warn", "Update check failed: " + updateCheckError);
+        if (!latestRelease) { const cached = loadCachedRelease(); if (cached) { latestRelease = cached.release; latestCheckedAt = cached.checkedAt; } }
+      } finally {
+        updateChecking = false;
+        renderUpdateStatus();
+      }
+    }
+    els.checkUpdatesBtn.addEventListener("click", () => checkForUpdates(true));
+
+    // Fetch the release asset (browser_download_url 302s to objects.githubusercontent.com,
+    // which allows CORS), showing progress on the OTA bar, and return its bytes.
+    async function downloadAsset(asset) {
+      const res = await fetch(asset.url, { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status + " while fetching " + asset.name);
+      const total = asset.size || Number(res.headers.get("content-length")) || 0;
+      if (!res.body || typeof res.body.getReader !== "function") return new Uint8Array(await res.arrayBuffer());
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value); got += value.length;
+        if (got > MAX_IMAGE_SIZE) { try { reader.cancel(); } catch (_) {} throw new Error(asset.name + " is larger than any ESP flash"); }
+        otaProgress(got, total);
+        setNote(els.otaNote, "muted", "Downloading " + asset.name + " — " + got.toLocaleString() + (total ? " / " + total.toLocaleString() : "") + " bytes…");
+      }
+      const out = new Uint8Array(got);
+      let off = 0;
+      for (const c of chunks) { out.set(c, off); off += c.length; }
+      return out;
+    }
+
+    async function installRelease() {
+      const rel = latestRelease, asset = rel && rel.asset;
+      if (!transport || busy || !asset || !moduleAvailable(MODULE.OTA)) return;
+      const running = runningFirmwareVersion();
+      const cmp = running ? compareFirmware(running, rel.tag) : null;
+      const caveat = cmp && (cmp.status === "dev" || cmp.status === "ahead") ? " The dongle currently runs a newer build (" + running + ")."
+                   : cmp && cmp.status === "current" ? " The dongle already runs this version." : "";
+      const ok = await askConfirm(els.installConfirm, els.installReleaseBtn,
+        "Download " + asset.name + " (" + formatBytes(asset.size) + ") from GitHub release " + rel.tag + " and flash it onto the dongle?" + caveat +
+        " The running firmware is replaced and the dongle reboots.",
+        "Download and install");
+      if (!ok || !transport || busy) return;
+      busy = true; updateUI(); setStatus("busy", "Downloading…");
+      els.otaFill.className = "progress-fill"; els.otaFill.style.width = "0%";
+      els.otaPercent.textContent = "0%"; els.otaRate.textContent = "-";
+      setNote(els.otaNote, "muted", "Downloading " + asset.name + "…");
+      logLine("sys", "Downloading " + asset.name + " (" + formatBytes(asset.size) + ") from " + asset.url + " …");
+      let image;
+      try {
+        image = await downloadAsset(asset);
+      } catch (e) {
+        busy = false; updateUI();
+        if (transport) setStatus("connected", "Connected");
+        els.otaFill.className = "progress-fill failed";
+        const why = (e && e.name === "TypeError") ? "the browser could not fetch it (network error or CORS blocked the download)" : e.message;
+        logLine("err", "Download of " + asset.name + " failed: " + why);
+        // Fallback: a direct link + the manual picker, rendered as DOM (no HTML strings).
+        els.otaNote.className = "note small-text err";
+        els.otaNote.textContent = "Download failed: " + why + ". ";
+        const a = document.createElement("a");
+        a.href = asset.url; a.target = "_blank"; a.rel = "noopener noreferrer"; a.download = asset.name;
+        a.textContent = "Download " + asset.name + " ↗";
+        els.otaNote.appendChild(a);
+        els.otaNote.appendChild(document.createTextNode(" manually, then pick it with “Choose .bin file” and click Flash firmware."));
+        return;
+      }
+      busy = false;
+      if (asset.size && image.length !== asset.size)
+        logLine("warn", "Downloaded " + image.length.toLocaleString() + " bytes but GitHub lists " + asset.name + " as " + asset.size.toLocaleString() + " bytes.");
+      logLine("ok", "Downloaded " + asset.name + " (" + image.length.toLocaleString() + " bytes); flashing…");
+      if (!transport) { logLine("err", "The dongle disconnected during the download; nothing was flashed."); updateUI(); return; }
+      await flashImage(asset.name, image);
+    }
+    els.installReleaseBtn.addEventListener("click", installRelease);
 
     // =====================================================================
     // Crash dump tab (module 4 = espp CoreDumpService)
@@ -2124,6 +2559,13 @@
 
     // ---- ready ------------------------------------------------------------------------
     updateUI();
+    {
+      // Show a still-fresh cached release check right away (no API call; the
+      // comparison is filled in once the dongle's INFO arrives).
+      const cached = loadCachedRelease();
+      if (cached && Date.now() - cached.checkedAt < RELEASE_CACHE_MS) { latestRelease = cached.release; latestCheckedAt = cached.checkedAt; }
+      renderUpdateStatus();
+    }
     logLine("sys", "Dongle Console ready. Plug in the dongle and click “Connect dongle” (it shows up as a Nintendo Switch Pro Controller, 057e:2009).");
   </script>
 </body>

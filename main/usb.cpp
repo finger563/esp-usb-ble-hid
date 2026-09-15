@@ -24,6 +24,7 @@ static espp::Logger logger({.tag = "USB", .level = espp::Logger::Verbosity::INFO
 static std::unique_ptr<espp::UsbDevice> usb;
 static std::shared_ptr<espp::SwitchPro> controller;
 static std::atomic<bool> mounted{false};
+static std::atomic<uint32_t> hid_reports_sent{0}; // input reports accepted by TinyUSB
 
 // --- HID TX: handshake replies + the streamed input report ---------------------
 //
@@ -72,8 +73,9 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
       std::this_thread::sleep_for(1ms);
   } else if (controller->is_ready()) {
     const auto report = controller->get_input_report();
-    if (!report.empty())
-      usb->write_hid_report(controller->input_report_id(), report, ec); // best-effort
+    if (!report.empty() &&
+        usb->write_hid_report(controller->input_report_id(), report, ec)) // best-effort
+      hid_reports_sent.fetch_add(1);
   }
   return false; // don't stop the task
 }
@@ -153,6 +155,10 @@ void usb_set_rx_overflow_callback(std::function<void()> callback) {
 }
 
 bool usb_is_mounted() { return mounted.load(); }
+
+bool usb_hid_ready() { return mounted.load() && controller && controller->is_ready(); }
+
+uint32_t usb_hid_reports_sent() { return hid_reports_sent.load(); }
 
 bool usb_write_vendor(std::span<const uint8_t> frame) {
 #if CONFIG_DONGLE_USB_VENDOR_INTERFACE

@@ -1,5 +1,11 @@
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <mutex>
+#include <unordered_map>
+
+#include "esp_timer.h"
 
 #include "ble.hpp"
 #include "bsp.hpp"
@@ -14,15 +20,34 @@ static std::unique_ptr<espp::Timer> scanTimer;
 // read from other tasks (the USB RX worker's status queries), written by the
 // BLE callbacks / scan timer: keep them atomic
 static std::atomic<bool> subscribed{false};
+// the link is encrypted (bonded / re-bonded); protected HID characteristics are
+// only discoverable + subscribable after this
+static std::atomic<bool> authenticated{false};
+static std::atomic<int64_t> connected_at_us{0};
+static std::atomic<uint8_t> subscribe_attempts{0};
+
+// link diagnostics, exposed to the console (a "connected but no inputs" report
+// is much easier to chase when it says whether notifications are arriving)
+static std::atomic<uint32_t> notification_count{0};
+static std::atomic<int64_t> last_notify_us{-1};
 
 static NimBLEUUID hid_service_uuid(espp::HidService::SERVICE_UUID);
 static NimBLEUUID hid_input_uuid(espp::HidService::REPORT_UUID);
+static NimBLEUUID report_reference_uuid(espp::HidService::REPORT_DESCRIPTOR_UUID); // 0x2908
 
 static NimBLEUUID battery_service_uuid(espp::BatteryService::BATTERY_SERVICE_UUID);
 static NimBLEUUID battery_level_uuid(espp::BatteryService::BATTERY_LEVEL_CHAR_UUID);
 
 static std::atomic<bool> is_pairing{true};
 static notify_callback_t notify_callback = nullptr;
+static disconnect_callback_t disconnect_callback = nullptr;
+
+// Which HID report id each subscribed characteristic carries (from its Report
+// Reference descriptor), so the app can route a notification by report id
+// instead of assuming every notification is the gamepad input report. Cleared
+// on disconnect (the characteristic objects die with the client).
+static std::mutex report_map_mutex;
+static std::unordered_map<const NimBLERemoteCharacteristic *, uint8_t> report_ids;
 
 // The controller's name, reported to the app once it is connected + subscribed
 // (see ble_set_bond_name_callback). The advertised name is captured when we
@@ -34,6 +59,8 @@ static std::string advertised_name;
 
 static NimBLEUUID generic_access_service_uuid(espp::GenericAccessService::SERVICE_UUID);
 static NimBLEUUID device_name_uuid(espp::GenericAccessService::NAME_CHAR_UUID);
+
+static espp::Logger ble_logger({.tag = "BLE", .level = espp::Logger::Verbosity::INFO});
 
 // Read the connected controller's name: GAP Device Name, else the name it
 // advertised, else "". Control characters are stripped and the result capped
@@ -57,6 +84,34 @@ static std::string read_controller_name(NimBLEClient *client) {
       break;
   }
   return clean;
+}
+
+// Forget everything about the current link. Called from the NimBLE host task
+// (disconnect callback) and from the scan timer (missed disconnect); the app is
+// told through the disconnect callback so it can neutralize its inputs.
+static void reset_link_state(const char *why) {
+  const bool was_subscribed = subscribed.exchange(false);
+  authenticated = false;
+  subscribe_attempts = 0;
+  {
+    std::lock_guard<std::mutex> lk(report_map_mutex);
+    report_ids.clear();
+  }
+  if (was_subscribed) {
+    ble_logger.info("controller link down ({}); {} notifications received", why,
+                    notification_count.load());
+    if (disconnect_callback)
+      disconnect_callback();
+  }
+}
+
+// Every subscribed characteristic notifies through here: count it, then hand
+// it to the app.
+static void on_notify(NimBLERemoteCharacteristic *chr, uint8_t *data, size_t len, bool is_notify) {
+  notification_count.fetch_add(1);
+  last_notify_us.store(esp_timer_get_time());
+  if (notify_callback)
+    notify_callback(chr, data, len, is_notify);
 }
 
 // LED configuration for BLE pairing / reconnecting
@@ -95,6 +150,9 @@ class ClientCallbacks : public NimBLEClientCallbacks {
       espp::Logger({.tag = "BLE Client Callbacks", .level = espp::Logger::Verbosity::INFO});
   void onConnect(NimBLEClient *pClient) override {
     logger.info("connected to: {}", pClient->getPeerAddress().toString());
+    authenticated = false;
+    subscribe_attempts = 0;
+    connected_at_us = esp_timer_get_time();
     static constexpr bool async = true;
     // set the connection parameters now that we've connected
     pClient->setConnectionParams(min_conn_interval, max_conn_interval, latency,
@@ -110,11 +168,12 @@ class ClientCallbacks : public NimBLEClientCallbacks {
   void onDisconnect(NimBLEClient *pClient, int reason) override {
     logger.info("{} Disconnected, reason = {} - Starting scan",
                 pClient->getPeerAddress().toString(), reason);
+    // drop the link state (and neutralize the app's inputs) BEFORE scanning again
+    reset_link_state("disconnected");
     // if we are not scanning, then start scanning
     if (!NimBLEDevice::getScan()->isScanning()) {
       start_ble_reconnection_thread(notify_callback);
     }
-    subscribed = false;
   }
 
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override {
@@ -128,6 +187,8 @@ class ClientCallbacks : public NimBLEClientCallbacks {
       // set the connection parameters
       NimBLEDevice::getClientByHandle(connInfo.getConnHandle())
           ->updateConnParams(min_conn_interval, max_conn_interval, latency, supervision_timeout);
+      // the protected HID characteristics can be discovered + subscribed now
+      authenticated = true;
     }
   }
 };
@@ -207,7 +268,7 @@ std::string get_connected_client_serial_number() {
   // get the serial number characteristic
   auto chr = svc->getCharacteristic(espp::DeviceInfoService::SERIAL_NUMBER_CHAR_UUID);
   // make sure we can read it
-  if (!chr->canRead()) {
+  if (!chr || !chr->canRead()) {
     return {};
   }
   // and read it
@@ -217,68 +278,125 @@ std::string get_connected_client_serial_number() {
 
 static ScanCallbacks scanCallbacks;
 
+// Subscribe to every HID *input* report the controller notifies (a gamepad may
+// expose several: e.g. the Xbox controller's gamepad report and a separate
+// report for the Xbox button). The report id of each comes from its Report
+// Reference descriptor (0x2908: [report_id][report_type], type 1 = input);
+// without that descriptor the characteristic is assumed to be the main input
+// report. Returns the number of characteristics subscribed.
+static size_t subscribe_input_reports(NimBLEClient *client) {
+  static constexpr bool refresh = true;
+  client->getServices(refresh);
+  auto *svc = client->getService(hid_service_uuid);
+  if (!svc) {
+    ble_logger.warn("HID service not found (yet)");
+    return 0;
+  }
+  size_t count = 0;
+  for (auto *chr : svc->getCharacteristics(refresh)) {
+    if (chr->getUUID() != hid_input_uuid || !chr->canNotify())
+      continue;
+    uint8_t report_id = 1;
+    if (auto *ref = chr->getDescriptor(report_reference_uuid)) {
+      const auto value = ref->readValue();
+      if (value.size() >= 2) {
+        report_id = value.data()[0];
+        const uint8_t report_type = value.data()[1];
+        if (report_type != 1) // 1 = input; skip output / feature reports
+          continue;
+      }
+    }
+    if (!chr->subscribe(true, on_notify)) {
+      ble_logger.warn("could not subscribe to input report {}", report_id);
+      continue;
+    }
+    {
+      std::lock_guard<std::mutex> lk(report_map_mutex);
+      report_ids[chr] = report_id;
+    }
+    ble_logger.info("subscribed to HID input report id {} (handle {:#06x})", report_id,
+                    chr->getHandle());
+    ++count;
+  }
+  return count;
+}
+
 static bool timer_callback() {
+  auto pClients = NimBLEDevice::getConnectedClients();
+
   if (subscribed) {
+    // A disconnect callback can be missed (e.g. the client object went away):
+    // never leave the link marked up when nothing is connected.
+    if (pClients.empty())
+      reset_link_state("no connected client");
     return false; // don't stop the timer
   }
 
-  auto pClients = NimBLEDevice::getConnectedClients();
-
   // if there are no clients, then ensure we're scanning and return.
-  if (!pClients.size()) {
+  if (pClients.empty()) {
     if (!NimBLEDevice::getScan()->isScanning()) {
       start_ble_reconnection_thread(notify_callback);
     }
     return false; // don't stop the timer
   }
 
-  // try to subscribe to notifications for each connected client
-  for (auto &pClient : pClients) {
-    static constexpr bool refresh = true;
-    // refresh services
-    pClient->getServices(refresh);
-    auto pSvc = pClient->getService(hid_service_uuid);
-    if (pSvc) {
-      // refresh chars
-      pSvc->getCharacteristics(refresh);
-      auto pChr = pSvc->getCharacteristic(hid_input_uuid);
-      if (!pChr) {
-        continue;
-      }
-      // subscribe to the characteristic
-      if (!pChr->subscribe(pChr->canNotify(), notify_callback)) {
-        pClient->disconnect();
-      } else {
-        subscribed = true;
-      }
-      if (subscribed) {
-        // we were able to get the HID service and subscribe, so also subscribe
-        // to the battery service if it exists.
-        auto pBatterySvc = pClient->getService(battery_service_uuid);
-        if (pBatterySvc) {
-          pBatterySvc->getCharacteristics(refresh);
-          auto pBatteryChr = pBatterySvc->getCharacteristic(battery_level_uuid);
-          if (pBatteryChr) {
-            // ignore success here since it's not high priority
-            pBatteryChr->subscribe(pBatteryChr->canNotify(), notify_callback);
-          }
-        }
-        // and report the controller's name for the paired-controller list
-        if (bond_name_callback) {
-          const NimBLEAddress id = pClient->getConnInfo().getIdAddress();
-          std::array<uint8_t, 6> address{};
-          std::copy(id.getVal(), id.getVal() + address.size(), address.begin());
-          bond_name_callback(address, id.getType(), read_controller_name(pClient));
-        }
-      }
+  auto *pClient = pClients.front();
+  if (!pClient->isConnected())
+    return false;
+
+  // The HID input reports are protected: wait for the bond/encryption to
+  // complete before discovering and subscribing (trying earlier used to fail
+  // and, worse, delete the bond). Give the controller a bounded time to pair.
+  static constexpr int64_t kAuthTimeoutUs = 15 * 1000 * 1000;
+  if (!authenticated) {
+    if (esp_timer_get_time() - connected_at_us.load() > kAuthTimeoutUs) {
+      ble_logger.warn("controller did not complete encryption in time; disconnecting");
+      pClient->disconnect();
     }
-    if (!subscribed) {
-      // if we could not subscribe, then delete the bond info for the client so
-      // that we don't try to reconnect to them in the future.
-      NimBLEDevice::deleteBond(pClient->getConnInfo().getIdAddress());
-    }
+    return false;
   }
 
+  // Discovery + subscribe takes a while; try every ~500 ms (this timer runs at
+  // 100 ms) and bounded, then drop the connection so the scan can start over.
+  // A failed attempt is NOT a reason to forget the bond: transient discovery
+  // failures right after a reconnect are normal.
+  static constexpr uint8_t kMaxSubscribeAttempts = 10;
+  static uint8_t throttle = 0;
+  if (++throttle % 5 != 1)
+    return false;
+  const uint8_t attempt = ++subscribe_attempts;
+  if (attempt > kMaxSubscribeAttempts) {
+    ble_logger.error("could not subscribe to the controller's HID reports after {} attempts; "
+                     "disconnecting (bond kept)",
+                     kMaxSubscribeAttempts);
+    pClient->disconnect();
+    return false;
+  }
+  if (subscribe_input_reports(pClient) == 0) {
+    ble_logger.warn("no HID input report subscribed (attempt {}/{})", attempt,
+                    kMaxSubscribeAttempts);
+    return false;
+  }
+  notification_count = 0;
+  last_notify_us = -1;
+  subscribed = true;
+
+  // we were able to get the HID service and subscribe, so also subscribe
+  // to the battery service if it exists.
+  if (auto *pBatterySvc = pClient->getService(battery_service_uuid)) {
+    pBatterySvc->getCharacteristics(true);
+    if (auto *pBatteryChr = pBatterySvc->getCharacteristic(battery_level_uuid)) {
+      // ignore success here since it's not high priority
+      pBatteryChr->subscribe(pBatteryChr->canNotify(), on_notify);
+    }
+  }
+  // and report the controller's name for the paired-controller list
+  if (bond_name_callback) {
+    const NimBLEAddress id = pClient->getConnInfo().getIdAddress();
+    std::array<uint8_t, 6> address{};
+    std::copy(id.getVal(), id.getVal() + address.size(), address.begin());
+    bond_name_callback(address, id.getType(), read_controller_name(pClient));
+  }
   return false; // don't stop the timer
 }
 
@@ -381,6 +499,28 @@ void ble_set_bond_name_callback(bond_name_callback_t callback) {
   bond_name_callback = std::move(callback); // set once at startup, before scanning
 }
 
+void ble_set_disconnect_callback(disconnect_callback_t callback) {
+  disconnect_callback = std::move(callback); // set once at startup, before scanning
+}
+
+std::optional<uint8_t> ble_report_id_for(const NimBLERemoteCharacteristic *chr) {
+  std::lock_guard<std::mutex> lk(report_map_mutex);
+  const auto it = report_ids.find(chr);
+  if (it == report_ids.end())
+    return std::nullopt;
+  return it->second;
+}
+
+uint32_t ble_notification_count() { return notification_count.load(); }
+
+uint32_t ble_ms_since_last_notification() {
+  const int64_t last = last_notify_us.load();
+  if (last < 0)
+    return UINT32_MAX;
+  const int64_t age_ms = (esp_timer_get_time() - last) / 1000;
+  return age_ms > static_cast<int64_t>(UINT32_MAX) ? UINT32_MAX : static_cast<uint32_t>(age_ms);
+}
+
 // The identity addresses of the connected clients (a bond is keyed by the
 // identity address, not the possibly-random connection address).
 static std::vector<NimBLEAddress> connected_identity_addresses() {
@@ -416,7 +556,7 @@ bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type
   for (auto *client : NimBLEDevice::getConnectedClients()) {
     if (client->isConnected() && client->getConnInfo().getIdAddress() == addr) {
       client->disconnect();
-      subscribed = false;
+      reset_link_state("forgotten");
     }
   }
   return NimBLEDevice::deleteBond(addr);
@@ -427,6 +567,6 @@ bool ble_clear_bonds() {
   for (auto *client : NimBLEDevice::getConnectedClients()) {
     client->disconnect();
   }
-  subscribed = false;
+  reset_link_state("all bonds cleared");
   return NimBLEDevice::deleteAllBonds();
 }

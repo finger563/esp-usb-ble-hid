@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,18 @@ struct BleBond {
 };
 /// The bonded (paired) controllers.
 std::vector<BleBond> ble_bonds();
+/// Called (from the BLE host task or the scan timer) when the controller link
+/// goes down after it had been subscribed -- the app must neutralize the
+/// inputs it forwards, since no further notifications will arrive.
+using disconnect_callback_t = std::function<void()>;
+void ble_set_disconnect_callback(disconnect_callback_t callback);
+/// The HID report id a subscribed characteristic carries (from its Report
+/// Reference descriptor); nullopt for an unknown characteristic.
+std::optional<uint8_t> ble_report_id_for(const NimBLERemoteCharacteristic *chr);
+/// Link diagnostics: notifications received since the current subscription
+/// began, and the age of the last one (UINT32_MAX if none yet).
+uint32_t ble_notification_count();
+uint32_t ble_ms_since_last_notification();
 /// Called (from the BLE scan-timer task) once a controller is connected and
 /// subscribed, with its identity address and its name -- the GAP Device Name
 /// (0x2A00) if readable, else the advertised name, else "".
