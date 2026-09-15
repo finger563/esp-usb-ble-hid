@@ -1,305 +1,238 @@
-# ESP USB BLE HID
+<h1 align="center">ESP USB BLE HID</h1>
 
-Example code for using BLE gamepad (such as Xbox wireless controller) with the
-Nintendo Switch via a USB dongle.
+<p align="center">
+  <strong>Use your Xbox Wireless Controller on a Nintendo Switch — through a tiny USB dongle.</strong><br>
+  Bluetooth LE in, Switch Pro Controller out. No drivers, no app, no soldering.
+</p>
 
-This repository contains example code for using an ESP32s3 to act as a USB-BLE
-HID bridge. You would run this code for instance on a QtPy ESP32s3 or a LilyGo
-T-Dongle S3, connected to a computer or other device which is a USB HID host.
-The main HID host that this targets is the Nintendo Switch. The QtPy / this code
-would then start a BLE GATT Client to connect to a BLE HID device (this example
-targets a gamepad), and will allow the wireless HID device (gamepad) to talk to
-the HID Host.
+<p align="center">
+  <a href="https://github.com/finger563/esp-usb-ble-hid/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/finger563/esp-usb-ble-hid?label=release"></a>
+  <a href="https://github.com/finger563/esp-usb-ble-hid/actions/workflows/build.yml"><img alt="Build" src="https://github.com/finger563/esp-usb-ble-hid/actions/workflows/build.yml/badge.svg"></a>
+  <a href="https://github.com/finger563/esp-usb-ble-hid/actions/workflows/static_analysis.yml"><img alt="Static analysis" src="https://github.com/finger563/esp-usb-ble-hid/actions/workflows/static_analysis.yml/badge.svg"></a>
+  <a href="https://finger563.github.io/esp-usb-ble-hid/dongle_console.html"><img alt="Web console" src="https://img.shields.io/badge/web%20console-open%20in%20browser-1fb6c9"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
 
-![image](https://github.com/user-attachments/assets/d76558db-c34e-48d4-9771-06fa4ebdb05a)
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/d76558db-c34e-48d4-9771-06fa4ebdb05a" alt="A LilyGo T-Dongle-S3 running the firmware, plugged into a Switch dock, next to an Xbox controller" width="720">
+</p>
 
-<!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
-**Table of Contents**
+The dongle is an ESP32-S3 board running this firmware. It pairs with your
+controller over Bluetooth LE and shows up to the Switch as a wired **Pro
+Controller**, so the Switch never has to know it is talking to an Xbox
+controller. It remembers up to five controllers, reconnects on its own, and
+carries its own browser-based settings page, firmware updater and crash
+reporter over the same USB plug.
 
-- [ESP USB BLE HID](#esp-usb-ble-hid)
-  - [Plug and Play](#plug-and-play)
-    - [Purchase Dongle](#purchase-dongle)
-    - [Program It](#program-it)
-    - [Plug it into your Switch](#plug-it-into-your-switch)
-  - [Cloning](#cloning)
-  - [Configuration](#configuration)
-  - [Build and Flash](#build-and-flash)
-  - [How To Use](#how-to-use)
-    - [Pairing Mode](#pairing-mode)
-    - [Reconnection Mode](#reconnection-mode)
-    - [Connected](#connected)
-    - [Note about system power](#note-about-system-power)
-  - [Dongle Console (settings, firmware update, crash dumps)](#dongle-console-settings-firmware-update-crash-dumps)
-    - [Settings](#settings)
-    - [Firmware update (OTA over USB)](#firmware-update-ota-over-usb)
-    - [Crash dumps](#crash-dumps)
-    - [Adding your own module](#adding-your-own-module)
-  - [Architecture](#architecture)
-  - [Output](#output)
-  - [Helpful Links](#helpful-links)
+Because it presents as a standard Pro Controller, it also works on a PC, Mac,
+Android or iOS device that understands one.
 
-<!-- markdown-toc end -->
+## Quick start
 
-## Plug and Play
+| | Step | |
+|---|---|---|
+| **1** | **Get a dongle.** A [LilyGo T-Dongle-S3](https://lilygo.cc/products/t-dongle-s3) ([Amazon](https://www.amazon.com/LILYGO-T-Dongle-S3-ESP32-S3-Development-Display/dp/B0BK9162QY)) is the recommended board: it has a tiny screen that shows the link status, and it is the board the release programmer targets. An [Adafruit QT Py ESP32-S3](https://www.adafruit.com/product/5426) works too, but needs a [build from source](#building-from-source). | |
+| **2** | **Program it once.** Plug the dongle into your computer and run the *programmer* from the [latest release](https://github.com/finger563/esp-usb-ble-hid/releases/latest) — a single executable for Windows, macOS or Linux; no toolchain needed. (T-Dongle-S3 only — other boards are built from source.) | `esp-usb-ble-hid_programmer_<version>_<os>` |
+| **3** | **Enable wired controllers on the Switch.** *System Settings → Controllers and Sensors → Pro Controller Wired Communication → On.* | |
+| **4** | **Plug it into the dock and pair.** Hold the dongle's button for 3 s until the LED pulses blue, then put your controller in pairing mode. From then on it reconnects by itself every time. | |
 
-If you just want to get a dongle and use your BLE controller with the switch,
-simply get the dongle, plug it into your computer, and run the programmer
-executable from the release.
+Later firmware updates never need the programmer again: the
+[web console](#the-web-console) installs them straight from GitHub
+over USB.
 
-### Purchase Dongle
-
-Sources:
-- [LilyGo](https://lilygo.cc/products/t-dongle-s3?srsltid=AfmBOopsToYDfOeA4GJiUlQNNcefgA_lMLmWoF99lzdWc_j5Ysd9FUeW)
-- [Amazon](https://www.amazon.com/LILYGO-T-Dongle-S3-ESP32-S3-Development-Display/dp/B0BK9162QY)
-
-### Program It
-
-The dongle will require one-time programming to function as a BLE HID USB
-dongle.
-
-Download the release `programmer` executable from the latest [releases
-page](https://github.com/finger563/esp-usb-ble-hid/releases) for `windows`,
-`macos`, or `linux` - depending on which computer you want to use to perform the
-one-time programming.
-
-1. Download the programmer
-2. Unzip it
-3. Double click the `exe` (if windows), or open a terminal and execute it from
-   the command line `./esp-usb-ble-hid_programmer_v2.0.2_macos.bin`.
-
-### Plug it into your Switch
-
-Now that the dongle is programmed, simply plug it into your Switch and turn your
-switch on.
-  
-See the [How To Use](#how-to-use) section for information about how to pair /
-reconnect your controller to the dongle.
+### See it in action
 
 https://github.com/user-attachments/assets/a0789d38-bd0e-4215-bf2c-ebedd9958495
 
 https://github.com/user-attachments/assets/c81b947a-24a1-4a44-b5d0-5d4c274beb93
 
+## What you get
 
-## Cloning
+- **Xbox → Switch, live.** Every button, both sticks and the triggers are
+  translated into Pro Controller reports at the Switch's polling rate.
+  Stick inversion, A/B and X/Y swaps and a radial deadzone are configurable.
+- **Set-and-forget pairing.** Up to five bonded controllers; the dongle
+  reconnects to whichever one comes back, and drops every input the instant a
+  controller goes away so nothing stays "pressed".
+- **A web console in your browser.** Status, paired controllers, settings and
+  actions over WebUSB — from the hosted page or a local copy, no install.
+- **Firmware updates over USB.** The web console checks GitHub Releases, tells
+  you when a newer firmware exists and installs it in place, with automatic
+  rollback if the new image never confirms itself.
+- **Crash dumps you can actually read.** If the firmware ever panics, the
+  core dump is kept in flash; the web console shows a summary and downloads the
+  ELF for `espcoredump.py`.
+- **Status you can see.** The T-Dongle-S3's screen shows USB / Bluetooth
+  state and the connected controller's serial; the RGB LED breathes while
+  scanning and flickers with traffic.
 
-``` sh
+## Everyday use
+
+| Dongle | Meaning | What to do |
+|---|---|---|
+| LED pulsing blue, fast (1 s) | **Pairing** — will bond with the first BLE gamepad it finds | Put the controller in pairing mode |
+| LED pulsing blue, slow (3 s) | **Reconnecting** — looking for a remembered controller | Turn the controller on |
+| LED off, flickering with input | **Connected** — inputs are flowing to the Switch | Play |
+| Hold the button 3 s | Enter pairing mode (also available from the web console) | |
+
+A few things worth knowing:
+
+- **The Switch cuts USB power when it sleeps**, so the dongle cannot wake the
+  Switch; press a button on a Joy-Con or use the dock's own controls. (A
+  USB-to-Ethernet adapter in the dock reportedly keeps the port awake.)
+- **No bonded controller?** The dongle starts in pairing mode by itself.
+- **Forgot which controllers are paired?** The web console lists them by name.
+
+## The web console
+
+Plug the dongle into a computer, open
+**[finger563.github.io/esp-usb-ble-hid/dongle_console.html](https://finger563.github.io/esp-usb-ble-hid/dongle_console.html)**
+in a Chromium-based browser (Chrome, Edge, Brave; it uses WebUSB) and click
+*Connect dongle*. The page is a single self-contained HTML file —
+[`web/dongle_console.html`](web/dongle_console.html) works from a local copy
+too. Its only network access is the optional release check.
+
+### Device
+
+![Web console, Device tab: status, paired controllers, settings and actions](docs/screenshots/console-device.jpg)
+
+- **Status** — USB / controller / scanning / pairing badges, the connected
+  controller's serial and battery, uptime, firmware, hardware and ESP-IDF
+  version, and whether a newer release exists. Refreshes every 2 s.
+- **Link** — where the BLE bring-up is (scanning → connecting → encrypting →
+  subscribing → subscribed) with the dongle's own note on the last link
+  event, how many input notifications the controller has sent, and whether
+  the Switch has finished the Pro Controller handshake. This is the first
+  place to look for "connected but nothing happens".
+- **Paired controllers** — every bond by the name the controller reports
+  (learned when it connects), with its address and a per-row *Forget*.
+- **Settings** (stored in flash, survive updates) — invert left / right
+  stick Y, swap A/B, swap X/Y, stick deadzone (0–50 %), LED brightness, BLE
+  device name.
+- **Actions** — start pairing, forget all controllers, reboot.
+
+### Firmware
+
+![Web console, Firmware tab: running image, update check and installer](docs/screenshots/console-firmware.jpg)
+
+The tab compares the running firmware with the latest GitHub release and
+offers **Download and install** — or flashes a `.bin` you built yourself.
+The dongle has two app slots: a fresh image boots in *pending-verify* state
+and the web console asks you to confirm it after the reboot; an unconfirmed image
+is rolled back by the bootloader on the next reset.
+
+> Dongles running v2.1.0 or older have the previous (single-app) partition
+> layout and need the programmer one more time; after that every update goes
+> over USB.
+
+### Crash dump
+
+![Web console, Crash dump tab: last-crash summary and core.elf download](docs/screenshots/console-crash-dump.jpg)
+
+If the firmware panics, the core dump lands in a dedicated partition and the
+next boot logs a summary. The tab shows it, downloads `core.elf` (decode with
+`espcoredump.py info_corefile --core core.elf --core-format elf build/esp-usb-ble-hid.elf`)
+and can erase it. Please attach it to a bug report.
+
+*(The screenshots above are staged with sample data; the layout is the real
+web console.)*
+
+## Supported hardware and controllers
+
+| | Supported | Notes |
+|---|---|---|
+| **Boards** | LilyGo T-Dongle-S3, Adafruit QT Py ESP32-S3 | The release programmer and binaries are built for the T-Dongle-S3 only; for the QT Py (or any other board) build from source with the board selected under *Hardware Configuration* in `menuconfig` |
+| **Controllers** | Xbox Wireless Controller (Bluetooth LE models: Xbox Series X\|S controller, Xbox One controllers with the BLE firmware update) | Any BLE gamepad can pair, but its reports are decoded with the Xbox layout — other layouts are a small parser away (`components/xbox`) |
+| **Hosts** | Nintendo Switch (docked or via a USB-C adapter), plus anything that accepts a USB Pro Controller: Windows, macOS, Linux, Android, iOS | The Switch needs *Pro Controller Wired Communication* enabled |
+
+## Building from source
+
+Building from source is also how you get firmware for a board other than the T-Dongle-S3, since CI only packages that one. The project builds with **ESP-IDF v6.1**. Every library comes from the
+[ESP Component Registry](https://components.espressif.com) — the
+[espp](https://github.com/esp-cpp/espp) components, `esp_tinyusb`,
+`esp-nimble-cpp` — and is fetched on the first build.
+
+```sh
 git clone https://github.com/finger563/esp-usb-ble-hid
-```
-
-All library code comes from the [ESP Component
-Registry](https://components.espressif.com) (the
-[espp](https://github.com/esp-cpp/espp) components, `esp_tinyusb`, ...) and is
-fetched by the IDF component manager on the first build. The project builds
-with **ESP-IDF v6.1** (what CI uses).
-
-## Configuration
-
-You can run `idf.py menuconfig` to configure the project to run on either the
-`T-Dongle-S3` or the `QtPy (ESP32 or ESP32S3)`. The configuration is under the
-`Hardware Configuration` menu from the main menu and is the `Target Hardware`
-option.
-
-The `USB Configuration` menu controls the extra USB interfaces next to the
-Switch Pro HID interface:
-
-- **Vendor (WebUSB) interface** (default on) — carries the [dongle
-  console](#dongle-console-settings-firmware-update-crash-dumps) stream
-  (settings, firmware update, crash dumps). Turn it off to present a plain
-  single-interface HID gamepad if a host refuses the composite device.
-- **CDC-ACM log console** (default off) — a USB serial port carrying the logs,
-  so `idf.py monitor` works over the same cable.
-
-![CleanShot 2025-04-10 at 07 57 26](https://github.com/user-attachments/assets/be355584-251d-4c2c-81ed-15089b45f4e1)
-
-## Build and Flash
-
-Build the project and flash it to the board, then run monitor tool to view serial output:
-
-```
+cd esp-usb-ble-hid
+idf.py menuconfig          # Hardware Configuration → Target Hardware; USB Configuration
 idf.py -p PORT flash monitor
 ```
 
-(Replace PORT with the name of the serial port to use.)
+`USB Configuration` controls the interfaces next to the Pro Controller HID
+interface: the **vendor (WebUSB) interface** for the web console (default on;
+turn it off for a plain single-interface gamepad) and an optional
+**CDC-ACM serial port** carrying the logs, so `idf.py monitor` works over the same cable.
 
-(To exit the serial monitor, type ``Ctrl-]``.)
+Once a dongle runs this firmware you can update it without a serial port:
 
-See the Getting Started Guide for full steps to configure and use ESP-IDF to build projects.
-
-## How To Use
-
-> NOTE: you must turn on the `support wired controllers` setting on your switch
-> for the dongle (or any wired controllers for that matter) to work.
-
-The dongle can store up to 5 paired devices at a time. When it turns on / is
-plugged in it will attempt to reconnect to one of those devices. If there are no
-paired devices, then it will enter pairing mode.
-
-If at any time you want to pair a new controller, simply press and hold the
-button on the dongle until the LED starts pulsing blue.
-
-### Pairing Mode
-
-While in pairing mode, the device will scan for any BLE devices which expose a
-HID service. It will connect and attempt to bond to the first device it finds.
-
-### Reconnection Mode
-
-When in this mode, the device will scan for the devices in its pairing list and
-connect to the first one it finds.
-
-### Connected
-
-While connected, the device will translate xbox controller inputs received via
-BLE into Nintendo Switch Pro controller inputs which will then be transmitted
-over USB.
-
-If the controller disconnects, then the dongle will re-enter reconnection mode.
-
-### Note about system power
-
-The switch turns off its USB-C port when it enters sleep mode. This means that
-while the Switch Dock's USB-A port still has power, the dongle will not properly
-mount as a usb device until the Switch comes out of sleep. 
-
-For this reason, you cannot use this dongle or the associated BLE controller to
-power on your switch unfortunately. The only way (currently) to remotely wake
-your switch is via Bluetooth Classic.
-
-That being said, I have read online that if you plug a usb-to-ethernet adapter
-into your Switch Dock, then the Switch may keep its USB-C port awake during
-sleep.
-
-## Dongle Console (settings, firmware update, crash dumps)
-
-Plug the dongle into a computer and open the **[Dongle
-Console](https://finger563.github.io/esp-usb-ble-hid/dongle_console.html)** in
-a Chromium-based browser (Chrome / Edge / Brave — it uses WebUSB, so it also
-works from a local copy of [`web/dongle_console.html`](web/dongle_console.html)
-opened via `file://`). Click *Connect* and pick the *Pro Controller* device. No
-driver is needed on any OS (the dongle advertises WebUSB + MS OS 2.0
-descriptors).
-
-The console talks to the dongle over a USB **vendor interface** that sits next
-to the gamepad HID interface, using the espp `stream_frame` framing and
-`dispatcher` module routing. Three modules are available:
-
-| Module | Id | What it does |
-|--------|----|--------------|
-| Device Config | `0x10` | status, settings, pairing / forget controllers / reboot (this repo: `components/device_config`) |
-| OTA | `0x00` | firmware update over USB (`espp/ota`) |
-| Core Dump | `0x04` | download / erase the last crash dump (`espp/coredump`) |
-
-### Settings
-
-Settings are stored in NVS and survive updates:
-
-- **Invert left / right stick Y** (default on — what the Switch expects)
-- **Swap A/B**, **Swap X/Y** — use the Xbox physical layout on the Switch
-- **Stick deadzone** (0–50 %)
-- **LED brightness**
-- **BLE name** (applies after a reboot)
-
-Actions: **Start pairing** (same as holding the button), **Forget all
-controllers**, **Reboot**. The status card shows USB / BLE state, the connected
-controller's serial and battery, the number of paired controllers, uptime and
-the firmware / hardware / IDF versions. The **Paired controllers** card lists
-every bonded controller by the name it reports (its BLE Device Name, read and
-remembered each time it connects — "Unknown controller" until then), with its
-address, which one is connected, and a per-controller *Forget*.
-
-### Firmware update (OTA over USB)
-
-The *Firmware* tab checks the [GitHub releases](https://github.com/finger563/esp-usb-ble-hid/releases)
-for a newer firmware than the one running (with a link to the release notes)
-and can **download and install** it directly, or flashes a
-`build/esp-usb-ble-hid.bin` you pick yourself — over the vendor interface, no
-bootloader mode, no serial port. The
-partition table has two app slots; after an update the new image boots in
-*pending-verify* state and the console asks you to **confirm** it once it
-reconnects (or roll back). If it is never confirmed, the bootloader returns to
-the previous firmware on the next reset.
-
-From the command line, the same protocol is driven by the espp OTA tool:
-`idf.py ota-usb` (after a build; set `ESPP_OTA_VID=0x057E ESPP_OTA_PID=0x2009`
-since the dongle presents as a Pro Controller).
-
-> The partition layout changed with this feature (factory → `ota_0`/`ota_1`).
-> Dongles running an older release must be reflashed once over serial / with
-> the release programmer; after that, updates go over USB.
-
-### Troubleshooting a "connected but no inputs" controller
-
-The status card's **Link** block shows both halves of the bridge live: which
-step of the BLE bring-up the dongle is in (scanning → connecting → encrypting →
-subscribing → subscribed) with its note on the last link event, how many BLE
-input notifications the controller has sent (and how long ago the last one
-was), and whether the Switch has finished the Pro Controller handshake and how
-many input reports it has taken. A controller that is connected but silent is a
-BLE problem (try a button, or power-cycle the controller); a link stuck in
-*encrypting* or *subscribing* is dropped after ~15 s so the scan starts over; a
-silent USB side means the host has not enabled input reports (re-plug the
-dongle). The dongle also releases every button and centers the sticks the
-moment the controller link drops, and keeps a paired controller's bond even if
-a reconnect attempt fails transiently.
-
-### Crash dumps
-
-If the firmware ever crashes, the panic handler writes a core dump to the
-`coredump` partition and the next boot logs a summary. The *Crash dump* tab
-downloads it as `core.elf` (analyze with `espcoredump.py info_corefile --core
-core.elf --core-format elf build/esp-usb-ble-hid.elf`) and can erase it.
-
-### Adding your own module
-
-The console stream is the espp dispatcher, so any custom protocol can be added
-as another module: see `components/device_config` for a complete, host-tested
-example (protocol header + module class + web UI) and the espp [custom modules
-guide](https://esp-cpp.github.io/espp/dispatcher/custom_modules.html).
-
-## Architecture
-
-```
-  BLE gamepad ──notify──▶ Xbox (hid-rp parse) ──▶ GamepadInputs ──settings──▶ espp::SwitchPro
-                                                                                  │ input report
-                                                              espp::UsbDevice ◀───┘
-                                                          ┌────────┴──────────────────┐
-                                             HID iface (Pro Controller)     vendor iface (WebUSB)
-                                                     │                              │
-                                              Nintendo Switch              espp::Dispatcher
-                                                                        ┌──────┼──────────┐
-                                                                     OTA   Core Dump   Device Config
+```sh
+ESPP_OTA_VID=0x057E ESPP_OTA_PID=0x2009 idf.py ota-usb   # after idf.py build
 ```
 
-- `main/usb.cpp` — the composite USB device (HID + optional vendor + optional
-  CDC), the HID handshake/report sender task and the vendor RX worker.
-- `main/services.cpp` — NVS settings + the OTA / core-dump / device-config
-  modules on the dispatcher.
-- `main/ble.cpp` — BLE central: scanning, pairing, bonding, HID subscription.
-- `components/device_config` — the configuration protocol + module (host tests
-  in `test/`).
-- `web/dongle_console.html` — the browser console (published to GitHub Pages).
+## Under the hood
 
-## Output
+```
+BLE gamepad ──notify──▶ Xbox report parser ──▶ GamepadInputs ──settings──▶ espp::SwitchPro
+                                                                                │ input report
+                                                            espp::UsbDevice ◀───┘
+                                                        ┌────────┴──────────────────┐
+                                           HID iface (Pro Controller)     vendor iface (WebUSB)
+                                                   │                              │
+                                            Nintendo Switch              espp::Dispatcher
+                                                                      ┌──────┼──────────┐
+                                                                   OTA   Core Dump   Device Config
+```
 
-https://github.com/user-attachments/assets/a0789d38-bd0e-4215-bf2c-ebedd9958495
+| Piece | Where | What it does |
+|---|---|---|
+| BLE central | `main/ble.cpp` | Scanning, pairing, bonding, HID subscription, and a 100 ms supervisor that owns the LED, encryption retries and reconnects |
+| USB device | `main/usb.cpp` | Composite device (HID + vendor + optional CDC), Pro Controller handshake and report sender, vendor RX worker |
+| Services | `main/services.cpp` | Settings in NVS, and the OTA / core-dump / device-config modules on the dispatcher |
+| Device config | `components/device_config` | The web console's protocol (module `0x10`) and module class, with host-side tests |
+| Controller parsing | `components/xbox`, `components/gamepad_inputs` | Xbox report layout → generic gamepad inputs |
+| Display | `components/gui` | The T-Dongle-S3 status screen (SquareLine / LVGL) |
+| Web console | `web/dongle_console.html` | The browser UI, published to GitHub Pages by `publish_webapp.yml` |
 
-![CleanShot 2025-02-25 at 08 54 49](https://github.com/user-attachments/assets/d06a53cb-c20c-4de8-9987-38a7bc05b60a)
+The web console's stream is the espp `stream_frame` + `dispatcher` pair, so the
+dongle is also a ready-made example of a device with a browser-based web console:
 
-![CleanShot 2025-02-25 at 09 02 40](https://github.com/user-attachments/assets/6c3820d1-b9f0-4188-96a6-0d1d8b44e1fb)
+| Module | Id | Provided by |
+|---|---|---|
+| OTA | `0x00` | `espp/ota` |
+| Core dump | `0x04` | `espp/coredump` |
+| Device config | `0x10` | this repo |
 
-![CleanShot 2025-02-25 at 09 03 03](https://github.com/user-attachments/assets/89f524e4-1737-4aec-92ac-e3a64f69c6fe)
+Adding a module of your own means one protocol header, one class and one
+tab: `components/device_config` is a complete, host-tested example, and the
+espp [custom modules guide](https://esp-cpp.github.io/espp/dispatcher/custom_modules.html)
+walks through the contract.
 
-## Helpful Links
+## Troubleshooting
 
-The links below were invaluable in developing the switch pro implemenation
-within this repo such that it would work on MacOS, Android, iOS, and (most
-importantly) the Nintendo Switch.
+- **Controller connected, nothing happens on the Switch** — open the
+  web console's *Link* block. A silent BLE side (no notifications) is the
+  controller: press a button or power-cycle it. A silent USB side means the
+  Switch has not finished the handshake: check *Pro Controller Wired
+  Communication*, then re-plug the dongle.
+- **Controller keeps connecting and dropping** — the *Controller link* row
+  says which step fails and why (e.g. encryption). Forgetting the controller
+  on both sides and pairing again clears a stale bond.
+- **The Switch does not see a controller at all** — the dongle only mounts
+  while the Switch is awake; wake it first.
+- **Something crashed** — the *Crash dump* tab has the summary. Please open
+  an issue with `core.elf` attached.
 
-* https://github.com/Brikwerk/nxbt/blob/master/nxbt/controller/protocol.py
-* https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/bluetooth_hid_subcommands_notes.md
-* https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/USB-HID-Notes.md
-* https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/spi_flash_notes.md
-* https://github.com/EasyConNS/BlueCon-esp32/tree/master/components/joycon
-* https://github.com/mzyy94/nscon/blob/master/nscon.go
-* https://www.mzyy94.com/blog/2020/03/20/nintendo-switch-pro-controller-usb-gadget/
+## Credits and references
 
+Built on [espp](https://github.com/esp-cpp/espp) (`switch_pro`, `usb_device`,
+`ota`, `coredump`, `dispatcher`, `hid-rp`, BSPs) and
+[esp-nimble-cpp](https://github.com/h2zero/esp-nimble-cpp). The Pro Controller
+implementation owes a great deal to the community's reverse-engineering work:
+
+- [dekuNukem/Nintendo_Switch_Reverse_Engineering](https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering) — [USB HID notes](https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/USB-HID-Notes.md), [subcommands](https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/bluetooth_hid_subcommands_notes.md), [SPI flash](https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/spi_flash_notes.md)
+- [Brikwerk/nxbt](https://github.com/Brikwerk/nxbt/blob/master/nxbt/controller/protocol.py)
+- [mzyy94/nscon](https://github.com/mzyy94/nscon/blob/master/nscon.go) and the [USB gadget write-up](https://www.mzyy94.com/blog/2020/03/20/nintendo-switch-pro-controller-usb-gadget/)
+- [EasyConNS/BlueCon-esp32](https://github.com/EasyConNS/BlueCon-esp32/tree/master/components/joycon)
+
+Licensed under the [MIT License](LICENSE).
