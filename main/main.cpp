@@ -331,11 +331,16 @@ extern "C" void app_main(void) {
   // vendor stream). Registered before USB starts so the modules exist as soon
   // as the host can talk to us.
   logger.info("Services initialization");
-  services_init(usb_dispatcher(), {.info = device_info,
-                                   .on_action = device_action,
-                                   .bonds = device_bonds,
-                                   .forget_bond = device_forget_bond,
-                                   .on_settings_changed = apply_settings});
+#if CONFIG_DONGLE_USB_VENDOR_INTERFACE
+  auto *vendor_link = &usb_dispatcher();
+#else
+  espp::DispatcherWorker *vendor_link = nullptr; // plain HID build: no console stream
+#endif
+  services_init(vendor_link, {.info = device_info,
+                              .on_action = device_action,
+                              .bonds = device_bonds,
+                              .forget_bond = device_forget_bond,
+                              .on_settings_changed = apply_settings});
   const auto settings = services_settings();
   apply_settings(settings);
   if (const auto report = services_crash_report(); !report.empty())

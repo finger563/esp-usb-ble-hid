@@ -102,6 +102,7 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
   return false; // don't stop the task
 }
 
+#if CONFIG_DONGLE_USB_VENDOR_INTERFACE
 // --- Vendor RX: espp::DispatcherWorker ------------------------------------------
 //
 // Bytes arrive on the TinyUSB task, where handlers must not block (an OTA
@@ -119,8 +120,6 @@ static void on_vendor_receive(std::span<const uint8_t> data) {
   // TinyUSB task context: just queue the bytes and wake the worker.
   usb_dispatcher().push(data);
 }
-
-// --- public API ------------------------------------------------------------------
 
 espp::DispatcherWorker &usb_dispatcher() {
   if (!vendor_link) {
@@ -146,6 +145,9 @@ void usb_set_rx_overflow_callback(std::function<void()> callback) {
   std::lock_guard<std::mutex> lock(rx_overflow_callback_mutex);
   rx_overflow_callback = std::move(callback);
 }
+#endif // CONFIG_DONGLE_USB_VENDOR_INTERFACE
+
+// --- public API ------------------------------------------------------------------
 
 bool usb_is_mounted() { return mounted.load(); }
 
@@ -213,7 +215,9 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
 #endif
 
   usb = std::make_unique<espp::UsbDevice>(cfg);
+#if CONFIG_DONGLE_USB_VENDOR_INTERFACE
   usb_dispatcher(); // exists before the first vendor byte can arrive
+#endif
 
   usb->set_mount_callback([]() {
     logger.info("USB mounted");
@@ -223,8 +227,10 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
     // (0x81) report
     if (auto init = controller->on_attach())
       enqueue_hid(std::move(*init));
-    // a frame half-parsed before the (re)connect belongs to the old vendor_link
+#if CONFIG_DONGLE_USB_VENDOR_INTERFACE
+    // a frame half-parsed before the (re)connect belongs to the old link
     usb_dispatcher().request_reset();
+#endif
   });
   usb->set_unmount_callback([]() {
     logger.info("USB unmounted");
@@ -235,7 +241,9 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
       std::lock_guard<std::mutex> lock(hid_tx_mutex);
       hid_tx_queue.clear();
     }
+#if CONFIG_DONGLE_USB_VENDOR_INTERFACE
     usb_dispatcher().request_reset();
+#endif
   });
 
   std::error_code ec;

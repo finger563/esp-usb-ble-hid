@@ -11,12 +11,17 @@
 #include <memory>
 #include <span>
 
+#include "sdkconfig.h"
+
 #include "dispatcher_worker.hpp"
 #include "switch_pro.hpp"
 
+#if CONFIG_DONGLE_USB_VENDOR_INTERFACE
 /// The vendor stream's dispatcher + worker (espp::DispatcherWorker): register
 /// services on it (at any time; it is created on first use), and every module
 /// handler -- and its replies -- runs on the worker task, never on TinyUSB's.
+/// Only built with the vendor interface (a plain HID build has no such stream
+/// and spends no task on it).
 espp::DispatcherWorker &usb_dispatcher();
 
 /// Called on the dispatcher worker when vendor bytes had to be dropped (the
@@ -24,6 +29,7 @@ espp::DispatcherWorker &usb_dispatcher();
 /// transfer.
 /// May be set from any task at any time (the worker takes a copy under a lock).
 void usb_set_rx_overflow_callback(std::function<void()> callback);
+#endif // CONFIG_DONGLE_USB_VENDOR_INTERFACE
 
 /// Bring up the USB device. The controller's input report is streamed to the
 /// host from a dedicated sender task once the host enables reports; update it

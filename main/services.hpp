@@ -32,8 +32,10 @@ struct ServicesCallbacks {
 
 /// Initialize NVS, load the settings, and register the OTA / core-dump / config
 /// services on @p link (the vendor stream's dispatcher worker); replies go out
-/// through the link's sender.
-void services_init(espp::DispatcherWorker &link, const ServicesCallbacks &callbacks);
+/// through the link's sender. With @p link null (a build without the vendor
+/// interface) the settings, OTA engine and crash report are still set up, but
+/// no service is instantiated -- there is no stream to answer on.
+void services_init(espp::DispatcherWorker *link, const ServicesCallbacks &callbacks);
 
 /// A copy of the current (persisted) settings.
 device_config::Settings services_settings();

@@ -151,7 +151,7 @@ static std::string crash_report;
 
 // --- public API -----------------------------------------------------------------------
 
-void services_init(espp::DispatcherWorker &link, const ServicesCallbacks &callbacks) {
+void services_init(espp::DispatcherWorker *link, const ServicesCallbacks &callbacks) {
   // NVS (settings + BLE bonds live here)
   nvs_storage = std::make_unique<espp::Nvs>();
   std::error_code ec;
@@ -159,7 +159,8 @@ void services_init(espp::DispatcherWorker &link, const ServicesCallbacks &callba
   if (ec)
     logger.error("NVS init failed: {}", ec.message());
   const auto settings = load_settings();
-  const auto send = link.sender();
+  // no transport (plain HID build): replies have nowhere to go
+  const auto send = link ? link->sender() : [](std::span<const uint8_t>) {};
 
   // --- OTA (module 0): espp::OtaService drives the engine; rollback is
   // host-driven (the console confirms a PENDING_VERIFY image) ---
@@ -178,19 +179,23 @@ void services_init(espp::DispatcherWorker &link, const ServicesCallbacks &callba
   if (ota->is_pending_verify())
     logger.warn("This image is PENDING VERIFY (first boot after an update): confirm it from the "
                 "dongle console, or it rolls back on the next reset");
-  ota_service = std::make_unique<espp::OtaService>(
-      *ota, espp::OtaService::Config{.send = send, .log_level = espp::Logger::Verbosity::INFO});
-  link.register_module(*ota_service);
+  if (link) {
+    ota_service = std::make_unique<espp::OtaService>(
+        *ota, espp::OtaService::Config{.send = send, .log_level = espp::Logger::Verbosity::INFO});
+    link->register_module(*ota_service);
+  }
 
   // --- crash dumps (module 4) ---
   core_dump = std::make_unique<espp::CoreDump>();
   crash_report = core_dump->format_report();
   if (core_dump->has_core_dump())
     logger.warn("A crash core dump is stored:\n{}", crash_report);
-  coredump_service = std::make_unique<espp::CoreDumpService>(
-      *core_dump,
-      espp::CoreDumpService::Config{.send = send, .log_level = espp::Logger::Verbosity::INFO});
-  link.register_module(*coredump_service);
+  if (link) {
+    coredump_service = std::make_unique<espp::CoreDumpService>(
+        *core_dump,
+        espp::CoreDumpService::Config{.send = send, .log_level = espp::Logger::Verbosity::INFO});
+    link->register_module(*coredump_service);
+  }
 
   // --- device configuration (module 0x10) ---
   device_config_module = std::make_unique<DeviceConfig>(DeviceConfig::Config{
@@ -210,13 +215,17 @@ void services_init(espp::DispatcherWorker &link, const ServicesCallbacks &callba
       .bonds = callbacks.bonds,
       .forget_bond = callbacks.forget_bond,
       .log_level = espp::Logger::Verbosity::INFO});
-  link.register_module(*device_config_module);
+  if (!link)
+    return; // the module still holds + serves the settings for the app
+  link->register_module(*device_config_module);
 
   // discovery: device name + firmware version, answered over the vendor stream
-  link.serve_discovery("ESP USB BLE HID", running.version);
+  link->serve_discovery("ESP USB BLE HID", running.version);
+#if CONFIG_DONGLE_USB_VENDOR_INTERFACE
   // bytes dropped on the transport: an in-flight image is unusable; the OTA
   // service aborts its session and tells the host (nothing else is stateful)
   usb_set_rx_overflow_callback([] { ota_service->on_rx_overflow(); });
+#endif
 }
 
 device_config::Settings services_settings() {
