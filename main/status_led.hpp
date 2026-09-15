@@ -34,6 +34,11 @@ inline void set_led_connected_brightness_percent(uint8_t percent) {
 }
 inline void set_led_activity_blink(bool enabled) { g_led_activity_blink.store(enabled); }
 inline bool led_activity_blink() { return g_led_activity_blink.load(); }
+/// Number of per-input blink writes so far. The link supervisor compares it
+/// against what it last saw: a blink write that lands after the supervisor's
+/// steady write (the setting was turned off in between, on another task) is
+/// detected on the next tick and the steady level is written again.
+inline std::atomic<uint32_t> g_led_blink_writes{0};
 
 /// The LED colour while a controller is connected (blue, like the scan).
 inline const espp::Rgb kLedConnectedColor(0.0f, 0.0f, 1.0f);
@@ -42,6 +47,19 @@ inline const espp::Rgb kLedConnectedColor(0.0f, 0.0f, 1.0f);
 /// (used to detect when a settings change needs a new write).
 inline float led_connected_value() {
   return g_led_connected_level.load() * g_led_brightness.load();
+}
+
+/// The per-input blink (debugging aid): toggle the LED between the connected
+/// colour and off. Does nothing unless the blink setting is on.
+inline void led_blink_toggle() {
+  if (!g_led_activity_blink.load())
+    return;
+  static std::atomic<bool> led_on{false};
+  static const espp::Rgb off(0.0f, 0.0f, 0.0f);
+  const bool on = !led_on.load();
+  led_on.store(on);
+  set_led(on ? kLedConnectedColor : off);
+  g_led_blink_writes.fetch_add(1);
 }
 
 /// Show the steady "controller connected" LED.

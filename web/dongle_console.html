@@ -166,7 +166,11 @@
     .tabs {
       display: flex; gap: 2px; padding: 10px 16px 0; border-bottom: 1px solid var(--line);
       background: var(--bg);
+      /* the body clips overflow, so a strip wider than a narrow phone must scroll itself */
+      overflow-x: auto; flex: none; scrollbar-width: none;
     }
+    .tabs::-webkit-scrollbar { display: none; }
+    [role="tab"] { flex: none; }
     [role="tab"] {
       background: transparent; border: 1px solid transparent; border-bottom: none;
       border-radius: 8px 8px 0 0; color: var(--muted); padding: 8px 14px; margin-bottom: -1px;
@@ -273,6 +277,10 @@
     .field:last-child { border-bottom: none; }
     .field label { font-weight: 600; }
     .field .hint { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+    /* a setting the connected firmware does not report: shown, but not editable */
+    .field.unsupported { opacity: 0.55; }
+    .field.unsupported .hint::after { content: " Not supported by this firmware."; color: var(--warn); }
+    .field.unsupported:not(:has(.hint))::after { content: "Not supported by this firmware."; grid-column: 1 / -1; color: var(--warn); font-size: 12px; }
     .field.slider { grid-template-columns: 1fr 52px; }
     .field.slider input[type="range"] { grid-column: 1; }
     .field.slider output { font-family: var(--font-mono); font-size: 12.5px; text-align: right; }
@@ -1661,7 +1669,9 @@
       els.bondsRefresh.disabled = !dev;
       for (const b of els.bondsList.querySelectorAll("button")) b.disabled = !dev;
       els.settingsReload.disabled = !dev;
-      for (const input of els.settingsForm.querySelectorAll("input")) input.disabled = !dev || !deviceSettings;
+      // a key the firmware did not report (older firmware) stays read-only: it
+      // could never be applied (settingsDirtyKeys skips it)
+      for (const input of els.settingsForm.querySelectorAll("input")) input.disabled = !dev || !deviceSettings || !(input.dataset.key in deviceSettings);
       els.settingsApply.disabled = !dev || !deviceSettings || !settingsDirtyKeys().length || !!settingsInvalid();
       els.settingsReset.disabled = !dev || !deviceSettings;
       els.actPair.disabled = !dev; els.actForget.disabled = !dev; els.actReboot.disabled = !dev;
@@ -1915,7 +1925,10 @@
       deviceSettings = Object.assign({}, values);
       for (const key of SETTING_KEYS) {
         const input = settingInputs[key];
-        if (!(key in values)) continue;
+        const supported = key in values;
+        input.closest(".field").classList.toggle("unsupported", !supported);
+        input.title = supported ? "" : "Not supported by this firmware";
+        if (!supported) continue;
         if (SETTING_KIND[key] === "bool") input.checked = !!values[key];
         else input.value = values[key];
       }

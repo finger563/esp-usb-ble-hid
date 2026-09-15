@@ -126,12 +126,8 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   // Debugging aid (off by default): toggle the LED on every report that
   // reaches the USB side, so input activity is visible on the dongle. The
   // default is the steady "connected" level, owned by the BLE link supervisor.
-  if (led_activity_blink() && usb_is_mounted()) {
-    static bool led_on = false;
-    static const auto off_color = espp::Rgb(0.0f, 0.0f, 0.0f);
-    set_led(led_on ? kLedConnectedColor : off_color);
-    led_on = !led_on;
-  }
+  if (usb_is_mounted())
+    led_blink_toggle(); // no-op unless the blink setting is on
 }
 
 /********* Dongle console (device-config module) callbacks ***************/
