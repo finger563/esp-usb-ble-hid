@@ -1,5 +1,8 @@
 #include "usb.hpp"
 
+#include "esp_timer.h"
+#include "tusb.h" // tud_connect / tud_disconnect (pull-up re-arm)
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -24,6 +27,12 @@ static espp::Logger logger({.tag = "USB", .level = espp::Logger::Verbosity::INFO
 static std::unique_ptr<espp::UsbDevice> usb;
 static std::shared_ptr<espp::SwitchPro> controller;
 static std::atomic<bool> mounted{false};
+// The Switch sometimes drops the device without a new bus transaction (e.g.
+// after the Change Grip/Order screen): the pull-up is re-armed after the
+// link has been down this long, so the host enumerates us again.
+static constexpr int64_t kReenumerateAfterUs = 2500 * 1000;
+static std::atomic<bool> ever_mounted{false};
+static std::atomic<int64_t> unmounted_at_us{0};
 static std::atomic<uint32_t> hid_reports_sent{0}; // input reports accepted by TinyUSB
 
 // --- HID TX: handshake replies + the streamed input report ---------------------
@@ -64,8 +73,21 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
       have = true;
     }
   }
-  if (!mounted.load())
+  if (!mounted.load()) {
+    // Re-arm the pull-up if a host that had us configured let the link drop
+    // and has not re-enumerated on its own (never before the first mount, so
+    // a slow initial enumeration is not interrupted). Runs on our own task.
+    if (ever_mounted.load() &&
+        esp_timer_get_time() - unmounted_at_us.load() >= kReenumerateAfterUs) {
+      logger.info("USB link down for {} ms without re-enumeration; re-arming the pull-up",
+                  kReenumerateAfterUs / 1000);
+      unmounted_at_us.store(esp_timer_get_time());
+      tud_disconnect();
+      std::this_thread::sleep_for(20ms);
+      tud_connect();
+    }
     return false;
+  }
   std::error_code ec;
   if (have) {
     // a handshake reply: this is our own task, so retry until the endpoint frees
@@ -224,6 +246,7 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
   usb->set_mount_callback([]() {
     logger.info("USB mounted");
     mounted.store(true);
+    ever_mounted.store(true);
     // kick off the handshake: the controller proactively sends its device-init
     // (0x81) report
     if (auto init = controller->on_attach())
@@ -232,6 +255,7 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
   usb->set_unmount_callback([]() {
     logger.info("USB unmounted");
     mounted.store(false);
+    unmounted_at_us.store(esp_timer_get_time());
     std::lock_guard<std::mutex> lock(hid_tx_mutex);
     hid_tx_queue.clear();
   });
