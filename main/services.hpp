@@ -1,7 +1,7 @@
 #pragma once
 
 // The dongle's "services" on the USB vendor stream (espp dispatcher modules):
-//   module 0x00  OTA firmware update        (espp::Ota)
+//   module 0x00  OTA firmware update        (espp::OtaService)
 //   module 0x04  crash-dump download         (espp::CoreDumpService)
 //   module 0x10  device configuration        (DeviceConfig, components/device_config)
 // plus the persisted settings (NVS) the rest of the app reads.
@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "dispatcher.hpp"
+#include "dispatcher_worker.hpp"
 
 #include "device_config.hpp"
 
@@ -31,8 +31,9 @@ struct ServicesCallbacks {
 };
 
 /// Initialize NVS, load the settings, and register the OTA / core-dump / config
-/// modules on @p dispatcher. Frames are sent with usb_write_vendor().
-void services_init(espp::Dispatcher &dispatcher, const ServicesCallbacks &callbacks);
+/// services on @p link (the vendor stream's dispatcher worker); replies go out
+/// through the link's sender.
+void services_init(espp::DispatcherWorker &link, const ServicesCallbacks &callbacks);
 
 /// A copy of the current (persisted) settings.
 device_config::Settings services_settings();

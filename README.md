@@ -194,8 +194,8 @@ BLE gamepad ──notify──▶ Xbox report parser ──▶ GamepadInputs ─
 | Piece | Where | What it does |
 |---|---|---|
 | BLE central | `main/ble.cpp` | Scanning, pairing, bonding, HID subscription, and a 100 ms supervisor that owns the LED, encryption retries and reconnects |
-| USB device | `main/usb.cpp` | Composite device (HID + vendor + optional CDC), Pro Controller handshake and report sender, vendor RX worker |
-| Services | `main/services.cpp` | Settings in NVS, and the OTA / core-dump / device-config modules on the dispatcher |
+| USB device | `main/usb.cpp` | Composite device (HID + vendor + optional CDC), Pro Controller handshake and report sender, the vendor stream's `espp::DispatcherWorker` |
+| Services | `main/services.cpp` | Settings in NVS, and the OTA / core-dump / device-config services registered on the worker (one call each) |
 | Device config | `components/device_config` | The web console's protocol (module `0x10`) and module class, with host-side tests |
 | Controller parsing | `components/xbox`, `components/gamepad_inputs` | Xbox report layout → generic gamepad inputs |
 | Display | `components/gui` | The T-Dongle-S3 status screen (SquareLine / LVGL) |
@@ -206,8 +206,8 @@ dongle is also a ready-made example of a device with a browser-based web console
 
 | Module | Id | Provided by |
 |---|---|---|
-| OTA | `0x00` | `espp/ota` |
-| Core dump | `0x04` | `espp/coredump` |
+| OTA | `0x00` | `espp::OtaService` (`espp/ota`) |
+| Core dump | `0x04` | `espp::CoreDumpService` (`espp/coredump`) |
 | Device config | `0x10` | this repo |
 
 Adding a module of your own means one protocol header, one class and one

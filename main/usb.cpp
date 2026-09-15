@@ -80,74 +80,45 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
   return false; // don't stop the task
 }
 
-// --- Vendor RX: queue on the TinyUSB task, dispatch from a worker ---------------
+// --- Vendor RX: espp::DispatcherWorker ------------------------------------------
 //
-// Handlers can block (OTA flash writes, core-dump erase), so bytes are queued and
-// fed to the dispatcher from a worker task. The protocols are one-request-in-
-// flight, so a well-behaved host queues at most ~one frame; the cap protects
-// against a misbehaving host.
-static espp::Dispatcher dispatcher;
-// set from the app task, invoked from the RX worker: guard it so it may be
+// Bytes arrive on the TinyUSB task, where handlers must not block (an OTA
+// BEGIN erases a partition, a core-dump erase takes tens of milliseconds). The
+// worker queues them (bounded) and runs the module handlers -- and their
+// replies -- on its own task; on overflow it resynchronizes the parser and
+// tells the services so an in-flight transfer can be aborted.
+static std::unique_ptr<espp::DispatcherWorker> vendor_link;
+// set from the app task, invoked from the worker: guard it so it may be
 // (re)set at any time without racing the worker
 static std::mutex rx_overflow_callback_mutex;
 static std::function<void()> rx_overflow_callback;
-static std::mutex rx_mutex;
-static std::condition_variable rx_cv;
-static std::deque<std::vector<uint8_t>> rx_queue;
-static size_t rx_queued_bytes = 0;
-static bool rx_overflow = false;
-static constexpr size_t kMaxQueuedRxBytes = 8 * espp::stream_frame::kMaxFrameSize;
-static std::unique_ptr<espp::Task> rx_task;
 
 static void on_vendor_receive(std::span<const uint8_t> data) {
   // TinyUSB task context: just queue the bytes and wake the worker.
-  {
-    std::lock_guard<std::mutex> lock(rx_mutex);
-    if (rx_queued_bytes + data.size() > kMaxQueuedRxBytes) {
-      // partial frames are useless once bytes are missing: drop everything and
-      // let the worker resynchronize
-      rx_queue.clear();
-      rx_queued_bytes = 0;
-      rx_overflow = true;
-    } else {
-      rx_queue.emplace_back(data.begin(), data.end());
-      rx_queued_bytes += data.size();
-    }
-  }
-  rx_cv.notify_one();
-}
-
-static bool rx_worker_fn(std::mutex &, std::condition_variable &) {
-  std::deque<std::vector<uint8_t>> chunks;
-  bool overflowed = false;
-  {
-    std::unique_lock<std::mutex> lock(rx_mutex);
-    rx_cv.wait_for(lock, 100ms, [] { return !rx_queue.empty() || rx_overflow; });
-    std::swap(chunks, rx_queue);
-    rx_queued_bytes = 0;
-    overflowed = rx_overflow;
-    rx_overflow = false;
-  }
-  if (overflowed) {
-    logger.warn("vendor RX overflow: frames dropped");
-    dispatcher.reset();
-    std::function<void()> callback;
-    {
-      std::lock_guard<std::mutex> lock(rx_overflow_callback_mutex);
-      callback = rx_overflow_callback;
-    }
-    if (callback)
-      callback(); // invoked outside the lock: it may send frames / block
-    return false; // the dropped chunks are gone; nothing to parse
-  }
-  for (const auto &chunk : chunks)
-    dispatcher.feed(chunk);
-  return false; // don't stop the task
+  usb_dispatcher().push(data);
 }
 
 // --- public API ------------------------------------------------------------------
 
-espp::Dispatcher &usb_dispatcher() { return dispatcher; }
+espp::DispatcherWorker &usb_dispatcher() {
+  if (!vendor_link) {
+    vendor_link = std::make_unique<espp::DispatcherWorker>(espp::DispatcherWorker::Config{
+        .send = [](std::span<const uint8_t> frame) { usb_write_vendor(frame); },
+        .on_overflow =
+            [] {
+              std::function<void()> callback;
+              {
+                std::lock_guard<std::mutex> lock(rx_overflow_callback_mutex);
+                callback = rx_overflow_callback;
+              }
+              if (callback)
+                callback(); // on the worker: it may send frames / block
+            },
+        .task_config = {.name = "usb_rx", .stack_size_bytes = 8192},
+        .log_level = espp::Logger::Verbosity::INFO});
+  }
+  return *vendor_link;
+}
 
 void usb_set_rx_overflow_callback(std::function<void()> callback) {
   std::lock_guard<std::mutex> lock(rx_overflow_callback_mutex);
@@ -220,6 +191,7 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
 #endif
 
   usb = std::make_unique<espp::UsbDevice>(cfg);
+  usb_dispatcher(); // exists before the first vendor byte can arrive
 
   usb->set_mount_callback([]() {
     logger.info("USB mounted");
@@ -228,12 +200,17 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
     // (0x81) report
     if (auto init = controller->on_attach())
       enqueue_hid(std::move(*init));
+    // a frame half-parsed before the (re)connect belongs to the old vendor_link
+    usb_dispatcher().request_reset();
   });
   usb->set_unmount_callback([]() {
     logger.info("USB unmounted");
     mounted.store(false);
-    std::lock_guard<std::mutex> lock(hid_tx_mutex);
-    hid_tx_queue.clear();
+    {
+      std::lock_guard<std::mutex> lock(hid_tx_mutex);
+      hid_tx_queue.clear();
+    }
+    usb_dispatcher().request_reset();
   });
 
   std::error_code ec;
@@ -247,12 +224,6 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
       {.callback = hid_sender_fn,
        .task_config = {.name = "usb_hid_tx", .stack_size_bytes = 4096, .priority = 10}});
   hid_sender_task->start();
-
-#if CONFIG_DONGLE_USB_VENDOR_INTERFACE
-  rx_task = espp::Task::make_unique(
-      {.callback = rx_worker_fn, .task_config = {.name = "usb_rx", .stack_size_bytes = 8192}});
-  rx_task->start();
-#endif
 
   logger.info("USB initialization DONE (serial {})", cfg.serial_number);
   return true;

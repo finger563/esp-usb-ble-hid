@@ -11,16 +11,17 @@
 #include <memory>
 #include <span>
 
-#include "dispatcher.hpp"
+#include "dispatcher_worker.hpp"
 #include "switch_pro.hpp"
 
-/// The dispatcher for the vendor stream. Register modules on it BEFORE
-/// start_usb() (registrations are also allowed later; the dispatcher defers
-/// them safely).
-espp::Dispatcher &usb_dispatcher();
+/// The vendor stream's dispatcher + worker (espp::DispatcherWorker): register
+/// services on it (at any time; it is created on first use), and every module
+/// handler -- and its replies -- runs on the worker task, never on TinyUSB's.
+espp::DispatcherWorker &usb_dispatcher();
 
-/// Called from the RX worker when vendor bytes had to be dropped (the parser
-/// has already been reset); services use it to abort an in-flight transfer.
+/// Called on the dispatcher worker when vendor bytes had to be dropped (the
+/// parser has already been reset); services use it to abort an in-flight
+/// transfer.
 /// May be set from any task at any time (the worker takes a copy under a lock).
 void usb_set_rx_overflow_callback(std::function<void()> callback);
 
