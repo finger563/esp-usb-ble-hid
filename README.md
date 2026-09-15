@@ -31,8 +31,8 @@ Android or iOS device that understands one.
 
 | | Step | |
 |---|---|---|
-| **1** | **Get a dongle.** A [LilyGo T-Dongle-S3](https://lilygo.cc/products/t-dongle-s3) ([Amazon](https://www.amazon.com/LILYGO-T-Dongle-S3-ESP32-S3-Development-Display/dp/B0BK9162QY)) is the recommended board: it has a tiny screen that shows the link status. An [Adafruit QT Py ESP32-S3](https://www.adafruit.com/product/5426) works too. | |
-| **2** | **Program it once.** Plug the dongle into your computer and run the *programmer* from the [latest release](https://github.com/finger563/esp-usb-ble-hid/releases/latest) — a single executable for Windows, macOS or Linux; no toolchain needed. | `esp-usb-ble-hid_programmer_<version>_<os>` |
+| **1** | **Get a dongle.** A [LilyGo T-Dongle-S3](https://lilygo.cc/products/t-dongle-s3) ([Amazon](https://www.amazon.com/LILYGO-T-Dongle-S3-ESP32-S3-Development-Display/dp/B0BK9162QY)) is the recommended board: it has a tiny screen that shows the link status, and it is the board the release programmer targets. An [Adafruit QT Py ESP32-S3](https://www.adafruit.com/product/5426) works too, but needs a [build from source](#building-from-source). | |
+| **2** | **Program it once.** Plug the dongle into your computer and run the *programmer* from the [latest release](https://github.com/finger563/esp-usb-ble-hid/releases/latest) — a single executable for Windows, macOS or Linux; no toolchain needed. (T-Dongle-S3 only — other boards are built from source.) | `esp-usb-ble-hid_programmer_<version>_<os>` |
 | **3** | **Enable wired controllers on the Switch.** *System Settings → Controllers and Sensors → Pro Controller Wired Communication → On.* | |
 | **4** | **Plug it into the dock and pair.** Hold the dongle's button for 3 s until the LED pulses blue, then put your controller in pairing mode. From then on it reconnects by itself every time. | |
 
@@ -141,13 +141,13 @@ web console.)*
 
 | | Supported | Notes |
 |---|---|---|
-| **Boards** | LilyGo T-Dongle-S3, Adafruit QT Py ESP32-S3 | Select under *Hardware Configuration* in `menuconfig`; the release binaries target the T-Dongle-S3 |
+| **Boards** | LilyGo T-Dongle-S3, Adafruit QT Py ESP32-S3 | The release programmer and binaries are built for the T-Dongle-S3 only; for the QT Py (or any other board) build from source with the board selected under *Hardware Configuration* in `menuconfig` |
 | **Controllers** | Xbox Wireless Controller (Bluetooth LE models: Xbox Series X\|S controller, Xbox One controllers with the BLE firmware update) | Any BLE gamepad can pair, but its reports are decoded with the Xbox layout — other layouts are a small parser away (`components/xbox`) |
 | **Hosts** | Nintendo Switch (docked or via a USB-C adapter), plus anything that accepts a USB Pro Controller: Windows, macOS, Linux, Android, iOS | The Switch needs *Pro Controller Wired Communication* enabled |
 
 ## Building from source
 
-The project builds with **ESP-IDF v6.1**. Every library comes from the
+Building from source is also how you get firmware for a board other than the T-Dongle-S3, since CI only packages that one. The project builds with **ESP-IDF v6.1**. Every library comes from the
 [ESP Component Registry](https://components.espressif.com) — the
 [espp](https://github.com/esp-cpp/espp) components, `esp_tinyusb`,
 `esp-nimble-cpp` — and is fetched on the first build.
