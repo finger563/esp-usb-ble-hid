@@ -373,41 +373,42 @@
   <main>
     <!-- ============================ Device ============================ -->
     <section id="tab-device" role="tabpanel" aria-labelledby="tabbtn-device">
-      <div class="stack">
-        <div class="card">
-          <div class="card-head">
-            <h2>Status</h2>
-            <span id="infoAuto" class="muted small-text">auto-refresh 2 s</span>
-            <button id="infoBtn" class="small" type="button" disabled>Refresh now</button>
-          </div>
-          <div class="badges">
-            <span id="bUsb" class="badge">USB</span>
-            <span id="bBle" class="badge">Controller</span>
-            <span id="bScan" class="badge">Scanning</span>
-            <span id="bPair" class="badge">Pairing</span>
-          </div>
-          <dl class="kv">
-            <dt>Controller</dt><dd id="iController" class="mono">—</dd>
-            <dt>Battery</dt><dd><span id="iBattery">—</span><span id="iBatteryMeter" class="meter" hidden><i></i></span></dd>
-            <dt>Paired controllers</dt><dd id="iBonds">—</dd>
-            <dt>Uptime</dt><dd id="iUptime">—</dd>
-            <dt>Project</dt><dd id="iProject">—</dd>
-            <dt>Firmware</dt><dd id="iFirmware" class="mono">—</dd>
-            <dt>Latest release</dt><dd id="iUpdate" class="muted">not checked</dd>
-            <dt>Hardware</dt><dd id="iHardware">—</dd>
-            <dt>ESP-IDF</dt><dd id="iIdf" class="mono">—</dd>
-          </dl>
-          <div class="link-block" aria-label="Link diagnostics">
-            <div class="link-label">Link</div>
-            <dl class="kv">
-              <dt>Controller link</dt><dd id="lState">—</dd>
-              <dt>BLE input</dt><dd id="lBle">—</dd>
-              <dt>USB output</dt><dd id="lUsb">—</dd>
-            </dl>
-            <div id="linkNote" class="note small-text muted" hidden></div>
-          </div>
-          <div id="infoNote" class="note muted small-text">Connect the dongle to read its status.</div>
+      <div class="card">
+        <div class="card-head">
+          <h2>Status</h2>
+          <span id="infoAuto" class="muted small-text">auto-refresh 2 s</span>
+          <button id="infoBtn" class="small" type="button" disabled>Refresh now</button>
         </div>
+        <div class="badges">
+          <span id="bUsb" class="badge">USB</span>
+          <span id="bBle" class="badge">Controller</span>
+          <span id="bScan" class="badge">Scanning</span>
+          <span id="bPair" class="badge">Pairing</span>
+        </div>
+        <dl class="kv">
+          <dt>Controller</dt><dd id="iController" class="mono">—</dd>
+          <dt>Battery</dt><dd><span id="iBattery">—</span><span id="iBatteryMeter" class="meter" hidden><i></i></span></dd>
+          <dt>Paired controllers</dt><dd id="iBonds">—</dd>
+          <dt>Uptime</dt><dd id="iUptime">—</dd>
+          <dt>Project</dt><dd id="iProject">—</dd>
+          <dt>Firmware</dt><dd id="iFirmware" class="mono">—</dd>
+          <dt>Latest release</dt><dd id="iUpdate" class="muted">not checked</dd>
+          <dt>Hardware</dt><dd id="iHardware">—</dd>
+          <dt>ESP-IDF</dt><dd id="iIdf" class="mono">—</dd>
+        </dl>
+        <div class="link-block" aria-label="Link diagnostics">
+          <div class="link-label">Link</div>
+          <dl class="kv">
+            <dt>Controller link</dt><dd id="lState">—</dd>
+            <dt>BLE input</dt><dd id="lBle">—</dd>
+            <dt>USB output</dt><dd id="lUsb">—</dd>
+          </dl>
+          <div id="linkNote" class="note small-text muted" hidden></div>
+        </div>
+        <div id="infoNote" class="note muted small-text">Connect the dongle to read its status.</div>
+      </div>
+
+      <div class="stack">
         <div class="card">
           <div class="card-head"><h2>Actions</h2></div>
           <div class="actions">
@@ -418,19 +419,18 @@
           <div id="actionConfirm" class="confirm-slot"></div>
           <div id="actionNote" class="note muted small-text">Pairing mode is the same as holding the dongle's button. Rebooting drops the USB link; the console reconnects when the dongle comes back.</div>
         </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <h2>Paired controllers</h2>
-          <span id="bondsCount" class="muted small-text"></span>
-          <button id="bondsRefresh" class="small" type="button" disabled>Refresh</button>
+        <div class="card">
+          <div class="card-head">
+            <h2>Paired controllers</h2>
+            <span id="bondsCount" class="muted small-text"></span>
+            <button id="bondsRefresh" class="small" type="button" disabled>Refresh</button>
+          </div>
+          <ul id="bondsList" class="bonds" aria-label="Paired controllers">
+            <li class="bond-empty muted">Connect the dongle to list its paired controllers.</li>
+          </ul>
+          <div id="bondsConfirm" class="confirm-slot"></div>
+          <div id="bondsNote" class="note muted small-text"></div>
         </div>
-        <ul id="bondsList" class="bonds" aria-label="Paired controllers">
-          <li class="bond-empty muted">Connect the dongle to list its paired controllers.</li>
-        </ul>
-        <div id="bondsConfirm" class="confirm-slot"></div>
-        <div id="bondsNote" class="note muted small-text"></div>
       </div>
 
 
