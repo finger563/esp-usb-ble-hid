@@ -70,24 +70,22 @@ static void apply_deadzone(GamepadInputs::Joystick &j, float deadzone) {
 
 // The last inputs pushed (before settings), so the report can be re-pushed by
 // the USB registration timer below; and the end of the registration window
-// (0 = none) during which L+R are held.
-static std::mutex last_inputs_mutex;
+// (0 = none) during which L+R are held. One mutex serializes every report
+// push with the window transitions, so a notification arriving between the
+// timer's snapshot and its re-push can never be overwritten by the snapshot.
+static std::mutex inputs_mutex;
 static GamepadInputs last_inputs{};
-static std::atomic<int64_t> registration_until_us{0};
+static int64_t registration_until_us{0}; // guarded by inputs_mutex
 static constexpr int64_t kRegistrationWindowUs = 1000 * 1000;
 
 // Apply the user settings to the controller inputs and push them into the USB
 // controller's input report (streamed to the host by the USB sender task).
-static void push_inputs(GamepadInputs inputs) {
-  {
-    std::lock_guard<std::mutex> lk(last_inputs_mutex);
-    last_inputs = inputs;
-  }
+static void push_inputs_locked(GamepadInputs inputs) {
   // The Switch's Change Grip/Order screen registers a controller when L+R are
   // pressed: hold them for a moment after every USB enumeration (see
   // usb_registration_tick) so the dongle registers itself without a hand on
   // the wireless controller.
-  if (esp_timer_get_time() < registration_until_us.load()) {
+  if (esp_timer_get_time() < registration_until_us) {
     inputs.buttons.l1 = 1;
     inputs.buttons.r1 = 1;
   }
@@ -120,25 +118,29 @@ static void push_inputs(GamepadInputs inputs) {
   usb_controller->set_battery_level(static_cast<uint8_t>(battery_level_percent.load()));
 }
 
+static void push_inputs(GamepadInputs inputs) {
+  std::lock_guard<std::mutex> lk(inputs_mutex);
+  last_inputs = inputs;
+  push_inputs_locked(inputs);
+}
+
 // Polled every 50 ms: when the host has just finished the handshake and
 // started taking reports, hold L+R for kRegistrationWindowUs, then release.
 static void usb_registration_tick() {
   static bool was_ready = false;
   const bool ready = usb_hid_ready();
   const int64_t now = esp_timer_get_time();
-  GamepadInputs inputs;
-  {
-    std::lock_guard<std::mutex> lk(last_inputs_mutex);
-    inputs = last_inputs;
-  }
+  // the window transition and the re-push happen under the same lock as every
+  // other push, so the latest inputs are what gets (re)pushed
+  std::lock_guard<std::mutex> lk(inputs_mutex);
   if (ready && !was_ready) {
-    registration_until_us.store(now + kRegistrationWindowUs);
-    push_inputs(inputs); // with L+R
+    registration_until_us = now + kRegistrationWindowUs;
+    push_inputs_locked(last_inputs); // with L+R
   } else if (!ready) {
-    registration_until_us.store(0);
-  } else if (const int64_t until = registration_until_us.load(); until && now >= until) {
-    registration_until_us.store(0);
-    push_inputs(inputs); // release L+R
+    registration_until_us = 0;
+  } else if (registration_until_us && now >= registration_until_us) {
+    registration_until_us = 0;
+    push_inputs_locked(last_inputs); // release L+R
   }
   was_ready = ready;
 }

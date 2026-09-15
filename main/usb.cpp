@@ -254,8 +254,9 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
   });
   usb->set_unmount_callback([]() {
     logger.info("USB unmounted");
-    mounted.store(false);
+    // timestamp first: the sender reads it right after it sees mounted == false
     unmounted_at_us.store(esp_timer_get_time());
+    mounted.store(false);
     std::lock_guard<std::mutex> lock(hid_tx_mutex);
     hid_tx_queue.clear();
   });
