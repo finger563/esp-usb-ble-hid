@@ -71,6 +71,8 @@
     html, body { height: 100%; }
     body {
       margin: 0;
+      /* app layout: the header, tabs and log panel stay put; only <main> scrolls */
+      height: 100vh; height: 100dvh; overflow: hidden;
       background: var(--bg);
       color: var(--ink);
       font-family: var(--font-ui);
@@ -78,7 +80,6 @@
       line-height: 1.45;
       display: flex;
       flex-direction: column;
-      min-height: 100vh;
     }
     h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
     h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
@@ -181,7 +182,10 @@
     [role="tab"].missing .dot { background: var(--danger); }
 
     /* ---- layout ---- */
-    main { flex: 1 1 auto; padding: 14px 16px 8px; min-height: 0; }
+    main { flex: 1 1 auto; padding: 14px 16px 14px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    /* cards stacked in one grid cell (status + actions), so a short card never
+       wraps onto its own row as an island under the tallest card */
+    .stack { display: grid; gap: 14px; align-content: start; min-width: 0; }
     [role="tabpanel"] { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }
     .card {
       background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
@@ -297,7 +301,7 @@
     .cmdrow pre { flex: 1 1 auto; margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); overflow-x: auto; white-space: pre; font-size: 12px; }
 
     /* ---- log ---- */
-    .logpanel { border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
+    .logpanel { flex: none; border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
     .loghead { display: flex; align-items: center; gap: 12px; padding: 6px 16px; border-bottom: 1px solid var(--line); }
     .loghead h2 { flex: 1 1 auto; }
     .loghead label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
@@ -325,6 +329,9 @@
       .kv dd { margin-bottom: 4px; }
       .loghead, #log { padding-left: 10px; padding-right: 10px; }
       #log { height: 140px; }
+    }
+    @media (max-height: 640px) {
+      #log { height: 96px; }
     }
   </style>
 </head>
@@ -363,39 +370,51 @@
   <main>
     <!-- ============================ Device ============================ -->
     <section id="tab-device" role="tabpanel" aria-labelledby="tabbtn-device">
-      <div class="card">
-        <div class="card-head">
-          <h2>Status</h2>
-          <span id="infoAuto" class="muted small-text">auto-refresh 2 s</span>
-          <button id="infoBtn" class="small" type="button" disabled>Refresh now</button>
-        </div>
-        <div class="badges">
-          <span id="bUsb" class="badge">USB</span>
-          <span id="bBle" class="badge">Controller</span>
-          <span id="bScan" class="badge">Scanning</span>
-          <span id="bPair" class="badge">Pairing</span>
-        </div>
-        <dl class="kv">
-          <dt>Controller</dt><dd id="iController" class="mono">—</dd>
-          <dt>Battery</dt><dd><span id="iBattery">—</span><span id="iBatteryMeter" class="meter" hidden><i></i></span></dd>
-          <dt>Paired controllers</dt><dd id="iBonds">—</dd>
-          <dt>Uptime</dt><dd id="iUptime">—</dd>
-          <dt>Project</dt><dd id="iProject">—</dd>
-          <dt>Firmware</dt><dd id="iFirmware" class="mono">—</dd>
-          <dt>Latest release</dt><dd id="iUpdate" class="muted">not checked</dd>
-          <dt>Hardware</dt><dd id="iHardware">—</dd>
-          <dt>ESP-IDF</dt><dd id="iIdf" class="mono">—</dd>
-        </dl>
-        <div class="link-block" aria-label="Link diagnostics">
-          <div class="link-label">Link</div>
+      <div class="stack">
+        <div class="card">
+          <div class="card-head">
+            <h2>Status</h2>
+            <span id="infoAuto" class="muted small-text">auto-refresh 2 s</span>
+            <button id="infoBtn" class="small" type="button" disabled>Refresh now</button>
+          </div>
+          <div class="badges">
+            <span id="bUsb" class="badge">USB</span>
+            <span id="bBle" class="badge">Controller</span>
+            <span id="bScan" class="badge">Scanning</span>
+            <span id="bPair" class="badge">Pairing</span>
+          </div>
           <dl class="kv">
-            <dt>Controller link</dt><dd id="lState">—</dd>
-            <dt>BLE input</dt><dd id="lBle">—</dd>
-            <dt>USB output</dt><dd id="lUsb">—</dd>
+            <dt>Controller</dt><dd id="iController" class="mono">—</dd>
+            <dt>Battery</dt><dd><span id="iBattery">—</span><span id="iBatteryMeter" class="meter" hidden><i></i></span></dd>
+            <dt>Paired controllers</dt><dd id="iBonds">—</dd>
+            <dt>Uptime</dt><dd id="iUptime">—</dd>
+            <dt>Project</dt><dd id="iProject">—</dd>
+            <dt>Firmware</dt><dd id="iFirmware" class="mono">—</dd>
+            <dt>Latest release</dt><dd id="iUpdate" class="muted">not checked</dd>
+            <dt>Hardware</dt><dd id="iHardware">—</dd>
+            <dt>ESP-IDF</dt><dd id="iIdf" class="mono">—</dd>
           </dl>
-          <div id="linkNote" class="note small-text muted" hidden></div>
+          <div class="link-block" aria-label="Link diagnostics">
+            <div class="link-label">Link</div>
+            <dl class="kv">
+              <dt>Controller link</dt><dd id="lState">—</dd>
+              <dt>BLE input</dt><dd id="lBle">—</dd>
+              <dt>USB output</dt><dd id="lUsb">—</dd>
+            </dl>
+            <div id="linkNote" class="note small-text muted" hidden></div>
+          </div>
+          <div id="infoNote" class="note muted small-text">Connect the dongle to read its status.</div>
         </div>
-        <div id="infoNote" class="note muted small-text">Connect the dongle to read its status.</div>
+        <div class="card">
+          <div class="card-head"><h2>Actions</h2></div>
+          <div class="actions">
+            <button id="actPair" type="button" disabled>Start pairing</button>
+            <button id="actForget" class="danger" type="button" disabled>Forget all controllers</button>
+            <button id="actReboot" class="danger" type="button" disabled>Reboot dongle</button>
+          </div>
+          <div id="actionConfirm" class="confirm-slot"></div>
+          <div id="actionNote" class="note muted small-text">Pairing mode is the same as holding the dongle's button. Rebooting drops the USB link; the console reconnects when the dongle comes back.</div>
+        </div>
       </div>
 
       <div class="card">
@@ -472,16 +491,6 @@
         <div id="settingsNote" class="note muted small-text"></div>
       </div>
 
-      <div class="card">
-        <div class="card-head"><h2>Actions</h2></div>
-        <div class="actions">
-          <button id="actPair" type="button" disabled>Start pairing</button>
-          <button id="actForget" class="danger" type="button" disabled>Forget all controllers</button>
-          <button id="actReboot" class="danger" type="button" disabled>Reboot dongle</button>
-        </div>
-        <div id="actionConfirm" class="confirm-slot"></div>
-        <div id="actionNote" class="note muted small-text">Pairing mode is the same as holding the dongle's button. Rebooting drops the USB link; the console reconnects when the dongle comes back.</div>
-      </div>
     </section>
 
     <!-- ============================ Firmware ============================ -->
