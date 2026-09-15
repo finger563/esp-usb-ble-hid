@@ -81,6 +81,11 @@ A few things worth knowing:
   Switch; press a button on a Joy-Con or use the dock's own controls. (A
   USB-to-Ethernet adapter in the dock reportedly keeps the port awake.)
 - **No bonded controller?** The dongle starts in pairing mode by itself.
+- **Change Grip/Order screen:** the dongle presses L+R by itself for a second
+  after every USB enumeration, so it registers on that screen without a hand
+  on the wireless controller. If the Switch drops the USB link there (it
+  sometimes does, without re-enumerating), the dongle re-arms its USB
+  connection after 2.5 s so the Switch picks it up again.
 - **Forgot which controllers are paired?** The web console lists them by name.
 
 ## The web console
@@ -227,6 +232,8 @@ walks through the contract.
   on both sides and pairing again clears a stale bond.
 - **The Switch does not see a controller at all** — the dongle only mounts
   while the Switch is awake; wake it first.
+- **The dongle vanished after Change Grip/Order** — it re-arms its USB link
+  by itself within a few seconds; if it stays gone, re-plug it.
 - **Something crashed** — the *Crash dump* tab has the summary. Please open
   an issue with `core.elf` attached.
 
