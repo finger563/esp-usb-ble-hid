@@ -71,6 +71,8 @@
     html, body { height: 100%; }
     body {
       margin: 0;
+      /* app layout: the header, tabs and log panel stay put; only <main> scrolls */
+      height: 100vh; height: 100dvh; overflow: hidden;
       background: var(--bg);
       color: var(--ink);
       font-family: var(--font-ui);
@@ -78,7 +80,6 @@
       line-height: 1.45;
       display: flex;
       flex-direction: column;
-      min-height: 100vh;
     }
     h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
     h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
@@ -165,7 +166,11 @@
     .tabs {
       display: flex; gap: 2px; padding: 10px 16px 0; border-bottom: 1px solid var(--line);
       background: var(--bg);
+      /* the body clips overflow, so a strip wider than a narrow phone must scroll itself */
+      overflow-x: auto; flex: none; scrollbar-width: none;
     }
+    .tabs::-webkit-scrollbar { display: none; }
+    [role="tab"] { flex: none; }
     [role="tab"] {
       background: transparent; border: 1px solid transparent; border-bottom: none;
       border-radius: 8px 8px 0 0; color: var(--muted); padding: 8px 14px; margin-bottom: -1px;
@@ -181,13 +186,18 @@
     [role="tab"].missing .dot { background: var(--danger); }
 
     /* ---- layout ---- */
-    main { flex: 1 1 auto; padding: 14px 16px 8px; min-height: 0; }
+    main { flex: 1 1 auto; padding: 14px 16px 14px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    /* cards stacked in one grid cell (status + actions), so a short card never
+       wraps onto its own row as an island under the tallest card */
+    .stack { display: grid; gap: 14px; align-content: start; min-width: 0; }
     [role="tabpanel"] { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }
     .card {
       background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
       box-shadow: var(--shadow); padding: 14px 16px; min-width: 0;
     }
     .card.wide { grid-column: 1 / -1; }
+    /* a single form reads better at a fixed width than stretched across the page */
+    #tab-settings { grid-template-columns: minmax(0, 640px); }
     .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
     .card-head h2 { flex: 1 1 auto; }
     .muted { color: var(--muted); }
@@ -267,6 +277,10 @@
     .field:last-child { border-bottom: none; }
     .field label { font-weight: 600; }
     .field .hint { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+    /* a setting the connected firmware does not report: shown, but not editable */
+    .field.unsupported { opacity: 0.55; }
+    .field.unsupported .hint::after { content: " Not supported by this firmware."; color: var(--warn); }
+    .field.unsupported:not(:has(.hint))::after { content: "Not supported by this firmware."; grid-column: 1 / -1; color: var(--warn); font-size: 12px; }
     .field.slider { grid-template-columns: 1fr 52px; }
     .field.slider input[type="range"] { grid-column: 1; }
     .field.slider output { font-family: var(--font-mono); font-size: 12.5px; text-align: right; }
@@ -297,7 +311,7 @@
     .cmdrow pre { flex: 1 1 auto; margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); overflow-x: auto; white-space: pre; font-size: 12px; }
 
     /* ---- log ---- */
-    .logpanel { border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
+    .logpanel { flex: none; border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
     .loghead { display: flex; align-items: center; gap: 12px; padding: 6px 16px; border-bottom: 1px solid var(--line); }
     .loghead h2 { flex: 1 1 auto; }
     .loghead label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
@@ -325,6 +339,9 @@
       .kv dd { margin-bottom: 4px; }
       .loghead, #log { padding-left: 10px; padding-right: 10px; }
       #log { height: 140px; }
+    }
+    @media (max-height: 640px) {
+      #log { height: 96px; }
     }
   </style>
 </head>
@@ -356,6 +373,7 @@
 
   <nav class="tabs" role="tablist" aria-label="Console sections">
     <button role="tab" id="tabbtn-device" data-tab="device" aria-selected="true" aria-controls="tab-device" type="button">Device<span class="dot"></span></button>
+    <button role="tab" id="tabbtn-settings" data-tab="settings" aria-selected="false" aria-controls="tab-settings" tabindex="-1" type="button">Settings<span class="dot"></span></button>
     <button role="tab" id="tabbtn-firmware" data-tab="firmware" aria-selected="false" aria-controls="tab-firmware" tabindex="-1" type="button">Firmware<span class="dot"></span></button>
     <button role="tab" id="tabbtn-coredump" data-tab="coredump" aria-selected="false" aria-controls="tab-coredump" tabindex="-1" type="button">Crash dump<span class="dot"></span></button>
   </nav>
@@ -398,19 +416,36 @@
         <div id="infoNote" class="note muted small-text">Connect the dongle to read its status.</div>
       </div>
 
-      <div class="card">
-        <div class="card-head">
-          <h2>Paired controllers</h2>
-          <span id="bondsCount" class="muted small-text"></span>
-          <button id="bondsRefresh" class="small" type="button" disabled>Refresh</button>
+      <div class="stack">
+        <div class="card">
+          <div class="card-head"><h2>Actions</h2></div>
+          <div class="actions">
+            <button id="actPair" type="button" disabled>Start pairing</button>
+            <button id="actForget" class="danger" type="button" disabled>Forget all controllers</button>
+            <button id="actReboot" class="danger" type="button" disabled>Reboot dongle</button>
+          </div>
+          <div id="actionConfirm" class="confirm-slot"></div>
+          <div id="actionNote" class="note muted small-text">Pairing mode is the same as holding the dongle's button. Rebooting drops the USB link; the console reconnects when the dongle comes back.</div>
         </div>
-        <ul id="bondsList" class="bonds" aria-label="Paired controllers">
-          <li class="bond-empty muted">Connect the dongle to list its paired controllers.</li>
-        </ul>
-        <div id="bondsConfirm" class="confirm-slot"></div>
-        <div id="bondsNote" class="note muted small-text"></div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Paired controllers</h2>
+            <span id="bondsCount" class="muted small-text"></span>
+            <button id="bondsRefresh" class="small" type="button" disabled>Refresh</button>
+          </div>
+          <ul id="bondsList" class="bonds" aria-label="Paired controllers">
+            <li class="bond-empty muted">Connect the dongle to list its paired controllers.</li>
+          </ul>
+          <div id="bondsConfirm" class="confirm-slot"></div>
+          <div id="bondsNote" class="note muted small-text"></div>
+        </div>
       </div>
 
+
+    </section>
+
+    <!-- ============================ Settings ============================ -->
+    <section id="tab-settings" role="tabpanel" aria-labelledby="tabbtn-settings" hidden>
       <div class="card">
         <div class="card-head">
           <h2>Settings</h2>
@@ -445,6 +480,18 @@
             <label for="s_led_brightness">Status LED brightness</label>
             <output id="o_led_brightness" for="s_led_brightness">100 %</output>
             <input type="range" id="s_led_brightness" data-key="led_brightness" min="0" max="100" step="1" value="100" disabled>
+            <span class="hint">Overall brightness: scanning, pairing and connected.</span>
+          </div>
+          <div class="field slider">
+            <label for="s_led_connected_brightness">LED level while connected</label>
+            <output id="o_led_connected_brightness" for="s_led_connected_brightness">25 %</output>
+            <input type="range" id="s_led_connected_brightness" data-key="led_connected_brightness" min="0" max="100" step="1" value="25" disabled>
+            <span class="hint">Steady level once a controller is connected, as a share of the brightness above. 0 turns it off while playing.</span>
+          </div>
+          <div class="field">
+            <label for="s_led_activity_blink">Blink LED on every input</label>
+            <span class="switch"><input type="checkbox" id="s_led_activity_blink" data-key="led_activity_blink" disabled><i></i></span>
+            <span class="hint">Debugging aid: toggles the LED with each report forwarded to the host instead of holding it steady.</span>
           </div>
           <div class="field text">
             <label for="s_ble_name">BLE device name</label>
@@ -458,17 +505,6 @@
         </div>
         <div id="settingsConfirm" class="confirm-slot"></div>
         <div id="settingsNote" class="note muted small-text"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Actions</h2></div>
-        <div class="actions">
-          <button id="actPair" type="button" disabled>Start pairing</button>
-          <button id="actForget" class="danger" type="button" disabled>Forget all controllers</button>
-          <button id="actReboot" class="danger" type="button" disabled>Reboot dongle</button>
-        </div>
-        <div id="actionConfirm" class="confirm-slot"></div>
-        <div id="actionNote" class="note muted small-text">Pairing mode is the same as holding the dongle's button. Rebooting drops the USB link; the console reconnects when the dongle comes back.</div>
       </div>
     </section>
 
@@ -603,7 +639,8 @@
                   INFO: 0x81, SETTINGS: 0x82, OK: 0x83, ERROR: 0x84, BONDS: 0x85 };
     const DEV_ERROR_CODE = { 1: "malformed", 2: "invalid value", 3: "unknown request", 4: "failed", 5: "not found" };
     const DEV_KEY = { invert_left_y: 1, invert_right_y: 2, swap_ab: 3, swap_xy: 4,
-                      deadzone_percent: 5, led_brightness: 6, ble_name: 7 };
+                      deadzone_percent: 5, led_brightness: 6, ble_name: 7,
+                      led_connected_brightness: 8, led_activity_blink: 9 };
     const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
     const DEV_PROTOCOL_VERSION = 1;
     const DEV_MAX_DEADZONE = 50, DEV_MAX_BLE_NAME = 31;
@@ -822,7 +859,8 @@
     // [version u8][count u8] then count x [key u8][len u8][value]. Partial lists are legal.
     const SETTING_KEYS = Object.keys(DEV_KEY);
     const SETTING_KIND = { invert_left_y: "bool", invert_right_y: "bool", swap_ab: "bool", swap_xy: "bool",
-                           deadzone_percent: "u8", led_brightness: "u8", ble_name: "str" };
+                           deadzone_percent: "u8", led_brightness: "u8", ble_name: "str",
+                           led_connected_brightness: "u8", led_activity_blink: "bool" };
     function encodeSettings(values) {
       const out = [DEV_PROTOCOL_VERSION, 0];
       let count = 0;
@@ -878,6 +916,7 @@
     function validateSetting(key, value) {
       if (key === "deadzone_percent" && (value < 0 || value > DEV_MAX_DEADZONE)) return "deadzone must be 0.." + DEV_MAX_DEADZONE + " %";
       if (key === "led_brightness" && (value < 0 || value > 100)) return "LED brightness must be 0..100 %";
+      if (key === "led_connected_brightness" && (value < 0 || value > 100)) return "LED level while connected must be 0..100 %";
       if (key === "ble_name") {
         if (!value.length || value.length > DEV_MAX_BLE_NAME) return "BLE name must be 1.." + DEV_MAX_BLE_NAME + " characters";
         for (const ch of value) { const c = ch.charCodeAt(0); if (c < 0x20 || c >= 0x7F) return "BLE name must be printable ASCII"; }
@@ -1096,8 +1135,9 @@
       els[id] = document.getElementById(id);
     }
     const tabButtons = Array.from(document.querySelectorAll('[role="tab"]'));
-    const tabPanels = { device: document.getElementById("tab-device"), firmware: document.getElementById("tab-firmware"), coredump: document.getElementById("tab-coredump") };
-    const TAB_MODULE = { device: MODULE.DEVICE, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
+    const tabPanels = {};
+    for (const b of tabButtons) tabPanels[b.dataset.tab] = document.getElementById(b.getAttribute("aria-controls"));
+    const TAB_MODULE = { device: MODULE.DEVICE, settings: MODULE.DEVICE, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
 
     // ---- logging ---------------------------------------------------------------
     function logLine(cls, text) {
@@ -1629,7 +1669,9 @@
       els.bondsRefresh.disabled = !dev;
       for (const b of els.bondsList.querySelectorAll("button")) b.disabled = !dev;
       els.settingsReload.disabled = !dev;
-      for (const input of els.settingsForm.querySelectorAll("input")) input.disabled = !dev || !deviceSettings;
+      // a key the firmware did not report (older firmware) stays read-only: it
+      // could never be applied (settingsDirtyKeys skips it)
+      for (const input of els.settingsForm.querySelectorAll("input")) input.disabled = !dev || !deviceSettings || !(input.dataset.key in deviceSettings);
       els.settingsApply.disabled = !dev || !deviceSettings || !settingsDirtyKeys().length || !!settingsInvalid();
       els.settingsReset.disabled = !dev || !deviceSettings;
       els.actPair.disabled = !dev; els.actForget.disabled = !dev; els.actReboot.disabled = !dev;
@@ -1883,7 +1925,10 @@
       deviceSettings = Object.assign({}, values);
       for (const key of SETTING_KEYS) {
         const input = settingInputs[key];
-        if (!(key in values)) continue;
+        const supported = key in values;
+        input.closest(".field").classList.toggle("unsupported", !supported);
+        input.title = supported ? "" : "Not supported by this firmware";
+        if (!supported) continue;
         if (SETTING_KIND[key] === "bool") input.checked = !!values[key];
         else input.value = values[key];
       }
@@ -1894,6 +1939,7 @@
     function updateSliderOutputs() {
       document.getElementById("o_deadzone_percent").textContent = settingInputs.deadzone_percent.value + " %";
       document.getElementById("o_led_brightness").textContent = settingInputs.led_brightness.value + " %";
+      document.getElementById("o_led_connected_brightness").textContent = settingInputs.led_connected_brightness.value + " %";
     }
     function settingsDirtyKeys() {
       if (!deviceSettings) return [];

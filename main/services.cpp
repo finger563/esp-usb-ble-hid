@@ -42,6 +42,10 @@ static device_config::Settings load_settings() {
                               ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "led", s.led_brightness, s.led_brightness, ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "ble_name", s.ble_name, s.ble_name, ec);
+  nvs_storage->get_or_set_var(kNvsNamespace, "led_conn", s.led_connected_brightness,
+                              s.led_connected_brightness, ec);
+  nvs_storage->get_or_set_var(kNvsNamespace, "led_blink", s.led_activity_blink,
+                              s.led_activity_blink, ec);
   if (ec)
     logger.warn("Could not read all settings from NVS: {}", ec.message());
   // never trust stored values blindly (an older firmware may have stored
@@ -73,6 +77,8 @@ static bool save_settings(const device_config::Settings &s, std::string &error) 
   stage("deadzone", s.deadzone_percent);
   stage("led", s.led_brightness);
   stage("ble_name", s.ble_name);
+  stage("led_conn", s.led_connected_brightness);
+  stage("led_blink", s.led_activity_blink);
   if (!ec)
     handle.commit(ec);
   if (ec) {

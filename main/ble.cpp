@@ -183,20 +183,55 @@ static auto led_callback = [](auto &m, auto &cv) -> bool {
 static auto led_task =
     espp::Task::make_unique({.callback = led_callback, .task_config = {.name = "breathe"}});
 
-// The breathing LED is owned by the scan timer (the link supervisor): it is
-// the only place that starts / stops the LED task, so a connect or disconnect
-// delivered on the BLE host task can never leave the LED in the wrong state.
+// The LED is owned by the scan timer (the link supervisor): it is the only
+// place that starts / stops the breathing task and sets the steady "connected"
+// level, so a connect or disconnect delivered on the BLE host task can never
+// leave the LED in the wrong state. (The optional per-input blink in the app's
+// notify callback is the one exception, and only while that setting is on.)
+// What the supervisor last wrote while connected: a steady value (>= 0), the
+// blink baseline (kLedBlinkBaseline: LED cleared once so the per-input toggle
+// starts from a defined state), or nothing since the last scan (kLedNothing).
+static constexpr float kLedNothing = -1.0f;
+static constexpr float kLedBlinkBaseline = -2.0f;
+static float led_connected_applied = kLedNothing;
+static uint32_t led_blink_writes_seen = 0;
+
 static void set_led_breathing(bool breathing) {
   if (breathing == led_task->is_running())
     return;
   if (breathing) {
     breathing_start = std::chrono::high_resolution_clock::now();
+    led_connected_applied = kLedNothing;
     led_task->start();
   } else {
     led_task->stop();
-    static const espp::Rgb black(0.0f, 0.0f, 0.0f);
-    set_led(black);
   }
+}
+
+// While a controller is connected: hold the LED at the configured level, and
+// re-apply it when the settings change. With the activity blink enabled the
+// app drives the LED per report instead; the supervisor only clears the LED
+// once when that mode starts (so the toggle begins from a defined state) and
+// otherwise stays out of the way.
+static void update_led_connected() {
+  if (led_activity_blink()) {
+    if (led_connected_applied != kLedBlinkBaseline) {
+      static const espp::Rgb off(0.0f, 0.0f, 0.0f);
+      set_led(off);
+      led_connected_applied = kLedBlinkBaseline;
+    }
+    return;
+  }
+  // The app's blink write runs on another task: one that saw the setting still
+  // on can land after our steady write. Any blink write since we last wrote
+  // means the steady level must be written again.
+  const uint32_t blink_writes = g_led_blink_writes.load();
+  const float value = led_connected_value();
+  if (value == led_connected_applied && blink_writes == led_blink_writes_seen)
+    return;
+  led_connected_applied = value;
+  led_blink_writes_seen = blink_writes;
+  show_led_connected();
 }
 
 class ClientCallbacks : public NimBLEClientCallbacks {
@@ -470,6 +505,7 @@ static bool timer_callback() {
   }
 
   set_led_breathing(false);
+  update_led_connected();
   if (subscribed)
     return false;
 

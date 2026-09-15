@@ -52,15 +52,20 @@ advertise is disabled.
   controller currently in use. **Forget** on a row drops that bond only
   (in-page confirmation). The list refreshes after connecting, after any
   action and quietly alongside the 2 s status poll.
-- **Settings** — stick Y-axis inversion, A/B and X/Y swaps, radial stick
-  deadzone (0–50 %), status-LED brightness, BLE device name (applies after a
-  reboot). **Apply changes** sends only the keys you changed; the form always
-  re-renders from the dongle's reply. **Reset to defaults** restores the
-  firmware defaults.
 - **Actions** — *Start pairing* (same as holding the dongle's button), *Forget
   all controllers* (clears every BLE bond, with an in-page confirmation),
   *Reboot dongle* (the console reconnects automatically when the dongle
   re-enumerates).
+
+### Settings (module `0x10`, `device_config`)
+
+Stick Y-axis inversion, A/B and X/Y swaps, radial stick deadzone (0–50 %),
+status-LED brightness, the LED level held while a controller is connected
+(default 25 % of that brightness; 0 = off while playing), an optional
+blink-on-every-input debugging mode (off by default), BLE device name (applies
+after a reboot). **Apply changes** sends only the keys you changed; the form
+always re-renders from the dongle's reply. **Reset to defaults** restores the
+firmware defaults.
 
 ### Firmware (module `0`, espp OTA)
 

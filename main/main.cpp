@@ -123,14 +123,11 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   // convert it to GamepadInputs and push it to the USB controller
   push_inputs(ble_gamepad->get_gamepad_inputs());
 
-  if (usb_is_mounted()) {
-    // toggle the LED each report, so mod 2
-    static bool led_on = false;
-    static const auto on_color = espp::Rgb(0.0f, 0.0f, 1.0f); // use blue for BLE
-    static const auto off_color = espp::Rgb(0.0f, 0.0f, 0.0f);
-    set_led(led_on ? on_color : off_color);
-    led_on = !led_on;
-  }
+  // Debugging aid (off by default): toggle the LED on every report that
+  // reaches the USB side, so input activity is visible on the dongle. The
+  // default is the steady "connected" level, owned by the BLE link supervisor.
+  if (usb_is_mounted())
+    led_blink_toggle(); // no-op unless the blink setting is on
 }
 
 /********* Dongle console (device-config module) callbacks ***************/
@@ -242,6 +239,8 @@ static bool device_forget_bond(const std::array<uint8_t, 6> &address, uint8_t ad
 
 static void apply_settings(const device_config::Settings &s) {
   set_led_brightness_percent(s.led_brightness);
+  set_led_connected_brightness_percent(s.led_connected_brightness);
+  set_led_activity_blink(s.led_activity_blink);
   // the other settings are read per input report (push_inputs); the BLE name
   // is read at boot (init_ble)
 }
