@@ -9,7 +9,7 @@
   <a href="https://github.com/finger563/esp-usb-ble-hid/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/finger563/esp-usb-ble-hid?label=release"></a>
   <a href="https://github.com/finger563/esp-usb-ble-hid/actions/workflows/build.yml"><img alt="Build" src="https://github.com/finger563/esp-usb-ble-hid/actions/workflows/build.yml/badge.svg"></a>
   <a href="https://github.com/finger563/esp-usb-ble-hid/actions/workflows/static_analysis.yml"><img alt="Static analysis" src="https://github.com/finger563/esp-usb-ble-hid/actions/workflows/static_analysis.yml/badge.svg"></a>
-  <a href="https://finger563.github.io/esp-usb-ble-hid/dongle_console.html"><img alt="Dongle Console" src="https://img.shields.io/badge/Dongle%20Console-open%20in%20browser-1fb6c9"></a>
+  <a href="https://finger563.github.io/esp-usb-ble-hid/dongle_console.html"><img alt="Web console" src="https://img.shields.io/badge/web%20console-open%20in%20browser-1fb6c9"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -37,7 +37,7 @@ Android or iOS device that understands one.
 | **4** | **Plug it into the dock and pair.** Hold the dongle's button for 3 s until the LED pulses blue, then put your controller in pairing mode. From then on it reconnects by itself every time. | |
 
 Later firmware updates never need the programmer again: the
-[Dongle Console](#the-dongle-console) installs them straight from GitHub
+[web console](#the-web-console) installs them straight from GitHub
 over USB.
 
 ### See it in action
@@ -54,13 +54,13 @@ https://github.com/user-attachments/assets/c81b947a-24a1-4a44-b5d0-5d4c274beb93
 - **Set-and-forget pairing.** Up to five bonded controllers; the dongle
   reconnects to whichever one comes back, and drops every input the instant a
   controller goes away so nothing stays "pressed".
-- **A console in your browser.** Status, paired controllers, settings and
+- **A web console in your browser.** Status, paired controllers, settings and
   actions over WebUSB — from the hosted page or a local copy, no install.
-- **Firmware updates over USB.** The console checks GitHub Releases, tells
+- **Firmware updates over USB.** The web console checks GitHub Releases, tells
   you when a newer firmware exists and installs it in place, with automatic
   rollback if the new image never confirms itself.
 - **Crash dumps you can actually read.** If the firmware ever panics, the
-  core dump is kept in flash; the console shows a summary and downloads the
+  core dump is kept in flash; the web console shows a summary and downloads the
   ELF for `espcoredump.py`.
 - **Status you can see.** The T-Dongle-S3's screen shows USB / Bluetooth
   state and the connected controller's serial; the RGB LED breathes while
@@ -73,17 +73,17 @@ https://github.com/user-attachments/assets/c81b947a-24a1-4a44-b5d0-5d4c274beb93
 | LED pulsing blue, fast (1 s) | **Pairing** — will bond with the first BLE gamepad it finds | Put the controller in pairing mode |
 | LED pulsing blue, slow (3 s) | **Reconnecting** — looking for a remembered controller | Turn the controller on |
 | LED off, flickering with input | **Connected** — inputs are flowing to the Switch | Play |
-| Hold the button 3 s | Enter pairing mode (also available from the console) | |
+| Hold the button 3 s | Enter pairing mode (also available from the web console) | |
 
 A few things worth knowing:
 
 - **The Switch cuts USB power when it sleeps**, so the dongle cannot wake the
-  console; press a button on a Joy-Con or use the dock's own controls. (A
+  Switch; press a button on a Joy-Con or use the dock's own controls. (A
   USB-to-Ethernet adapter in the dock reportedly keeps the port awake.)
 - **No bonded controller?** The dongle starts in pairing mode by itself.
-- **Forgot which controllers are paired?** The console lists them by name.
+- **Forgot which controllers are paired?** The web console lists them by name.
 
-## The Dongle Console
+## The web console
 
 Plug the dongle into a computer, open
 **[finger563.github.io/esp-usb-ble-hid/dongle_console.html](https://finger563.github.io/esp-usb-ble-hid/dongle_console.html)**
@@ -94,7 +94,7 @@ too. Its only network access is the optional release check.
 
 ### Device
 
-![Dongle Console, Device tab: status, paired controllers, settings and actions](docs/screenshots/console-device.jpg)
+![Web console, Device tab: status, paired controllers, settings and actions](docs/screenshots/console-device.jpg)
 
 - **Status** — USB / controller / scanning / pairing badges, the connected
   controller's serial and battery, uptime, firmware, hardware and ESP-IDF
@@ -113,12 +113,12 @@ too. Its only network access is the optional release check.
 
 ### Firmware
 
-![Dongle Console, Firmware tab: running image, update check and installer](docs/screenshots/console-firmware.jpg)
+![Web console, Firmware tab: running image, update check and installer](docs/screenshots/console-firmware.jpg)
 
 The tab compares the running firmware with the latest GitHub release and
 offers **Download and install** — or flashes a `.bin` you built yourself.
 The dongle has two app slots: a fresh image boots in *pending-verify* state
-and the console asks you to confirm it after the reboot; an unconfirmed image
+and the web console asks you to confirm it after the reboot; an unconfirmed image
 is rolled back by the bootloader on the next reset.
 
 > Dongles running v2.1.0 or older have the previous (single-app) partition
@@ -127,7 +127,7 @@ is rolled back by the bootloader on the next reset.
 
 ### Crash dump
 
-![Dongle Console, Crash dump tab: last-crash summary and core.elf download](docs/screenshots/console-crash-dump.jpg)
+![Web console, Crash dump tab: last-crash summary and core.elf download](docs/screenshots/console-crash-dump.jpg)
 
 If the firmware panics, the core dump lands in a dedicated partition and the
 next boot logs a summary. The tab shows it, downloads `core.elf` (decode with
@@ -135,7 +135,7 @@ next boot logs a summary. The tab shows it, downloads `core.elf` (decode with
 and can erase it. Please attach it to a bug report.
 
 *(The screenshots above are staged with sample data; the layout is the real
-console.)*
+web console.)*
 
 ## Supported hardware and controllers
 
@@ -160,9 +160,9 @@ idf.py -p PORT flash monitor
 ```
 
 `USB Configuration` controls the interfaces next to the Pro Controller HID
-interface: the **vendor (WebUSB) interface** for the console (default on;
+interface: the **vendor (WebUSB) interface** for the web console (default on;
 turn it off for a plain single-interface gamepad) and an optional
-**CDC-ACM log console** so `idf.py monitor` works over the same cable.
+**CDC-ACM serial port** carrying the logs, so `idf.py monitor` works over the same cable.
 
 Once a dongle runs this firmware you can update it without a serial port:
 
@@ -189,13 +189,13 @@ BLE gamepad ──notify──▶ Xbox report parser ──▶ GamepadInputs ─
 | BLE central | `main/ble.cpp` | Scanning, pairing, bonding, HID subscription, and a 100 ms supervisor that owns the LED, encryption retries and reconnects |
 | USB device | `main/usb.cpp` | Composite device (HID + vendor + optional CDC), Pro Controller handshake and report sender, vendor RX worker |
 | Services | `main/services.cpp` | Settings in NVS, and the OTA / core-dump / device-config modules on the dispatcher |
-| Device config | `components/device_config` | The console's protocol (module `0x10`) and module class, with host-side tests |
+| Device config | `components/device_config` | The web console's protocol (module `0x10`) and module class, with host-side tests |
 | Controller parsing | `components/xbox`, `components/gamepad_inputs` | Xbox report layout → generic gamepad inputs |
 | Display | `components/gui` | The T-Dongle-S3 status screen (SquareLine / LVGL) |
-| Console | `web/dongle_console.html` | The browser UI, published to GitHub Pages by `publish_webapp.yml` |
+| Web console | `web/dongle_console.html` | The browser UI, published to GitHub Pages by `publish_webapp.yml` |
 
-The console stream is the espp `stream_frame` + `dispatcher` pair, so the
-dongle is also a ready-made example of a device with a browser console:
+The web console's stream is the espp `stream_frame` + `dispatcher` pair, so the
+dongle is also a ready-made example of a device with a browser-based web console:
 
 | Module | Id | Provided by |
 |---|---|---|
@@ -211,7 +211,7 @@ walks through the contract.
 ## Troubleshooting
 
 - **Controller connected, nothing happens on the Switch** — open the
-  console's *Link* block. A silent BLE side (no notifications) is the
+  web console's *Link* block. A silent BLE side (no notifications) is the
   controller: press a button or power-cycle it. A silent USB side means the
   Switch has not finished the handshake: check *Pro Controller Wired
   Communication*, then re-plug the dongle.
