@@ -6,11 +6,10 @@
 // device_config::kModule. The module is transport-agnostic: it only ever emits
 // frames through Config::send, and it never touches NVS / BLE / USB itself --
 // the application supplies the settings store, the status, and the actions via
-// callbacks. Register it with:
+// callbacks. It satisfies espp::DispatcherModuleConcept, so registering it on
+// a Dispatcher / DispatcherWorker is one call:
 //
-//   dispatcher.register_module(device_config::kModule,
-//                              [&](const espp::stream_frame::Frame &f) { config.handle(f); },
-//                              DeviceConfig::module_info());
+//   dispatcher.register_module(config);
 //
 // Threading: handle() runs on whatever task feeds the dispatcher. The settings
 // are copied out under a mutex, so settings() may be read from any task (e.g.
@@ -78,9 +77,12 @@ public:
       , forget_bond_(config.forget_bond)
       , settings_(config.initial) {}
 
+  /// The dispatcher module id this module answers on.
+  uint8_t module_id() const { return kModule; }
+
   /// How the module advertises itself in dispatcher discovery. (Firmware update
   /// and crash dumps are separate modules with their own discovery entries.)
-  static espp::Dispatcher::ModuleInfo module_info() {
+  espp::Dispatcher::ModuleInfo module_info() const {
     return {.name = "Device Config",
             .app = "dongle_console.html",
             .description = "Dongle status, settings, paired controllers and actions"};
@@ -92,9 +94,10 @@ public:
     return settings_;
   }
 
-  /// Dispatcher entry point. Reply-flagged frames are ignored.
+  /// Dispatcher entry point. Frames for other modules and reply-flagged frames
+  /// are ignored.
   void handle(const espp::stream_frame::Frame &frame) {
-    if (frame.is_reply())
+    if (frame.module != kModule || frame.is_reply())
       return;
     const auto request = static_cast<Msg>(frame.type);
     switch (request) {
@@ -220,3 +223,7 @@ protected:
   mutable std::mutex mutex_;
   Settings settings_;
 };
+
+// Compile-time check that the module keeps satisfying the dispatcher's module
+// contract (module_id() / module_info() / handle(frame)).
+static_assert(espp::DispatcherModuleConcept<DeviceConfig>);
