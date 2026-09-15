@@ -192,6 +192,8 @@
       box-shadow: var(--shadow); padding: 14px 16px; min-width: 0;
     }
     .card.wide { grid-column: 1 / -1; }
+    /* a single form reads better at a fixed width than stretched across the page */
+    #tab-settings { grid-template-columns: minmax(0, 640px); }
     .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
     .card-head h2 { flex: 1 1 auto; }
     .muted { color: var(--muted); }
@@ -363,6 +365,7 @@
 
   <nav class="tabs" role="tablist" aria-label="Console sections">
     <button role="tab" id="tabbtn-device" data-tab="device" aria-selected="true" aria-controls="tab-device" type="button">Device<span class="dot"></span></button>
+    <button role="tab" id="tabbtn-settings" data-tab="settings" aria-selected="false" aria-controls="tab-settings" tabindex="-1" type="button">Settings<span class="dot"></span></button>
     <button role="tab" id="tabbtn-firmware" data-tab="firmware" aria-selected="false" aria-controls="tab-firmware" tabindex="-1" type="button">Firmware<span class="dot"></span></button>
     <button role="tab" id="tabbtn-coredump" data-tab="coredump" aria-selected="false" aria-controls="tab-coredump" tabindex="-1" type="button">Crash dump<span class="dot"></span></button>
   </nav>
@@ -430,6 +433,11 @@
         <div id="bondsNote" class="note muted small-text"></div>
       </div>
 
+
+    </section>
+
+    <!-- ============================ Settings ============================ -->
+    <section id="tab-settings" role="tabpanel" aria-labelledby="tabbtn-settings" hidden>
       <div class="card">
         <div class="card-head">
           <h2>Settings</h2>
@@ -490,7 +498,6 @@
         <div id="settingsConfirm" class="confirm-slot"></div>
         <div id="settingsNote" class="note muted small-text"></div>
       </div>
-
     </section>
 
     <!-- ============================ Firmware ============================ -->
@@ -1120,8 +1127,9 @@
       els[id] = document.getElementById(id);
     }
     const tabButtons = Array.from(document.querySelectorAll('[role="tab"]'));
-    const tabPanels = { device: document.getElementById("tab-device"), firmware: document.getElementById("tab-firmware"), coredump: document.getElementById("tab-coredump") };
-    const TAB_MODULE = { device: MODULE.DEVICE, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
+    const tabPanels = {};
+    for (const b of tabButtons) tabPanels[b.dataset.tab] = document.getElementById(b.getAttribute("aria-controls"));
+    const TAB_MODULE = { device: MODULE.DEVICE, settings: MODULE.DEVICE, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
 
     // ---- logging ---------------------------------------------------------------
     function logLine(cls, text) {

@@ -94,7 +94,7 @@ too. Its only network access is the optional release check.
 
 ### Device
 
-![Web console, Device tab: status, paired controllers, settings and actions](docs/screenshots/console-device.jpg)
+![Web console, Device tab: status, paired controllers and actions](docs/screenshots/console-device.jpg)
 
 - **Status** — USB / controller / scanning / pairing badges, the connected
   controller's serial and battery, uptime, firmware, hardware and ESP-IDF
@@ -106,11 +106,17 @@ too. Its only network access is the optional release check.
   place to look for "connected but nothing happens".
 - **Paired controllers** — every bond by the name the controller reports
   (learned when it connects), with its address and a per-row *Forget*.
-- **Settings** (stored in flash, survive updates) — invert left / right
-  stick Y, swap A/B, swap X/Y, stick deadzone (0–50 %), LED brightness, the
-  LED level while a controller is connected (dim and steady by default; a
-  blink-on-every-input debugging mode is optional), BLE device name.
 - **Actions** — start pairing, forget all controllers, reboot.
+
+### Settings
+
+![Web console, Settings tab](docs/screenshots/console-settings.jpg)
+
+Stored in flash and kept across updates: invert left / right stick Y, swap
+A/B, swap X/Y, stick deadzone (0–50 %), LED brightness, the LED level while a
+controller is connected (dim and steady by default; a blink-on-every-input
+debugging mode is optional), BLE device name. *Apply changes* sends only what
+you changed; *Reset to defaults* restores the firmware defaults.
 
 ### Firmware
 
