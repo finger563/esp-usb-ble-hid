@@ -35,7 +35,10 @@ advertise is disabled.
   uptime, project, firmware, hardware and ESP-IDF version. Auto-refreshes every
   2 s while connected (pauses while another transfer is running).
   The **Link** block underneath answers "controller connected but no inputs?":
-  *BLE input* shows the HID notifications received since the controller
+  *Controller link* shows which step of the bring-up the dongle is in
+  (scanning → connecting → encrypting → subscribing → subscribed) and the
+  dongle's own note on the last link event (why a link was dropped, what it is
+  retrying); *BLE input* shows the HID notifications received since the controller
   subscribed and how long ago the last one arrived; *USB output* shows whether
   the host (the Switch) has finished the Pro Controller handshake and how many
   input reports it has accepted. A warning appears when a connected controller

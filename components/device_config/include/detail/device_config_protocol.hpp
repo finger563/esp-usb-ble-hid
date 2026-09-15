@@ -298,6 +298,20 @@ struct Info {
   uint32_t ble_last_notify_age_ms{kNever}; ///< ms since the last one (kNever = none yet)
   uint32_t usb_hid_reports{0};             ///< input reports accepted by the USB stack since boot
   bool usb_hid_ready{false};               ///< the host finished the handshake and takes reports
+  uint8_t link_state{0};                   ///< where the controller link is (see LinkState)
+  std::string link_detail;                 ///< note on the last link event / problem ("" if none)
+
+  /// The controller link's bring-up step (link_state). 0 is reserved for
+  /// firmware that does not report it.
+  enum class LinkState : uint8_t {
+    Unknown = 0,
+    Idle = 1,        ///< not scanning and not connected
+    Scanning = 2,    ///< scanning for a bonded (or, when pairing, any) controller
+    Connecting = 3,  ///< a connection attempt is in flight
+    Encrypting = 4,  ///< connected; waiting for the bond / link encryption
+    Subscribing = 5, ///< encrypted; subscribing to the HID input reports
+    Subscribed = 6,  ///< subscribed; inputs are expected (ble_connected is set)
+  };
 
   static constexpr uint32_t kNever = 0xFFFFFFFF;
   static constexpr uint8_t kFlagUsbMounted = 0x01;
@@ -310,7 +324,8 @@ struct Info {
   ///               [project str][firmware str][hardware str][idf str][controller str]
   ///               then, appended (older senders stop before it, parsers treat
   ///               it as optional): [ble_notifications u32][ble_last_notify_age_ms u32]
-  ///               [usb_hid_reports u32]  (usb_hid_ready is flags bit4)
+  ///               [usb_hid_reports u32]  (usb_hid_ready is flags bit4), then
+  ///               (a later addition, also optional): [link_state u8][link_detail str]
   std::vector<uint8_t> serialize() const {
     std::vector<uint8_t> out;
     put_u8(out, kProtocolVersion);
@@ -337,6 +352,8 @@ struct Info {
     put_u32(out, ble_notifications);
     put_u32(out, ble_last_notify_age_ms);
     put_u32(out, usb_hid_reports);
+    put_u8(out, link_state);
+    put_str(out, link_detail);
     return out;
   }
 
@@ -376,6 +393,10 @@ struct Info {
       i.ble_last_notify_age_ms = *age;
     if (const auto reports = r.u32())
       i.usb_hid_reports = *reports;
+    if (const auto state = r.u8())
+      i.link_state = *state;
+    if (const auto detail = r.str())
+      i.link_detail = *detail;
     return i;
   }
 };

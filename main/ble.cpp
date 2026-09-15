@@ -9,6 +9,7 @@
 
 #include "ble.hpp"
 #include "bsp.hpp"
+#include "format.hpp"
 #include "status_led.hpp"
 
 #include "gaussian.hpp"
@@ -24,12 +25,29 @@ static std::atomic<bool> subscribed{false};
 // only discoverable + subscribable after this
 static std::atomic<bool> authenticated{false};
 static std::atomic<int64_t> connected_at_us{0};
+static std::atomic<int64_t> last_secure_request_us{0};
 static std::atomic<uint8_t> subscribe_attempts{0};
+// a connection attempt is in flight (the scan was stopped for it): the
+// supervisor must not restart the scan underneath it
+static std::atomic<bool> connect_pending{false};
+static std::atomic<int64_t> connect_started_us{0};
+// a pairing scan (accept any controller) stays in effect until this time; after
+// that a rescan goes back to reconnecting bonded controllers only
+static std::atomic<int64_t> pairing_until_us{0};
 
 // link diagnostics, exposed to the console (a "connected but no inputs" report
-// is much easier to chase when it says whether notifications are arriving)
+// is much easier to chase when it says whether notifications are arriving and
+// which step of the link bring-up it is stuck in)
 static std::atomic<uint32_t> notification_count{0};
 static std::atomic<int64_t> last_notify_us{-1};
+static std::atomic<BleLinkState> link_state{BleLinkState::Idle};
+static std::mutex link_detail_mutex;
+static std::string link_detail;
+
+static void set_link_detail(std::string detail) {
+  std::lock_guard<std::mutex> lk(link_detail_mutex);
+  link_detail = std::move(detail);
+}
 
 static NimBLEUUID hid_service_uuid(espp::HidService::SERVICE_UUID);
 static NimBLEUUID hid_input_uuid(espp::HidService::REPORT_UUID);
@@ -62,6 +80,21 @@ static NimBLEUUID device_name_uuid(espp::GenericAccessService::NAME_CHAR_UUID);
 
 static espp::Logger ble_logger({.tag = "BLE", .level = espp::Logger::Verbosity::INFO});
 
+// connection parameters requested once the link is up / encrypted
+static constexpr uint16_t min_conn_interval = 12;    // 1.25ms units = 15ms
+static constexpr uint16_t max_conn_interval = 12;    // 1.25ms units = 15ms
+static constexpr uint16_t conn_latency = 4;          // 4 packets at 15ms = 60ms
+static constexpr uint16_t supervision_timeout = 400; // 4s
+
+// link bring-up timing (all driven by the 100 ms scan timer)
+static constexpr int64_t kAuthTimeoutUs = 15 * 1000 * 1000;    // give up encrypting after this
+static constexpr int64_t kSecureRetryUs = 3 * 1000 * 1000;     // re-request security this often
+static constexpr int64_t kConnectTimeoutUs = 35 * 1000 * 1000; // > NimBLE's 30 s connect timeout
+static constexpr int64_t kScanRetryUs = 500 * 1000;            // don't hammer a failing scan start
+static constexpr int64_t kPairingWindowUs = 30 * 1000 * 1000;  // a pairing scan accepts new
+                                                               // controllers for this long
+static constexpr uint8_t kMaxSubscribeAttempts = 10;           // ~500 ms apart
+
 // Read the connected controller's name: GAP Device Name, else the name it
 // advertised, else "". Control characters are stripped and the result capped
 // so it is safe to store and display.
@@ -89,7 +122,7 @@ static std::string read_controller_name(NimBLEClient *client) {
 // Forget everything about the current link. Called from the NimBLE host task
 // (disconnect callback) and from the scan timer (missed disconnect); the app is
 // told through the disconnect callback so it can neutralize its inputs.
-static void reset_link_state(const char *why) {
+static void reset_link_state(const std::string &why) {
   const bool was_subscribed = subscribed.exchange(false);
   authenticated = false;
   subscribe_attempts = 0;
@@ -97,6 +130,7 @@ static void reset_link_state(const char *why) {
     std::lock_guard<std::mutex> lk(report_map_mutex);
     report_ids.clear();
   }
+  set_link_detail(why);
   if (was_subscribed) {
     ble_logger.info("controller link down ({}); {} notifications received", why,
                     notification_count.load());
@@ -140,45 +174,67 @@ static auto led_callback = [](auto &m, auto &cv) -> bool {
 static auto led_task =
     espp::Task::make_unique({.callback = led_callback, .task_config = {.name = "breathe"}});
 
-class ClientCallbacks : public NimBLEClientCallbacks {
-  static constexpr uint16_t min_conn_interval = 12;    // 1.25ms units = 15ms
-  static constexpr uint16_t max_conn_interval = 12;    // 1.25ms units = 15ms
-  static constexpr uint16_t latency = 4;               // 4 packets at 15ms = 60ms
-  static constexpr uint16_t supervision_timeout = 400; // 4s
+// The breathing LED is owned by the scan timer (the link supervisor): it is
+// the only place that starts / stops the LED task, so a connect or disconnect
+// delivered on the BLE host task can never leave the LED in the wrong state.
+static void set_led_breathing(bool breathing) {
+  if (breathing == led_task->is_running())
+    return;
+  if (breathing) {
+    breathing_start = std::chrono::high_resolution_clock::now();
+    led_task->start();
+  } else {
+    led_task->stop();
+    static const espp::Rgb black(0.0f, 0.0f, 0.0f);
+    set_led(black);
+  }
+}
 
+class ClientCallbacks : public NimBLEClientCallbacks {
   espp::Logger logger =
       espp::Logger({.tag = "BLE Client Callbacks", .level = espp::Logger::Verbosity::INFO});
   void onConnect(NimBLEClient *pClient) override {
     logger.info("connected to: {}", pClient->getPeerAddress().toString());
+    connect_pending = false;
     authenticated = false;
     subscribe_attempts = 0;
     connected_at_us = esp_timer_get_time();
+    last_secure_request_us = connected_at_us.load();
+    link_state = BleLinkState::Encrypting;
+    set_link_detail("connected; waiting for the link to be encrypted");
     static constexpr bool async = true;
     // set the connection parameters now that we've connected
-    pClient->setConnectionParams(min_conn_interval, max_conn_interval, latency,
+    pClient->setConnectionParams(min_conn_interval, max_conn_interval, conn_latency,
                                  supervision_timeout);
-    // bond / secure the connection
-    pClient->secureConnection(async);
-    // stop the led task
-    led_task->stop();
-    static espp::Rgb black(0.0f, 0.0f, 0.0f);
-    set_led(black);
+    // bond / secure the connection (a bonded controller re-encrypts with the
+    // stored key; a new one pairs). If the controller already started this,
+    // the request is simply refused; the scan timer re-issues it if nothing
+    // happens.
+    if (!pClient->secureConnection(async)) {
+      logger.warn("security request not accepted (already in progress?)");
+    }
+  }
+
+  void onConnectFail(NimBLEClient *pClient, int reason) override {
+    logger.warn("connection to {} failed, reason = {}", pClient->getPeerAddress().toString(),
+                reason);
+    connect_pending = false;
+    set_link_detail(fmt::format("connection attempt failed (reason {})", reason));
+    // the scan timer restarts the scan
   }
 
   void onDisconnect(NimBLEClient *pClient, int reason) override {
-    logger.info("{} Disconnected, reason = {} - Starting scan",
-                pClient->getPeerAddress().toString(), reason);
-    // drop the link state (and neutralize the app's inputs) BEFORE scanning again
-    reset_link_state("disconnected");
-    // if we are not scanning, then start scanning
-    if (!NimBLEDevice::getScan()->isScanning()) {
-      start_ble_reconnection_thread(notify_callback);
-    }
+    logger.info("{} disconnected, reason = {}", pClient->getPeerAddress().toString(), reason);
+    connect_pending = false;
+    // drop the link state (and neutralize the app's inputs); the scan timer
+    // restarts the scan (and the LED) within one period
+    reset_link_state(fmt::format("disconnected (reason {})", reason));
   }
 
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override {
     if (!connInfo.isEncrypted()) {
       logger.error("Encrypt connection failed - disconnecting");
+      set_link_detail("encryption failed; disconnected");
       /** Find the client with the connection handle provided in connInfo */
       NimBLEDevice::getClientByHandle(connInfo.getConnHandle())->disconnect();
       return;
@@ -186,7 +242,8 @@ class ClientCallbacks : public NimBLEClientCallbacks {
       logger.info("Encryption successful!");
       // set the connection parameters
       NimBLEDevice::getClientByHandle(connInfo.getConnHandle())
-          ->updateConnParams(min_conn_interval, max_conn_interval, latency, supervision_timeout);
+          ->updateConnParams(min_conn_interval, max_conn_interval, conn_latency,
+                             supervision_timeout);
       // the protected HID characteristics can be discovered + subscribed now
       authenticated = true;
     }
@@ -214,6 +271,13 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       should_connect = true;
     }
     if (should_connect) {
+      // tell the supervisor a connection is in flight BEFORE stopping the scan,
+      // so it does not restart the scan in the gap
+      connect_pending = true;
+      connect_started_us = esp_timer_get_time();
+      link_state = BleLinkState::Connecting;
+      set_link_detail(fmt::format("connecting to {}", advertisedDevice->getAddress().toString()));
+
       /** stop scan before connecting, since we use async connections and don't
           want to possibly try to connect to multiple devices. */
       NimBLEDevice::getScan()->stop();
@@ -231,6 +295,8 @@ class ScanCallbacks : public NimBLEScanCallbacks {
         pClient = NimBLEDevice::createClient(advertisedDevice->getAddress());
         if (!pClient) {
           logger.error("Failed to create client");
+          set_link_detail("could not create a BLE client");
+          connect_pending = false;
           return;
         }
       }
@@ -243,14 +309,17 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       if (!pClient->connect(true, true,
                             false)) { // delete attributes, async connect, no MTU exchange
         logger.error("Failed to connect");
+        set_link_detail("could not start the connection attempt");
+        connect_pending = false;
         return;
       }
     }
   }
 
   void onScanEnd(const NimBLEScanResults &results, int reason) override {
-    printf("Scan Ended\n");
-    start_ble_reconnection_thread(notify_callback);
+    // a scan ends because it was stopped to connect, or because its 5 s window
+    // ran out; the scan timer starts the next one if nothing is connected
+    logger.debug("scan ended (reason {}), {} devices seen", reason, results.getCount());
   }
 };
 
@@ -283,19 +352,21 @@ static ScanCallbacks scanCallbacks;
 // report for the Xbox button). The report id of each comes from its Report
 // Reference descriptor (0x2908: [report_id][report_type], type 1 = input);
 // without that descriptor the characteristic is assumed to be the main input
-// report. Returns the number of characteristics subscribed.
-static size_t subscribe_input_reports(NimBLEClient *client) {
+// report. Returns the number of characteristics subscribed; `why` explains a
+// zero result.
+static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
   static constexpr bool refresh = true;
-  client->getServices(refresh);
+  const auto &services = client->getServices(refresh);
   auto *svc = client->getService(hid_service_uuid);
   if (!svc) {
-    ble_logger.warn("HID service not found (yet)");
+    why = fmt::format("HID service not found ({} services discovered)", services.size());
     return 0;
   }
-  size_t count = 0;
+  size_t count = 0, report_chars = 0, failed = 0;
   for (auto *chr : svc->getCharacteristics(refresh)) {
     if (chr->getUUID() != hid_input_uuid || !chr->canNotify())
       continue;
+    ++report_chars;
     uint8_t report_id = 1;
     if (auto *ref = chr->getDescriptor(report_reference_uuid)) {
       const auto value = ref->readValue();
@@ -308,6 +379,7 @@ static size_t subscribe_input_reports(NimBLEClient *client) {
     }
     if (!chr->subscribe(true, on_notify)) {
       ble_logger.warn("could not subscribe to input report {}", report_id);
+      ++failed;
       continue;
     }
     {
@@ -318,40 +390,113 @@ static size_t subscribe_input_reports(NimBLEClient *client) {
                     chr->getHandle());
     ++count;
   }
+  if (count == 0) {
+    if (report_chars == 0)
+      why = "HID service has no notifying Report characteristic";
+    else if (failed)
+      why = fmt::format("subscribing to the input report failed ({} of {})", failed, report_chars);
+    else
+      why = fmt::format("no input report among {} Report characteristics", report_chars);
+  }
   return count;
 }
 
+static void start_scan(bool pairing);
+
+// (Re)start the scan when nothing is connected, at most every kScanRetryUs.
+static void ensure_scanning(int64_t now) {
+  if (NimBLEDevice::getScan()->isScanning()) {
+    link_state = BleLinkState::Scanning;
+    return;
+  }
+  static int64_t last_scan_start_us = 0;
+  if (now - last_scan_start_us < kScanRetryUs)
+    return;
+  last_scan_start_us = now;
+  // a pairing scan stays a pairing scan for its window; with no bonds there is
+  // nothing to reconnect to, so that is a pairing scan as well
+  const bool pairing = NimBLEDevice::getNumBonds() == 0 || now < pairing_until_us.load();
+  start_scan(pairing);
+}
+
+// The link supervisor, run every 100 ms on its own task: it owns the LED, the
+// scan restart, the encryption retry and the HID subscription, so the whole
+// bring-up is driven from one place regardless of which BLE callback did (or
+// did not) fire.
 static bool timer_callback() {
+  const int64_t now = esp_timer_get_time();
   auto pClients = NimBLEDevice::getConnectedClients();
 
-  if (subscribed) {
+  if (pClients.empty()) {
     // A disconnect callback can be missed (e.g. the client object went away):
     // never leave the link marked up when nothing is connected.
-    if (pClients.empty())
+    if (subscribed)
       reset_link_state("no connected client");
+    if (connect_pending) {
+      // a connection attempt is in flight: leave the radio alone (bounded, in
+      // case its result callback never arrives)
+      if (now - connect_started_us.load() < kConnectTimeoutUs) {
+        link_state = BleLinkState::Connecting;
+        return false;
+      }
+      ble_logger.warn("connection attempt did not complete; scanning again");
+      set_link_detail("connection attempt timed out");
+      connect_pending = false;
+    }
+    set_led_breathing(true);
+    ensure_scanning(now);
     return false; // don't stop the timer
   }
 
-  // if there are no clients, then ensure we're scanning and return.
-  if (pClients.empty()) {
-    if (!NimBLEDevice::getScan()->isScanning()) {
-      start_ble_reconnection_thread(notify_callback);
-    }
-    return false; // don't stop the timer
-  }
+  set_led_breathing(false);
+  if (subscribed)
+    return false;
 
   auto *pClient = pClients.front();
   if (!pClient->isConnected())
     return false;
+  if (connect_pending) {
+    // the link is up but NimBLE delivers onConnect one connection interval
+    // later: wait for it (it stamps connected_at_us and requests security),
+    // bounded in case it never arrives
+    link_state = BleLinkState::Connecting;
+    if (now - connect_started_us.load() < kConnectTimeoutUs)
+      return false;
+    ble_logger.warn("connected, but the connect callback never arrived; carrying on");
+    connect_pending = false;
+    connected_at_us = now;
+    last_secure_request_us = now;
+  }
 
   // The HID input reports are protected: wait for the bond/encryption to
   // complete before discovering and subscribing (trying earlier used to fail
-  // and, worse, delete the bond). Give the controller a bounded time to pair.
-  static constexpr int64_t kAuthTimeoutUs = 15 * 1000 * 1000;
+  // and, worse, delete the bond). The encryption state is polled from the
+  // connection itself rather than trusted to the callback alone, the security
+  // request is repeated if nothing happens, and the controller gets a bounded
+  // time to pair before the link is dropped so the scan can start over.
+  if (!authenticated && pClient->getConnInfo().isEncrypted()) {
+    ble_logger.info("link is encrypted");
+    pClient->updateConnParams(min_conn_interval, max_conn_interval, conn_latency,
+                              supervision_timeout);
+    authenticated = true;
+  }
   if (!authenticated) {
-    if (esp_timer_get_time() - connected_at_us.load() > kAuthTimeoutUs) {
+    link_state = BleLinkState::Encrypting;
+    const int64_t waited_us = now - connected_at_us.load();
+    if (waited_us > kAuthTimeoutUs) {
       ble_logger.warn("controller did not complete encryption in time; disconnecting");
+      set_link_detail(fmt::format("controller did not encrypt the link within {} s; disconnected",
+                                  kAuthTimeoutUs / 1000000));
       pClient->disconnect();
+      return false;
+    }
+    if (now - last_secure_request_us.load() > kSecureRetryUs) {
+      last_secure_request_us = now;
+      ble_logger.warn("link not encrypted after {} ms; requesting security again",
+                      waited_us / 1000);
+      set_link_detail(fmt::format("waiting for encryption ({} s); security requested again",
+                                  waited_us / 1000000));
+      pClient->secureConnection(true);
     }
     return false;
   }
@@ -360,7 +505,7 @@ static bool timer_callback() {
   // 100 ms) and bounded, then drop the connection so the scan can start over.
   // A failed attempt is NOT a reason to forget the bond: transient discovery
   // failures right after a reconnect are normal.
-  static constexpr uint8_t kMaxSubscribeAttempts = 10;
+  link_state = BleLinkState::Subscribing;
   static uint8_t throttle = 0;
   if (++throttle % 5 != 1)
     return false;
@@ -369,17 +514,24 @@ static bool timer_callback() {
     ble_logger.error("could not subscribe to the controller's HID reports after {} attempts; "
                      "disconnecting (bond kept)",
                      kMaxSubscribeAttempts);
+    set_link_detail(fmt::format("could not subscribe to the HID input reports after {} attempts; "
+                                "disconnected (bond kept)",
+                                kMaxSubscribeAttempts));
     pClient->disconnect();
     return false;
   }
-  if (subscribe_input_reports(pClient) == 0) {
-    ble_logger.warn("no HID input report subscribed (attempt {}/{})", attempt,
-                    kMaxSubscribeAttempts);
+  std::string why;
+  if (subscribe_input_reports(pClient, why) == 0) {
+    ble_logger.warn("no HID input report subscribed (attempt {}/{}): {}", attempt,
+                    kMaxSubscribeAttempts, why);
+    set_link_detail(fmt::format("{} (attempt {}/{})", why, attempt, kMaxSubscribeAttempts));
     return false;
   }
   notification_count = 0;
   last_notify_us = -1;
   subscribed = true;
+  link_state = BleLinkState::Subscribed;
+  set_link_detail(fmt::format("subscribed on attempt {}", attempt));
 
   // we were able to get the HID service and subscribe, so also subscribe
   // to the battery service if it exists.
@@ -418,13 +570,18 @@ void init_ble(const std::string &device_name) {
   NimBLEDevice::setSecurityAuth(bonding, mitm, secure_connections);
 }
 
-static void start_scan() {
-  // if scanning, then stop
-  if (NimBLEDevice::getScan()->isScanning()) {
-    NimBLEDevice::getScan()->stop();
-  }
+// Start (or restart) the scan. Called from the main task at boot, from the
+// console's actions, and from the scan timer; the LED is handled by the timer.
+static void start_scan(bool pairing) {
+  is_pairing = pairing;
+  breathing_period = pairing ? pairing_breathing_period : reconnecting_breathing_period;
 
   NimBLEScan *pScan = NimBLEDevice::getScan();
+
+  // if scanning, then stop
+  if (pScan->isScanning()) {
+    pScan->stop();
+  }
 
   // Set the callbacks to call when scan events occur, no duplicates
   pScan->setScanCallbacks(&scanCallbacks);
@@ -438,19 +595,17 @@ static void start_scan() {
   pScan->setActiveScan(true);
 
   // Start scanning for advertisers
-  pScan->start(scanTimeMs);
-
-  // if the led task is not running, set the led breathing start time to now
-  if (!led_task->is_running()) {
-    breathing_start = std::chrono::high_resolution_clock::now();
+  if (pScan->start(scanTimeMs)) {
+    link_state = BleLinkState::Scanning;
+    ble_logger.debug("{} scan started", pairing ? "pairing" : "reconnection");
+  } else {
+    ble_logger.error("could not start the {} scan", pairing ? "pairing" : "reconnection");
+    set_link_detail("scan could not be started; retrying");
   }
 
-  // now start the led task
-  led_task->start();
-
   if (!scanTimer) {
-    // now start a thread to register for notifications if connected or restart
-    // scanning if not connected
+    // the link supervisor: (re)scans when nothing is connected, drives the
+    // encryption + HID subscription of a connected controller, owns the LED
     using namespace std::chrono_literals;
     scanTimer = std::make_unique<espp::Timer>(
         espp::Timer::Config{.name = "Scan Timer",
@@ -461,30 +616,19 @@ static void start_scan() {
 }
 
 void start_ble_reconnection_thread(notify_callback_t callback) {
-  // if there are no bonded devices, then instead call the pairing thread
-  if (NimBLEDevice::getNumBonds() == 0) {
-    start_ble_pairing_thread(callback);
-    return;
-  }
-  // set pairing to false
-  is_pairing = false;
   // save the callback
   notify_callback = callback;
-  // set the breathing period
-  breathing_period = reconnecting_breathing_period;
-  // now start the scan
-  start_scan();
+  pairing_until_us = 0;
+  // if there are no bonded devices, there is nothing to reconnect to: pair instead
+  start_scan(NimBLEDevice::getNumBonds() == 0);
 }
 
 void start_ble_pairing_thread(notify_callback_t callback) {
-  // set pairing to true
-  is_pairing = true;
   // save the callback
   notify_callback = callback;
-  // set the breathing period
-  breathing_period = pairing_breathing_period;
-  // now start the scan
-  start_scan();
+  // accept new controllers for a while (the scan itself cycles every 5 s)
+  pairing_until_us = esp_timer_get_time() + kPairingWindowUs;
+  start_scan(true);
 }
 
 bool is_ble_subscribed() { return subscribed.load(); }
@@ -519,6 +663,13 @@ uint32_t ble_ms_since_last_notification() {
     return UINT32_MAX;
   const int64_t age_ms = (esp_timer_get_time() - last) / 1000;
   return age_ms > static_cast<int64_t>(UINT32_MAX) ? UINT32_MAX : static_cast<uint32_t>(age_ms);
+}
+
+BleLinkState ble_link_state() { return link_state.load(); }
+
+std::string ble_link_detail() {
+  std::lock_guard<std::mutex> lk(link_detail_mutex);
+  return link_detail;
 }
 
 // The identity addresses of the connected clients (a bond is keyed by the
@@ -556,7 +707,7 @@ bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type
   for (auto *client : NimBLEDevice::getConnectedClients()) {
     if (client->isConnected() && client->getConnInfo().getIdAddress() == addr) {
       client->disconnect();
-      reset_link_state("forgotten");
+      reset_link_state("bond forgotten");
     }
   }
   return NimBLEDevice::deleteBond(addr);

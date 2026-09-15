@@ -160,6 +160,29 @@ static device_config::Info device_info() {
   info.ble_last_notify_age_ms = ble_ms_since_last_notification();
   info.usb_hid_reports = usb_hid_reports_sent();
   info.usb_hid_ready = usb_hid_ready();
+  // where the controller link is (and why it is there), for the console
+  using LinkState = device_config::Info::LinkState;
+  switch (ble_link_state()) {
+  case BleLinkState::Idle:
+    info.link_state = static_cast<uint8_t>(LinkState::Idle);
+    break;
+  case BleLinkState::Scanning:
+    info.link_state = static_cast<uint8_t>(LinkState::Scanning);
+    break;
+  case BleLinkState::Connecting:
+    info.link_state = static_cast<uint8_t>(LinkState::Connecting);
+    break;
+  case BleLinkState::Encrypting:
+    info.link_state = static_cast<uint8_t>(LinkState::Encrypting);
+    break;
+  case BleLinkState::Subscribing:
+    info.link_state = static_cast<uint8_t>(LinkState::Subscribing);
+    break;
+  case BleLinkState::Subscribed:
+    info.link_state = static_cast<uint8_t>(LinkState::Subscribed);
+    break;
+  }
+  info.link_detail = ble_link_detail();
   return info;
 }
 

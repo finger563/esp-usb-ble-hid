@@ -229,15 +229,18 @@ since the dongle presents as a Pro Controller).
 
 ### Troubleshooting a "connected but no inputs" controller
 
-The status card's **Link** block shows both halves of the bridge live: how many
-BLE input notifications the controller has sent (and how long ago the last one
+The status card's **Link** block shows both halves of the bridge live: which
+step of the BLE bring-up the dongle is in (scanning → connecting → encrypting →
+subscribing → subscribed) with its note on the last link event, how many BLE
+input notifications the controller has sent (and how long ago the last one
 was), and whether the Switch has finished the Pro Controller handshake and how
 many input reports it has taken. A controller that is connected but silent is a
-BLE problem (try a button, or power-cycle the controller); a silent USB side
-means the host has not enabled input reports (re-plug the dongle). The dongle
-now also releases every button and centers the sticks the moment the controller
-link drops, and keeps a paired controller's bond even if a reconnect attempt
-fails transiently.
+BLE problem (try a button, or power-cycle the controller); a link stuck in
+*encrypting* or *subscribing* is dropped after ~15 s so the scan starts over; a
+silent USB side means the host has not enabled input reports (re-plug the
+dongle). The dongle also releases every button and centers the sticks the
+moment the controller link drops, and keeps a paired controller's bond even if
+a reconnect attempt fails transiently.
 
 ### Crash dumps
 

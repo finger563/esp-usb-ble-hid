@@ -389,6 +389,7 @@
         <div class="link-block" aria-label="Link diagnostics">
           <div class="link-label">Link</div>
           <dl class="kv">
+            <dt>Controller link</dt><dd id="lState">—</dd>
             <dt>BLE input</dt><dd id="lBle">—</dd>
             <dt>USB output</dt><dd id="lUsb">—</dd>
           </dl>
@@ -787,7 +788,10 @@
     // [version u8][flags u8][battery u8][bonds u8][uptime u32][project str][firmware str]
     // [hardware str][idf str][controller str] then an OPTIONAL link-diagnostics trailer
     // (older firmware stops before it): [ble_notifications u32][ble_last_notify_age_ms u32]
-    // [usb_hid_reports u32]. usb_hid_ready is flags bit4.
+    // [usb_hid_reports u32], then (a later addition, also optional) [link_state u8]
+    // [link_detail str]. usb_hid_ready is flags bit4.
+    const LINK_STATE = { 0: null, 1: "idle", 2: "scanning", 3: "connecting", 4: "encrypting",
+                         5: "subscribing", 6: "subscribed" };
     function parseInfo(payload) {
       const r = new Reader(payload);
       const version = r.u8();
@@ -796,6 +800,8 @@
       const project = r.str(), firmware = r.str(), hardware = r.str(), idf = r.str(), controller = r.str();
       const optU32 = () => (r.b.length - r.i >= 4 ? r.u32() : null);
       const bleNotifications = optU32(), bleLastNotifyAgeMs = optU32(), usbHidReports = optU32();
+      const linkStateCode = r.b.length - r.i >= 1 ? r.u8() : 0;
+      const linkDetail = r.b.length - r.i >= 1 ? r.str() : "";
       return {
         version, flags,
         usbMounted: !!(flags & INFO_FLAG.USB_MOUNTED),
@@ -807,6 +813,8 @@
         // link diagnostics: null when this firmware does not send the trailer
         hasLinkStats: bleNotifications !== null && bleLastNotifyAgeMs !== null && usbHidReports !== null,
         bleNotifications, bleLastNotifyAgeMs, usbHidReports,
+        // link bring-up step + the dongle's note: null / "" when this firmware does not send them
+        linkState: LINK_STATE[linkStateCode] || null, linkDetail,
       };
     }
 
@@ -1074,7 +1082,7 @@
     for (const id of ["status", "devBadge", "connectBtn", "anyBtn", "unsupported",
                       "infoAuto", "infoBtn", "bUsb", "bBle", "bScan", "bPair",
                       "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iUpdate", "iHardware", "iIdf", "infoNote",
-                      "lBle", "lUsb", "linkNote",
+                      "lState", "lBle", "lUsb", "linkNote",
                       "bondsCount", "bondsRefresh", "bondsList", "bondsConfirm", "bondsNote",
                       "settingsDirty", "settingsReload", "settingsForm", "settingsApply", "settingsReset", "settingsConfirm", "settingsNote",
                       "actPair", "actForget", "actReboot", "actionConfirm", "actionNote",
@@ -1715,12 +1723,27 @@
           problems.push("Host has not enabled input reports yet — the Pro Controller handshake is not finished (if it stays like this, replug the dongle).");
         }
       }
+      // where the BLE link is in its bring-up (older firmware: unknown), plus
+      // the dongle's own note on the last link event (why it dropped, what it
+      // is retrying)
+      let stateText = "—", stateTone = "";
+      if (info.linkState) {
+        stateText = info.linkState;
+        if (info.linkState === "subscribed") stateTone = "ok";
+        else if (info.linkState === "encrypting" || info.linkState === "subscribing") {
+          stateTone = "warn";
+          problems.push("Controller is connected but the link is still being set up (" + info.linkState + ") — if this does not clear within ~15 s the dongle drops the link and scans again.");
+        }
+        if (info.linkDetail) stateText += " — " + info.linkDetail;
+      }
+      els.lState.textContent = stateText; els.lState.className = stateTone;
       els.lBle.textContent = bleText; els.lBle.className = bleTone;
       els.lUsb.textContent = usbText; els.lUsb.className = usbTone;
       els.linkNote.hidden = !problems.length;
       setNote(els.linkNote, problems.length ? "warn" : "muted", problems.join(" "));
     }
     function clearLink() {
+      els.lState.textContent = "—"; els.lState.className = "";
       els.lBle.textContent = "—"; els.lBle.className = "";
       els.lUsb.textContent = "—"; els.lUsb.className = "";
       els.linkNote.hidden = true; setNote(els.linkNote, "muted", "");
