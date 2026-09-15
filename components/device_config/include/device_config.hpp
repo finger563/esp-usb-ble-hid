@@ -82,7 +82,7 @@ public:
 
   /// How the module advertises itself in dispatcher discovery. (Firmware update
   /// and crash dumps are separate modules with their own discovery entries.)
-  static espp::Dispatcher::ModuleInfo module_info() {
+  espp::Dispatcher::ModuleInfo module_info() const {
     return {.name = "Device Config",
             .app = "dongle_console.html",
             .description = "Dongle status, settings, paired controllers and actions"};
