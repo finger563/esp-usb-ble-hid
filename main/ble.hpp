@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,32 @@ struct BleBond {
 };
 /// The bonded (paired) controllers.
 std::vector<BleBond> ble_bonds();
+/// Called (from the BLE host task or the scan timer) when the controller link
+/// goes down after it had been subscribed -- the app must neutralize the
+/// inputs it forwards, since no further notifications will arrive.
+using disconnect_callback_t = std::function<void()>;
+void ble_set_disconnect_callback(disconnect_callback_t callback);
+/// The HID report id a subscribed characteristic carries (from its Report
+/// Reference descriptor); nullopt for an unknown characteristic.
+std::optional<uint8_t> ble_report_id_for(const NimBLERemoteCharacteristic *chr);
+/// Link diagnostics: notifications received since the current subscription
+/// began, and the age of the last one (UINT32_MAX if none yet).
+uint32_t ble_notification_count();
+uint32_t ble_ms_since_last_notification();
+/// Where the controller link currently is. The values are the ones reported
+/// to the console (device_config INFO), so they must not be renumbered.
+enum class BleLinkState : uint8_t {
+  Idle = 1,        ///< not scanning and not connected (only before the first scan)
+  Scanning = 2,    ///< scanning for a bonded (or, when pairing, any) controller
+  Connecting = 3,  ///< a connection attempt is in flight
+  Encrypting = 4,  ///< connected; waiting for the bond / link encryption
+  Subscribing = 5, ///< encrypted; discovering + subscribing to the HID input reports
+  Subscribed = 6,  ///< subscribed; inputs are expected (see ble_notification_count)
+};
+BleLinkState ble_link_state();
+/// A short note about the last link event or problem ("" if none), e.g. why the
+/// last connection was dropped or which step is being retried.
+std::string ble_link_detail();
 /// Called (from the BLE scan-timer task) once a controller is connected and
 /// subscribed, with its identity address and its name -- the GAP Device Name
 /// (0x2A00) if readable, else the advertised name, else "".

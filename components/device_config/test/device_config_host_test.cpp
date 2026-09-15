@@ -107,7 +107,37 @@ int main() {
     CHECK(iback->battery_percent == 87 && iback->bond_count == 2);
     CHECK(iback->usb_mounted && iback->ble_connected && !iback->ble_scanning && iback->pairing);
   }
-  CHECK(!dc::Info::parse(std::span<const uint8_t>(ib.data(), ib.size() - 1)).has_value());
+  // link diagnostics trailer: round trip, and an old-format payload (no
+  // trailer) still parses with the "unknown" defaults
+  {
+    dc::Info d = info;
+    d.ble_notifications = 12345;
+    d.ble_last_notify_age_ms = 250;
+    d.usb_hid_reports = 999999;
+    d.usb_hid_ready = true;
+    d.link_state = uint8_t(dc::Info::LinkState::Encrypting);
+    d.link_detail = "waiting for encryption (4 s)";
+    const auto db = d.serialize();
+    CHECK(db.size() == ib.size() + d.link_detail.size()); // same layout, different values
+    CHECK(db[1] & dc::Info::kFlagUsbHidReady);
+    const auto dback = dc::Info::parse(db);
+    CHECK(dback && dback->ble_notifications == 12345 && dback->ble_last_notify_age_ms == 250 &&
+          dback->usb_hid_reports == 999999 && dback->usb_hid_ready);
+    CHECK(dback && dback->link_state == uint8_t(dc::Info::LinkState::Encrypting) &&
+          dback->link_detail == d.link_detail);
+    // the trailer is [3 x u32][link_state u8][link_detail str]: firmware from
+    // before the link state stops after the counters, older firmware stops
+    // before the counters
+    const size_t counters_only = ib.size() - 1 - 1; // no link_state, no (empty) link_detail
+    const auto mid = dc::Info::parse(std::span<const uint8_t>(ib.data(), counters_only));
+    CHECK(mid && mid->usb_hid_reports == info.usb_hid_reports &&
+          mid->link_state == uint8_t(dc::Info::LinkState::Unknown) && mid->link_detail.empty());
+    const auto old = dc::Info::parse(std::span<const uint8_t>(ib.data(), counters_only - 12));
+    CHECK(old && old->ble_notifications == 0 && old->ble_last_notify_age_ms == dc::Info::kNever &&
+          old->usb_hid_reports == 0 && !old->usb_hid_ready && old->controller == info.controller &&
+          old->link_state == 0);
+    CHECK(!dc::Info::parse(std::span<const uint8_t>(ib.data(), counters_only - 13)).has_value());
+  }
 
   // ---- version gating: a different payload version is refused, not mis-decoded ----
   {

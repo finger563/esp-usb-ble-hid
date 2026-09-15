@@ -111,10 +111,16 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
     battery_level_percent = pData[0];
     return;
   }
-  // otherwise this is a gamepad input report
+  // otherwise this is a HID report: which one is told by the characteristic's
+  // Report Reference (a controller may notify several input reports); an
+  // unknown characteristic is assumed to be the main gamepad input report
+  const uint8_t report_id =
+      ble_report_id_for(pRemoteCharacteristic).value_or(ble_gamepad->get_input_report_id());
+  ble_gamepad->set_report_data(report_id, pData, length);
+  if (report_id != ble_gamepad->get_input_report_id())
+    return; // not the gamepad input report: nothing to forward
 
-  // set the data in the ble gamepad and convert it to GamepadInputs
-  ble_gamepad->set_report_data(ble_gamepad->get_input_report_id(), pData, length);
+  // convert it to GamepadInputs and push it to the USB controller
   push_inputs(ble_gamepad->get_gamepad_inputs());
 
   if (usb_is_mounted()) {
@@ -148,6 +154,35 @@ static device_config::Info device_info() {
     info.battery_percent = static_cast<uint8_t>(battery_level_percent.load());
     info.controller = get_serial_number();
   }
+  // link diagnostics: is the controller actually sending, and is the Switch
+  // actually consuming what we stream?
+  info.ble_notifications = ble_notification_count();
+  info.ble_last_notify_age_ms = ble_ms_since_last_notification();
+  info.usb_hid_reports = usb_hid_reports_sent();
+  info.usb_hid_ready = usb_hid_ready();
+  // where the controller link is (and why it is there), for the console
+  using LinkState = device_config::Info::LinkState;
+  switch (ble_link_state()) {
+  case BleLinkState::Idle:
+    info.link_state = static_cast<uint8_t>(LinkState::Idle);
+    break;
+  case BleLinkState::Scanning:
+    info.link_state = static_cast<uint8_t>(LinkState::Scanning);
+    break;
+  case BleLinkState::Connecting:
+    info.link_state = static_cast<uint8_t>(LinkState::Connecting);
+    break;
+  case BleLinkState::Encrypting:
+    info.link_state = static_cast<uint8_t>(LinkState::Encrypting);
+    break;
+  case BleLinkState::Subscribing:
+    info.link_state = static_cast<uint8_t>(LinkState::Subscribing);
+    break;
+  case BleLinkState::Subscribed:
+    info.link_state = static_cast<uint8_t>(LinkState::Subscribed);
+    break;
+  }
+  info.link_detail = ble_link_detail();
   return info;
 }
 
@@ -292,6 +327,13 @@ extern "C" void app_main(void) {
       [](const std::array<uint8_t, 6> &address, uint8_t, const std::string &name) {
         services_set_bond_name(address, name);
       });
+  // when the controller goes away (powered off, out of range, ...), release
+  // every button and center the sticks: the Switch would otherwise keep seeing
+  // whatever was last reported, forever
+  ble_set_disconnect_callback([]() {
+    battery_level_percent = 0;
+    push_inputs(GamepadInputs{});
+  });
 
   // MARK: USB initialization
   logger.info("USB initialization");

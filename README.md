@@ -209,9 +209,11 @@ address, which one is connected, and a per-controller *Forget*.
 
 ### Firmware update (OTA over USB)
 
-The *Firmware* tab flashes a `build/esp-usb-ble-hid.bin` (from the
-[releases](https://github.com/finger563/esp-usb-ble-hid/releases) or your own
-build) over the vendor interface — no bootloader mode, no serial port. The
+The *Firmware* tab checks the [GitHub releases](https://github.com/finger563/esp-usb-ble-hid/releases)
+for a newer firmware than the one running (with a link to the release notes)
+and can **download and install** it directly, or flashes a
+`build/esp-usb-ble-hid.bin` you pick yourself — over the vendor interface, no
+bootloader mode, no serial port. The
 partition table has two app slots; after an update the new image boots in
 *pending-verify* state and the console asks you to **confirm** it once it
 reconnects (or roll back). If it is never confirmed, the bootloader returns to
@@ -224,6 +226,21 @@ since the dongle presents as a Pro Controller).
 > The partition layout changed with this feature (factory → `ota_0`/`ota_1`).
 > Dongles running an older release must be reflashed once over serial / with
 > the release programmer; after that, updates go over USB.
+
+### Troubleshooting a "connected but no inputs" controller
+
+The status card's **Link** block shows both halves of the bridge live: which
+step of the BLE bring-up the dongle is in (scanning → connecting → encrypting →
+subscribing → subscribed) with its note on the last link event, how many BLE
+input notifications the controller has sent (and how long ago the last one
+was), and whether the Switch has finished the Pro Controller handshake and how
+many input reports it has taken. A controller that is connected but silent is a
+BLE problem (try a button, or power-cycle the controller); a link stuck in
+*encrypting* or *subscribing* is dropped after ~15 s so the scan starts over; a
+silent USB side means the host has not enabled input reports (re-plug the
+dongle). The dongle also releases every button and centers the sticks the
+moment the controller link drops, and keeps a paired controller's bond even if
+a reconnect attempt fails transiently.
 
 ### Crash dumps
 
