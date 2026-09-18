@@ -183,6 +183,12 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
   cfg.serial_number = fmt::format("{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}", mac[0], mac[1], mac[2],
                                   mac[3], mac[4], mac[5]);
   cfg.log_level = espp::Logger::Verbosity::WARN;
+  // Descriptor details a Switch compares against a real Pro Controller (espp
+  // >= 1.3.4): device release 2.10, 500 mA bus power (the dongle also feeds the
+  // BLE link) and remote wakeup, as the original reports them.
+  cfg.bcd_device = 0x0210;
+  cfg.max_power_ma = 500;
+  cfg.remote_wakeup = true;
 
   espp::UsbDevice::HidFunction hid;
   hid.interface_name = "Switch Pro Controller";
