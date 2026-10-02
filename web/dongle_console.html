@@ -668,7 +668,8 @@
     const T_LIST_MODULES = 0x00;
     // discovery v2 protocol identifiers (DispatcherModuleInfo.protocol); a module
     // advertising one of these is used whatever id the firmware gave it
-    const PROTOCOL = { DEVICE: "esp-usb-ble-hid.device-config", SYSTEM: "espp.system", MONITOR: "espp.monitor" };
+    const PROTOCOL = { OTA: "espp.ota", COREDUMP: "espp.coredump", DEVICE: "esp-usb-ble-hid.device-config",
+                       SYSTEM: "espp.system", MONITOR: "espp.monitor" };
 
     // device_config_protocol.hpp
     const DEV = { GET_INFO: 0x01, GET_SETTINGS: 0x02, SET_SETTINGS: 0x03, RESET_SETTINGS: 0x04, ACTION: 0x05,
@@ -719,38 +720,58 @@
 
     const MODULE_SPEC = {
       [MODULE.DEVICE]: {
-        label: "Device", errorType: DEV.ERROR, parseError: parseDeviceError,
+        label: "Device", protocol: PROTOCOL.DEVICE, errorType: DEV.ERROR, parseError: parseDeviceError,
         names: { 0x01: "GET_INFO", 0x02: "GET_SETTINGS", 0x03: "SET_SETTINGS", 0x04: "RESET_SETTINGS", 0x05: "ACTION",
                  0x06: "GET_BONDS", 0x07: "FORGET_BOND",
                  0x81: "INFO", 0x82: "SETTINGS", 0x83: "OK", 0x84: "ERROR", 0x85: "BONDS" },
       },
       [MODULE.OTA]: {
-        label: "OTA", errorType: OTA.ERROR, parseError: parseCodeMessageError,
+        label: "OTA", protocol: PROTOCOL.OTA, errorType: OTA.ERROR, parseError: parseCodeMessageError,
         names: { 0x01: "BEGIN", 0x02: "DATA", 0x03: "FINISH", 0x04: "ABORT", 0x05: "OK", 0x06: "ERROR", 0x07: "PROGRESS",
                  0x08: "GET_STATUS", 0x09: "MARK_VALID", 0x0A: "MARK_INVALID", 0x0B: "STATUS" },
       },
       [MODULE.COREDUMP]: {
-        label: "CoreDump", errorType: CD.ERROR, parseError: parseCodeMessageError,
+        label: "CoreDump", protocol: PROTOCOL.COREDUMP, errorType: CD.ERROR, parseError: parseCodeMessageError,
         names: { 0x40: "GET_SUMMARY", 0x41: "GET_SIZE", 0x42: "READ", 0x43: "ERASE",
                  0xC0: "SUMMARY", 0xC1: "SIZE", 0xC2: "DATA", 0xC3: "OK", 0xC4: "ERROR" },
       },
       [MODULE.SYSTEM]: {
-        label: "System", errorType: SYS.ERROR, parseError: parseCodeMessageError,
+        label: "System", protocol: PROTOCOL.SYSTEM, errorType: SYS.ERROR, parseError: parseRequestCodeMessageError,
         names: { 0x01: "GET_INFO", 0x02: "REBOOT", 0x03: "REBOOT_TO_BOOTLOADER", 0x81: "INFO", 0x83: "OK", 0x84: "ERROR" },
       },
       [MODULE.MONITOR]: {
-        label: "Monitor", errorType: MON.ERROR, parseError: parseCodeMessageError,
+        label: "Monitor", protocol: PROTOCOL.MONITOR, errorType: MON.ERROR, parseError: parseRequestCodeMessageError,
         names: { 0x01: "GET_HEAP", 0x02: "GET_TASKS", 0x03: "SET_STREAM", 0x81: "HEAP", 0x82: "TASKS", 0x83: "OK", 0x84: "ERROR" },
       },
       [MODULE.DISCOVERY]: { label: "Discovery", errorType: -1, parseError: null, names: { 0x00: "LIST_MODULES" } },
     };
-    function typeName(module, type) {
-      const spec = MODULE_SPEC[module];
+    // Module id -> spec for one connection. Starts from the published ids; a
+    // discovery v2 record whose protocol id matches a spec moves that spec to
+    // the advertised id (the published id is dropped when it moved), a record
+    // with an unknown / empty protocol keeps whatever the published table says
+    // for its id, and v1 / absent discovery leaves the defaults alone.
+    function buildModuleSpecs(discovery) {
+      const specs = new Map();
+      for (const [id, spec] of Object.entries(MODULE_SPEC)) specs.set(Number(id), spec);
+      if (!discovery || discovery.version < 2) return specs;
+      const byProtocol = new Map();
+      for (const [id, spec] of Object.entries(MODULE_SPEC)) if (spec.protocol) byProtocol.set(spec.protocol, { id: Number(id), spec });
+      for (const m of discovery.modules) {
+        const known = m.protocol ? byProtocol.get(m.protocol) : null;
+        if (!known) continue;
+        if (known.id !== m.id && specs.get(known.id) === known.spec) specs.delete(known.id);
+        specs.set(m.id, known.spec);
+      }
+      return specs;
+    }
+    const DEFAULT_MODULE_SPECS = buildModuleSpecs(null);
+    function typeName(module, type, specs) {
+      const spec = (specs || DEFAULT_MODULE_SPECS).get(module);
       const n = spec && spec.names[type];
       return n ? n : ("0x" + type.toString(16).padStart(2, "0"));
     }
-    function moduleName(module) {
-      const spec = MODULE_SPEC[module];
+    function moduleName(module, specs) {
+      const spec = (specs || DEFAULT_MODULE_SPECS).get(module);
       return spec ? spec.label : ("module 0x" + module.toString(16).padStart(2, "0"));
     }
 
@@ -1117,6 +1138,12 @@
       if (payload.length < 4) return { request: null, code: 0, message: "(malformed error reply)" };
       return { request: null, code: readU32(payload, 0), message: utf8.decode(payload.subarray(4)) };
     }
+    // system / monitor ERROR (espp >= 1.3.6): [request_type u8][code u32][utf8 message];
+    // code is a POSIX errno (informational, the message is authoritative)
+    function parseRequestCodeMessageError(payload) {
+      if (payload.length < 5) return { request: null, code: 0, message: "(malformed error reply)" };
+      return { request: payload[0], code: readU32(payload, 1), message: utf8.decode(payload.subarray(5)) };
+    }
 
     // ---- OTA STATUS: [flags u8][version str][project str] ------------------------
     function parseOtaStatus(payload) {
@@ -1240,10 +1267,11 @@
     // Exported for node-side unit checks (harmless in the browser).
     const DongleProto = { crc32, buildFrame, StreamParser, encodeSettings, decodeSettings, parseInfo,
                           parseBonds, encodeForgetBond, bondAddressString,
-                          parseDiscovery, resolveModuleId, parseDeviceError, parseCodeMessageError, parseOtaStatus, extractElf,
+                          parseDiscovery, resolveModuleId, buildModuleSpecs, typeName, moduleName,
+                          parseDeviceError, parseCodeMessageError, parseRequestCodeMessageError, parseOtaStatus, extractElf,
                           parseSystemInfo, parseHeap, heapRegionName, fmtBytes, u16,
                           parseVersion, compareVersionCore, compareFirmware, pickFirmwareAsset, normalizeRelease,
-                          MODULE, PROTOCOL, DEV, OTA, CD, SYS, SYS_TAG, SYS_CAP_REBOOT, SYS_CAP_BOOTLOADER, MON,
+                          MODULE, MODULE_SPEC, PROTOCOL, DEV, OTA, CD, SYS, SYS_TAG, SYS_CAP_REBOOT, SYS_CAP_BOOTLOADER, MON,
                           DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE };
     if (typeof module !== "undefined" && module.exports) module.exports = DongleProto;
   </script>
@@ -1367,10 +1395,12 @@
 
     // ---- tabs ------------------------------------------------------------------
     let activeTab = "device";
+    let onTabSelected = null;   // installed once the connection state exists (below); null during the initial restore
     function selectTab(name) {
       const btn = tabButtons.find((b) => b.dataset.tab === name);
       if (!btn || btn.disabled) return;
       activeTab = name;
+      if (onTabSelected) onTabSelected(name);
       for (const b of tabButtons) {
         const on = b.dataset.tab === name;
         b.setAttribute("aria-selected", on ? "true" : "false");
@@ -1397,6 +1427,7 @@
 
     // Mark each tab with the discovery result; a missing module disables its tab.
     let discovered = null; // { device, fw, modules } or null (unknown)
+    let moduleSpecs = buildModuleSpecs(null); // id -> spec for this connection (rebuilt from discovery)
     function moduleAvailable(id) {
       return !discovered || discovered.modules.some((m) => m.id === id);
     }
@@ -1588,6 +1619,7 @@
     // update check could compare the release against the previous firmware.
     function forgetDeviceState() {
       discovered = null;
+      moduleSpecs = buildModuleSpecs(null);
       lastInfo = null;
       lastOtaStatus = null;
       clearLink();
@@ -1688,14 +1720,14 @@
     function dispatchFrame(f) {
       const quiet = pendingTxn && pendingTxn.quiet;
       if (els.logFrames.checked && !quiet)
-        logLine("rx", moduleName(f.module) + " " + typeName(f.module, f.type) +
+        logLine("rx", moduleName(f.module, moduleSpecs) + " " + typeName(f.module, f.type, moduleSpecs) +
                 (f.correlation !== null ? " #" + f.correlation : "") + " " + hex(f.payload));
       if (f.module === MODULE.OTA && f.reply && f.type === OTA.PROGRESS && f.payload.length === 8) {
         otaProgress(readU32(f.payload, 0), readU32(f.payload, 4) || null);
         return;
       }
       if (pendingTxn && f.reply && f.module === pendingTxn.module) {
-        const spec = MODULE_SPEC[f.module];
+        const spec = moduleSpecs.get(f.module);
         if (spec && f.type === spec.errorType) {
           const info = spec.parseError(f.payload);
           const e = new Error(info.message || ("device error code " + info.code));
@@ -1715,7 +1747,7 @@
         }
       }
       if (!els.logFrames.checked || quiet)
-        logLine("warn", "Unsolicited " + moduleName(f.module) + " " + typeName(f.module, f.type) + " (" + f.payload.length + " B) ignored.");
+        logLine("warn", "Unsolicited " + moduleName(f.module, moduleSpecs) + " " + typeName(f.module, f.type, moduleSpecs) + " (" + f.payload.length + " B) ignored.");
     }
 
     // Send one request and await its reply/replies. `opts.expect` is a list of
@@ -1727,7 +1759,7 @@
       const stages = (opts.expect && opts.expect.length && Array.isArray(opts.expect[0]))
         ? opts.expect.map((s) => new Set(s)) : [new Set(opts.expect || [])];
       const timeoutMs = opts.timeoutMs || CMD_TIMEOUT_MS;
-      const label = moduleName(module) + " " + typeName(module, type);
+      const label = moduleName(module, moduleSpecs) + " " + typeName(module, type, moduleSpecs);
       const attempt = () => new Promise((resolve, reject) => {
         if (!transport) { reject(Object.assign(new Error("not connected"), { transportLost: true })); return; }
         let frame;
@@ -1784,7 +1816,7 @@
       }
       if (moduleAvailable(MODULE.OTA)) await checkOtaStatus(true);
       if (moduleAvailable(systemModuleId())) await refreshSystemInfo(true);
-      if (moduleAvailable(monitorModuleId()) && activeTab === "system") await refreshHeap(true);
+      if (activeTab === "system") await ensureHeapLoaded();
       if (moduleAvailable(MODULE.COREDUMP) && activeTab === "coredump") await refreshCoreDump();
       if (transport) setStatus("connected", "Connected");
       // Firmware version is known now (INFO / OTA STATUS): compare it with the
@@ -1797,6 +1829,7 @@
       try {
         const [reply] = await transact(MODULE.DISCOVERY, T_LIST_MODULES, null, { expect: [T_LIST_MODULES], timeoutMs: DISCOVERY_TIMEOUT_MS, noRecover: true });
         discovered = parseDiscovery(reply.payload);
+        moduleSpecs = buildModuleSpecs(discovered);
         const names = discovered.modules.map((m) => m.name + " (0x" + m.id.toString(16).padStart(2, "0") + (m.protocol ? ", " + m.protocol + " v" + m.protocolVersion : "") + ")").join(", ") || "none";
         logLine("sys", "Discovery: " + (discovered.device || "(unnamed device)") + (discovered.fw ? " fw " + discovered.fw : "") + " — modules: " + names + ".");
         for (const tab of Object.keys(TAB_MODULE)) {
@@ -2260,7 +2293,7 @@
     let lastSystemInfo = null;
 
     function clearSystem() {
-      systemCaps = 0; lastSystemInfo = null;
+      systemCaps = 0; lastSystemInfo = null; heapLoaded = false;
       els.sysRows.textContent = "";
       kvRow(els.sysRows, "Info", "(not read yet)", "muted");
       els.sysInfo.textContent = "";
@@ -2400,25 +2433,30 @@
       }
       els.monInfo.textContent = "read " + new Date().toLocaleTimeString();
     }
+    let heapLoaded = false, heapInFlight = false;
     async function refreshHeap(quiet) {
-      if (!transport || busy) return;
+      if (!transport || busy || heapInFlight) return;
+      heapInFlight = true;
       try {
         const [reply] = await transact(monitorModuleId(), MON.GET_HEAP, null, { expect: [MON.HEAP], quiet: !!quiet });
         renderHeap(parseHeap(reply.payload));
+        heapLoaded = true;
         setNote(els.monNote, "muted", "Heap regions as reported by the monitor service; the red mark is the peak usage (lowest free) since boot.");
       } catch (e) {
         logLine("err", "Monitor GET_HEAP failed: " + e.message);
         setNote(els.monNote, "err", "Reading the heap failed: " + e.message);
+      } finally {
+        heapInFlight = false;
       }
     }
     els.monRefreshBtn.addEventListener("click", () => refreshHeap(false));
-    // first visit of the System tab while connected: read the heap once
-    for (const b of tabButtons) {
-      if (b.dataset.tab !== "system") continue;
-      b.addEventListener("click", () => {
-        if (transport && !busy && !els.monInfo.textContent && moduleAvailable(monitorModuleId())) refreshHeap(true);
-      });
+    // First time the System tab is shown on a connection (click, Arrow / Home /
+    // End keys, or the restored tab after connecting): read the heap once.
+    async function ensureHeapLoaded() {
+      if (heapLoaded || heapInFlight || !transport || busy || !moduleAvailable(monitorModuleId())) return;
+      await refreshHeap(true);
     }
+    onTabSelected = (name) => { if (name === "system") ensureHeapLoaded(); };
 
     // =====================================================================
     // Firmware tab (module 0 = espp OTA)
