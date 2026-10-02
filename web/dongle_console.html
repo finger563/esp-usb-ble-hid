@@ -2778,7 +2778,7 @@
         if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
         } else {
-          expectRestart = false; reconnect.connected(); // still connected: nothing to expect
+          expectRestart = false; if (transport) reconnect.connected(); // still connected: nothing to expect (after a loss the recovery armed by onTransportGone must survive)
           logLine("err", "Reboot failed: " + e.message);
           setNote(els.sysNote, "err", "Reboot failed: " + e.message);
         }
@@ -2800,7 +2800,7 @@
         if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is entering the bootloader.");
         } else {
-          expectBootloader = false; reconnect.connected(); // still connected: lift the suppression
+          expectBootloader = false; if (transport) reconnect.connected(); // still connected: lift the suppression (after a loss the recovery armed by onTransportGone must survive)
           logLine("err", "Reboot into bootloader failed: " + e.message);
           setNote(els.sysNote, "err", "Reboot into bootloader failed: " + e.message);
         }
