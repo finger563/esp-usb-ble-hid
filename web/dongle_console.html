@@ -2625,8 +2625,8 @@
     });
 
     // ---- actions ---------------------------------------------------------------
-    async function sendAction(action, label) {
-      const [ok] = await transact(deviceModuleId(), DEV.ACTION, new Uint8Array([action]), { expect: [DEV.OK], timeoutMs: action === DEV_ACTION.REBOOT ? REBOOT_TIMEOUT_MS : CMD_TIMEOUT_MS, noRecover: action === DEV_ACTION.REBOOT });
+    async function sendAction(action, label, onSend) {
+      const [ok] = await transact(deviceModuleId(), DEV.ACTION, new Uint8Array([action]), { expect: [DEV.OK], timeoutMs: action === DEV_ACTION.REBOOT ? REBOOT_TIMEOUT_MS : CMD_TIMEOUT_MS, noRecover: action === DEV_ACTION.REBOOT, onSend });
       if (ok.payload.length && ok.payload[0] !== DEV.ACTION) logLine("warn", label + ": OK acknowledged request 0x" + ok.payload[0].toString(16) + " (expected ACTION)");
       return ok;
     }
@@ -2665,16 +2665,18 @@
       if (!transport) return;
       const ok = await askConfirm(els.actionConfirm, els.actReboot, "Reboot the dongle now? The USB link drops for a few seconds.", "Reboot");
       if (!ok || !transport) return;
-      expectRestart = true; reconnect.expectReboot();
+      // armed when the request actually goes out (transact is serialized: a queued
+      // reboot must not classify an earlier, unrelated link loss as a reboot)
+      const armRestart = () => { expectRestart = true; expectBootloader = false; reconnect.expectReboot(); };
       try {
-        await sendAction(DEV_ACTION.REBOOT, "Reboot");
+        await sendAction(DEV_ACTION.REBOOT, "Reboot", armRestart);
         logLine("ok", "Reboot acknowledged; the dongle is restarting.");
         setNote(els.actionNote, "muted", "Rebooting… " + (els.autoConnect.checked ? "the console reconnects automatically when the dongle re-enumerates." : "Auto-connect is off: use “Connect dongle” once it re-enumerates."));
       } catch (e) {
-        if (e && (e.timeout || e.transportLost)) {
+        if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
         } else {
-          expectRestart = false; reconnect.connected(); // still connected: nothing to expect
+          expectRestart = false; if (transport) reconnect.connected(); // still connected: nothing to expect
           logLine("err", "Reboot failed: " + e.message);
           setNote(els.actionNote, "err", "Reboot failed: " + e.message);
         }
@@ -2941,15 +2943,16 @@
       // The device does not reply OK to MARK_INVALID: it reboots. Only a missing
       // reply (timeout / link loss) counts as success; ERROR, stall or a send
       // failure means the rollback was refused or never delivered.
-      expectRestart = true; reconnect.expectReboot();
+      // armed when the request actually goes out (see the reboot action)
+      const armRestart = () => { expectRestart = true; expectBootloader = false; reconnect.expectReboot(); };
       awaitingVerify = null;
       try {
-        await transact(otaModuleId(), OTA.MARK_INVALID, null, { expect: [], timeoutMs: REBOOT_TIMEOUT_MS, noRecover: true });
+        await transact(otaModuleId(), OTA.MARK_INVALID, null, { expect: [], timeoutMs: REBOOT_TIMEOUT_MS, noRecover: true, onSend: armRestart });
         expectRestart = false; reconnect.connected();
         logLine("err", "Rollback not performed: the dongle replied instead of rebooting.");
       } catch (e) {
-        if (e && (e.deviceError || e.stalled || e.sendFailed)) {
-          expectRestart = false; reconnect.connected();
+        if (e && (e.deviceError || e.stalled || e.sendFailed || e.notSent)) {
+          expectRestart = false; if (transport) reconnect.connected();
           logLine("err", "Rollback failed: " + e.message);
           setNote(els.otaStatusNote, "err", "Rollback failed: " + e.message);
         } else {
