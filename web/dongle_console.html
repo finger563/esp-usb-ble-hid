@@ -106,6 +106,7 @@
     .brand h1 { font-size: 17px; white-space: nowrap; }
     .brand .sub { color: var(--muted); font-size: 12px; white-space: nowrap; }
     .conn { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+    .conn label.auto { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); cursor: pointer; }
     .devbadge {
       display: inline-flex; align-items: center; gap: 6px;
       padding: 4px 10px; border-radius: 999px;
@@ -368,6 +369,7 @@
     <div class="conn">
       <span id="status" class="pill">Disconnected</span>
       <span id="devBadge" class="devbadge" hidden></span>
+      <label class="auto small-text" title="Open a permitted dongle by itself: on page load, when one is plugged in, and after a reboot the console asked for (not after a reboot into the bootloader). Manual Connect always works."><input type="checkbox" id="autoConnect" checked> Auto-connect</label>
       <button id="connectBtn" class="primary" type="button">Connect dongle</button>
       <button id="anyBtn" class="ghost" type="button" title="Show every USB device instead of only the dongle (VID 057E / PID 2009)">Pick any USB device…</button>
     </div>
@@ -1323,11 +1325,10 @@
     const REBOOT_TIMEOUT_MS = 3000;
     const ESP_IMAGE_MAGIC = 0xE9;
     const MAX_IMAGE_SIZE = 64 * 1024 * 1024;
-    const AUTO_RECONNECT_WINDOW_MS = 90000;
 
     // ---- elements --------------------------------------------------------------
     const els = {};
-    for (const id of ["status", "devBadge", "connectBtn", "anyBtn", "unsupported",
+    for (const id of ["status", "devBadge", "connectBtn", "anyBtn", "autoConnect", "unsupported",
                       "infoAuto", "infoBtn", "bUsb", "bBle", "bScan", "bPair",
                       "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iUpdate", "iHardware", "iIdf", "infoNote",
                       "lState", "lBle", "lUsb", "linkNote",
@@ -1491,6 +1492,257 @@
       }
     }
 
+    // ---- connection helpers (shared with the espp consoles) -------------------------
+    // Verbatim copy of the shared block in espp components/dispatcher/web/dispatcher_hub.html @ 58aa2cdd0
+    // (re-sync by replacing everything between the begin / end markers). This console
+    // is WebUSB-only, so the Web Serial helpers (serialIdentity, pickSerialPort,
+    // findPermittedSerialPort) are carried along unused.
+    // --- begin connection helpers (shared; byte-identical in every console + the hub, see web/test/resolve_module_id_test.js) ---
+    // Links may carry, besides ?module=, parameters that make a page connect on
+    // load WITHOUT the browser chooser to a device this origin was already
+    // granted (the Device Hub links its apps this way after releasing the
+    // device):  ?autoconnect=1&transport=usb|serial&vid=0x1209&pid=0x0d32&serial=ABC
+    // vid / pid are hex (0x..) or decimal; `serial` is the USB serial number
+    // (WebUSB only: Web Serial exposes vid / pid alone).
+    function parseConnectParams(search) {
+      const q = new URLSearchParams(search || "");
+      const num = (key) => {
+        const raw = q.get(key);
+        if (raw === null) return null;
+        const s = raw.trim();
+        if (!/^(0x[0-9a-f]+|[0-9]+)$/i.test(s)) return null;
+        const v = Number(s);
+        return Number.isInteger(v) && v >= 0 && v <= 0xFFFF ? v : null;
+      };
+      const transport = (q.get("transport") || "").trim().toLowerCase();
+      const flag = (q.get("autoconnect") || "").trim().toLowerCase();
+      return {
+        autoconnect: flag === "1" || flag === "true" || flag === "yes",
+        transport: transport === "usb" || transport === "serial" ? transport : null,
+        vid: num("vid"),
+        pid: num("pid"),
+        serial: (q.get("serial") || "").trim() || null,
+      };
+    }
+    // The identity of an open connection: enough to find the same device again
+    // (after a reboot it re-enumerates as a NEW USBDevice / SerialPort object
+    // with the same ids) and to build hand-off links.
+    function usbIdentity(device) {
+      return { transport: "usb", vid: device.vendorId, pid: device.productId, serial: device.serialNumber || null };
+    }
+    function serialIdentity(port) {
+      const info = port && typeof port.getInfo === "function" ? (port.getInfo() || {}) : {};
+      return { transport: "serial", vid: info.usbVendorId != null ? info.usbVendorId : null,
+               pid: info.usbProductId != null ? info.usbProductId : null, serial: null };
+    }
+    // Is `got` (the identity of a device that just appeared) the device `want`
+    // names? vid + pid must match; the serial number only when both sides
+    // report one (a serial-port arrival never has one). An arrival with no
+    // usable ids is never a match.
+    function identityMatches(want, got) {
+      if (!want || !got || got.vid == null || got.pid == null) return false;
+      if (want.vid != null && want.vid !== got.vid) return false;
+      if (want.pid != null && want.pid !== got.pid) return false;
+      if (want.serial && got.serial && want.serial !== got.serial) return false;
+      return true;
+    }
+    function describeIdentity(identity) {
+      if (!identity) return "device";
+      const hex = (v) => v == null ? "?" : "0x" + v.toString(16).padStart(4, "0");
+      return (identity.transport === "serial" ? "serial port" : "USB device") + " " + hex(identity.vid) + ":" + hex(identity.pid) +
+             (identity.serial ? " sn " + identity.serial : "");
+    }
+    // Pick, among the devices this origin may already use (navigator.usb
+    // .getDevices() / navigator.serial.getPorts()), the one `want` names: vid
+    // and pid must match when given; a serial number must match when both sides
+    // report one (a device that reports none is accepted only when it is the
+    // sole candidate). Several candidates without a serial -> the first. With no
+    // ids at all only a lone permitted device is accepted.
+    function pickUsbDevice(devices, want) {
+      const list = Array.isArray(devices) ? devices.filter(Boolean) : [];
+      if (!want || (want.vid == null && want.pid == null && !want.serial)) return list.length === 1 ? list[0] : null;
+      const byIds = list.filter(d => (want.vid == null || d.vendorId === want.vid) && (want.pid == null || d.productId === want.pid));
+      if (want.serial) {
+        const exact = byIds.find(d => d.serialNumber === want.serial);
+        if (exact) return exact;
+        const unnamed = byIds.filter(d => !d.serialNumber);
+        return unnamed.length === 1 ? unnamed[0] : null;
+      }
+      return byIds.length ? byIds[0] : null;
+    }
+    function pickSerialPort(ports, want) {
+      const list = Array.isArray(ports) ? ports.filter(Boolean) : [];
+      if (!want || (want.vid == null && want.pid == null)) return list.length === 1 ? list[0] : null;
+      const byIds = list.filter(p => { const id = serialIdentity(p); return (want.vid == null || id.vid === want.vid) && (want.pid == null || id.pid === want.pid); });
+      return byIds.length ? byIds[0] : null;
+    }
+    async function findPermittedUsbDevice(want) {
+      if (typeof navigator === "undefined" || !navigator.usb || typeof navigator.usb.getDevices !== "function") return null;
+      try { return pickUsbDevice(await navigator.usb.getDevices(), want); } catch (_) { return null; }
+    }
+    async function findPermittedSerialPort(want) {
+      if (typeof navigator === "undefined" || !navigator.serial || typeof navigator.serial.getPorts !== "function") return null;
+      try { return pickSerialPort(await navigator.serial.getPorts(), want); } catch (_) { return null; }
+    }
+    // "Auto-reconnect" checkbox preference, shared by every app on this origin
+    // (localStorage; default on; access may throw in private windows).
+    const AUTO_RECONNECT_KEY = "espp.autoReconnect";
+    function loadAutoReconnect() {
+      try { const v = localStorage.getItem(AUTO_RECONNECT_KEY); return v === null ? true : v === "1"; } catch (_) { return true; }
+    }
+    function saveAutoReconnect(on) { try { localStorage.setItem(AUTO_RECONNECT_KEY, on ? "1" : "0"); } catch (_) {} }
+    // One open at a time per page. Every connect entry point — the Connect
+    // button(s), the ?autoconnect path and the reconnect supervisor — runs
+    // through gate.run(fn); while an open is in progress a second entry is
+    // refused (resolves false) instead of racing the first: the later
+    // completion would otherwise overwrite a live transport without closing it
+    // or orphan a claimed USB device. The supervisor consults isBusy() and
+    // waits rather than counting a refused entry as a failed attempt.
+    // opts.connected() is the page's "already holds a device" predicate: the
+    // gate serializes opens but does not know about an adopted connection, so
+    // run() also refuses (opens nothing) while the page is connected — a
+    // reconnect callback whose permitted-device lookup outlived a manual
+    // connect must not open the same device a second time.
+    function createOpenGate(opts) {
+      const connected = opts && typeof opts.connected === "function" ? opts.connected : () => false;
+      const gate = { busy: false };
+      gate.isBusy = () => gate.busy;
+      gate.isConnected = () => !!connected();
+      gate.run = async (fn) => {
+        if (gate.busy || connected()) return false;
+        gate.busy = true;
+        try { return await fn(); } finally { gate.busy = false; }
+      };
+      return gate;
+    }
+    // Reconnect supervisor. After an UNEXPECTED link loss (unplug, reboot) it
+    // retries opts.reconnect(identity, attempt) -> bool on a bounded back-off
+    // until an attempt succeeds, the attempts run out, or stop() is called; a
+    // platform `connect` event (onDeviceAppeared) retries at once. opts.enabled()
+    // (the checkbox) is consulted on every attempt. expectReboot() marks a
+    // reboot the page itself requested (longer window, friendlier log);
+    // suppress() cancels reconnecting until the next successful connect (a
+    // bootloader reboot: the device comes back as a DIFFERENT USB device that
+    // this page cannot drive). opts.log(cls, text) receives progress lines.
+    // Attempts never overlap: one opts.reconnect() call is in flight at a time
+    // (two concurrent opens of the same device would race each other); an
+    // arrival event during an attempt is remembered and retried right after
+    // the current attempt settles. A loss that happens while an older attempt
+    // is still in flight (the device dropped again during the post-open
+    // discovery probe) starts a new generation; when the stale attempt settles
+    // it hands over by scheduling the current generation's pending retry.
+    // opts.gate (createOpenGate) is shared with the page's manual / auto-connect
+    // paths: while one of those holds it the supervisor polls instead of opening.
+    // Cancellation: stop() (the checkbox unticked, a manual disconnect) and a
+    // newer loss cancel the attempt in flight. opts.reconnect(identity, n,
+    // token) may consult token.cancelled(); when a cancelled attempt settles
+    // the supervisor ignores the page's connected() call made while it was
+    // open and runs opts.discard() (the page's close path), so an open that
+    // finished after the user said "stop" is closed instead of adopted.
+    function createReconnectSupervisor(opts) {
+      const delays = opts.delaysMs || [500, 1000, 1500, 2000, 3000, 4000, 5000, 5000, 5000, 5000];
+      const rebootDelays = opts.rebootDelaysMs || delays.concat([5000, 5000, 5000, 5000, 5000, 5000]);
+      const log = typeof opts.log === "function" ? opts.log : () => {};
+      // generations <= cancelBefore are cancelled; inFlightGen is the generation of the attempt in flight
+      const sup = { active: false, identity: null, attempt: 0, expected: false, suppressed: false, timer: null, generation: 0, inFlight: false, retryAfter: false, cancelBefore: 0, inFlightGen: 0 };
+      const cancelled = (gen) => gen <= sup.cancelBefore;
+      const cancelCurrent = () => { sup.cancelBefore = sup.generation; };
+      const clearTimer = () => { if (sup.timer) { clearTimeout(sup.timer); sup.timer = null; } };
+      const schedule = (gen, ms) => { clearTimer(); sup.timer = setTimeout(() => { sup.timer = null; attempt(gen); }, ms); };
+      async function attempt(gen) {
+        if (gen !== sup.generation || !sup.active) return;
+        if (sup.inFlight) { sup.retryAfter = true; return; } // serialized: retry once the current attempt settles
+        if (opts.gate && opts.gate.isBusy()) { schedule(gen, 250); return; } // a manual / auto-connect open is in progress: wait, not an attempt
+        if (!opts.enabled()) { sup.stop("auto-reconnect is off"); return; }
+        const plan = sup.expected ? rebootDelays : delays;
+        sup.attempt++;
+        let ok = false;
+        sup.inFlight = true; sup.inFlightGen = gen; sup.retryAfter = false;
+        const token = { cancelled: () => cancelled(gen) };
+        try { ok = await opts.reconnect(sup.identity, sup.attempt, token); }
+        catch (e) { if (!cancelled(gen)) log("warn", "reconnect attempt " + sup.attempt + " failed: " + (e && e.message ? e.message : e)); }
+        finally { sup.inFlight = false; }
+        if (cancelled(gen) && ok) {
+          // stop() / a newer loss happened while the open was pending and the
+          // open succeeded anyway: it must not stay adopted (the page's
+          // connected() was ignored). An attempt that opened nothing (lookup
+          // failed, returned false) has nothing to discard; running the page's
+          // disconnect then would drop a manual connection made meanwhile.
+          if (typeof opts.discard === "function") { try { await opts.discard(); } catch (_) {} }
+        }
+        if (gen !== sup.generation) {
+          // stale: a newer loss owns the supervisor now. Its timer may already
+          // have fired into our in-flight attempt (retryAfter) and left no timer
+          // behind, so re-arm it here or auto-reconnect would stall for good.
+          const pending = sup.retryAfter; sup.retryAfter = false;
+          if (sup.active && !sup.timer && pending) schedule(sup.generation, 100);
+          return;
+        }
+        if (!sup.active) { sup.retryAfter = false; return; }
+        if (ok) { sup.active = false; sup.expected = false; sup.retryAfter = false; clearTimer(); return; }
+        if (sup.attempt >= plan.length) { sup.stop("gave up reconnecting after " + sup.attempt + " attempts; use Connect"); return; }
+        if (sup.retryAfter) { sup.retryAfter = false; schedule(gen, 100); return; } // the device showed up meanwhile
+        schedule(gen, plan[sup.attempt]);
+      }
+      // the page lost its connection without asking for it
+      sup.onLinkLost = (identity) => {
+        clearTimer();
+        cancelCurrent();
+        sup.generation++;
+        if (sup.suppressed) { sup.suppressed = false; sup.active = false; log("sys", "Not reconnecting: the device was asked to reboot into its bootloader (it enumerates as a different USB device; use Connect once it is back in the application)."); return; }
+        if (!opts.enabled() || !identity) { sup.active = false; return; }
+        sup.active = true; sup.identity = identity; sup.attempt = 0;
+        const plan = sup.expected ? rebootDelays : delays;
+        log("sys", (sup.expected ? "Device is rebooting — reconnecting to " : "Link lost — trying to reconnect to ") + describeIdentity(identity) + " (auto-reconnect; uncheck to stop)…");
+        schedule(sup.generation, plan[0]);
+      };
+      // a permitted device re-appeared (navigator.usb / navigator.serial
+      // "connect"): only the device being recovered wakes the supervisor — an
+      // unrelated arrival would otherwise burn one of the bounded retries
+      sup.onDeviceAppeared = (identity) => {
+        if (!sup.active || !identityMatches(sup.identity, identity)) return;
+        if (sup.inFlight) sup.retryAfter = true; else schedule(sup.generation, 100);
+      };
+      sup.expectReboot = () => { sup.expected = true; sup.suppressed = false; };
+      sup.suppress = () => { sup.suppressed = true; sup.expected = false; };
+      // a connection was established (manually or by a successful attempt)
+      sup.connected = () => {
+        if (sup.inFlight && cancelled(sup.inFlightGen)) return; // a cancelled attempt's open: it is about to be discarded
+        clearTimer(); sup.generation++; sup.active = false; sup.expected = false; sup.suppressed = false; sup.attempt = 0; sup.retryAfter = false; };
+      sup.stop = (reason) => { clearTimer(); cancelCurrent(); sup.generation++; const was = sup.active; sup.active = false; sup.expected = false; sup.retryAfter = false; if (was && reason) log("sys", "Auto-reconnect stopped: " + reason + "."); };
+      sup.isActive = () => sup.active;
+      return sup;
+    }
+    // Forward the platform "a permitted device was (re)attached" events to the
+    // supervisor, with the arriving device's identity, so a reboot is caught
+    // the moment the device enumerates (and other devices are ignored).
+    function watchDeviceArrivals(sup) {
+      if (typeof navigator === "undefined") return;
+      if (navigator.usb && typeof navigator.usb.addEventListener === "function")
+        navigator.usb.addEventListener("connect", (ev) => sup.onDeviceAppeared(ev && ev.device ? usbIdentity(ev.device) : null));
+      if (navigator.serial && typeof navigator.serial.addEventListener === "function")
+        navigator.serial.addEventListener("connect", (ev) => { const port = ev && (ev.port || ev.target); sup.onDeviceAppeared(port ? serialIdentity(port) : null); });
+    }
+    // App -> hub notice that an app released its device (manual disconnect or
+    // page closed), so a hub that handed the device off can offer to reconnect.
+    // Same-origin pages only (BroadcastChannel); best effort everywhere.
+    function openDeviceChannel() {
+      let channel = null;
+      try { channel = typeof BroadcastChannel === "function" ? new BroadcastChannel("espp-device") : null; } catch (_) { return null; }
+      // Close the channel when the page goes away (no late deliveries to a page
+      // that is unloading, no leaked channel across rapid reloads). The listener
+      // is registered on a later task so it runs AFTER the page's own pagehide
+      // handler, which still needs the channel to post its released notice.
+      if (channel && typeof window !== "undefined" && typeof window.addEventListener === "function")
+        setTimeout(() => window.addEventListener("pagehide", () => { try { channel.close(); } catch (_) {} }, { once: true }), 0);
+      return channel;
+    }
+    function postReleased(channel, identity) {
+      if (!channel || !identity) return;
+      try { channel.postMessage({ type: "released", identity: identity, page: (typeof location !== "undefined" ? location.pathname : "").split("/").pop() }); } catch (_) {}
+    }
+    // --- end connection helpers ---
+
     // ---- WebUSB transport --------------------------------------------------------
     // Persistent RX pump (one transferIn always pending) feeding the shared
     // parser; transferOut loops until every byte is written; reset() aborts the
@@ -1591,16 +1843,104 @@
 
     let transport = null;
     const parser = new StreamParser();
-    let lastDeviceIds = null;     // { vendorId, productId, serial } of the last connected dongle (auto-reconnect)
+    let connIdentity = null;      // usbIdentity() of the connected (or just lost) dongle: every dongle shares the
+                                  // VID/PID, the firmware-assigned USB serial (from the MAC) tells them apart
     let expectRestart = false;    // a reboot we asked for is coming; a disconnect is not an error
-    let expectRestartUntil = 0;
     let expectBootloader = false; // we sent REBOOT_TO_BOOTLOADER: the dongle comes back as the ROM's USB device, not as itself
 
     if (!navigator.usb) {
       els.unsupported.hidden = false;
       els.connectBtn.disabled = true;
       els.anyBtn.disabled = true;
+      els.autoConnect.disabled = true;
     }
+
+    // ---- automatic opens: on load, on plug-in, after a reboot -------------------------
+    // One "Auto-connect" switch (default on, remembered per origin) gates every
+    // open the console makes by itself; the Connect buttons always work. The
+    // browser only hands out devices this origin was granted before
+    // (navigator.usb.getDevices()), so nothing here ever shows a chooser.
+    const AUTO_CONNECT_KEY = "dongle_console.autoConnect";
+    function loadAutoConnect() { try { const v = localStorage.getItem(AUTO_CONNECT_KEY); return v === null ? true : v === "1"; } catch (_) { return true; } }
+    function saveAutoConnect(on) { try { localStorage.setItem(AUTO_CONNECT_KEY, on ? "1" : "0"); } catch (_) {} }
+    els.autoConnect.checked = loadAutoConnect();
+    els.autoConnect.addEventListener("change", () => {
+      saveAutoConnect(els.autoConnect.checked);
+      if (!els.autoConnect.checked) reconnect.stop("auto-connect is off");
+    });
+    const connectParams = parseConnectParams(location.search);
+    const isDongle = (d) => !!d && d.vendorId === DEFAULT_VID && d.productId === DEFAULT_PID;
+    const deviceChannel = openDeviceChannel();
+    // One open at a time (Connect buttons, auto-connect, reconnect), and never
+    // while already connected — see createOpenGate.
+    const openGate = createOpenGate({ connected: () => !!transport });
+    // Reconnect supervisor: after an unexpected link loss (a reboot we asked for,
+    // an unplug) it re-opens the SAME dongle (matched by serial number when the
+    // dongle reports one) on a bounded back-off, and at once when the platform
+    // reports it back; a bootloader reboot suppresses it (the ROM enumerates as
+    // a different device). An open that finishes after the switch was turned
+    // off is closed again (discard), not adopted. A reboot may take a while
+    // (OTA validation): allow ~90 s.
+    const reconnect = createReconnectSupervisor({
+      gate: openGate,
+      enabled: () => els.autoConnect.checked,
+      rebootDelaysMs: [500, 1000, 1500, 2000, 3000, 4000].concat(new Array(16).fill(5000)),
+      log: (cls, text) => { logLine(cls === "warn" ? "warn" : "sys", text); if (/^Auto-reconnect stopped|^Not reconnecting/.test(text)) setStatus("", "Disconnected"); },
+      reconnect: reconnectAttempt,
+      discard: () => disconnect(),
+    });
+    watchDeviceArrivals(reconnect);
+    // One reconnect attempt: the dongle must be back among the permitted devices.
+    // The lookup runs outside the open gate, so re-check afterwards that the
+    // attempt was not cancelled (switch turned off) and that no manual connect
+    // completed meanwhile — the gate refuses while connected as well.
+    async function reconnectAttempt(identity, attempt, token) {
+      if (transport) return true;
+      const d = await findPermittedUsbDevice(identity);
+      if (token.cancelled() || transport) return false;
+      if (!d) return false;
+      if (attempt === 1 || !token.cancelled()) logLine("sys", "Dongle is back (" + describeIdentity(usbIdentity(d)) + "); reconnecting…");
+      return !!(await openPermitted(d, "Reconnected to"));
+    }
+    // A permitted dongle was plugged in while the console is idle: open it (a
+    // recovery in progress is the supervisor's business — it matches the exact
+    // dongle it lost — so stay out of its way then).
+    if (navigator.usb && navigator.usb.addEventListener) {
+      navigator.usb.addEventListener("connect", async (e) => {
+        const d = e.device;
+        if (transport || !els.autoConnect.checked || reconnect.isActive() || !isDongle(d)) return;
+        await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
+        if (transport || reconnect.isActive() || openGate.isBusy()) return;
+        logLine("sys", "Dongle plugged in (" + describeIdentity(usbIdentity(d)) + "); connecting…");
+        await openPermitted(d, "Connected to");
+      });
+    }
+    // On load: the device named by ?autoconnect=1&vid=&pid=&serial= (the espp
+    // hub's hand-off link), else the single permitted dongle that is plugged in;
+    // several permitted dongles -> do not guess.
+    async function autoConnectOnLoad() {
+      if (!navigator.usb || !els.autoConnect.checked || typeof navigator.usb.getDevices !== "function") return;
+      let devices = [];
+      try { devices = await navigator.usb.getDevices(); } catch (_) { return; }
+      if (transport || openGate.isBusy()) return;
+      if (connectParams.autoconnect) {
+        const d = pickUsbDevice(devices, connectParams);
+        if (!d) { logLine("warn", "Auto-connect: no permitted " + describeIdentity(connectParams) + " is plugged in — use “Connect dongle” (the browser only lists devices this page was already granted)."); return; }
+        logLine("sys", "Auto-connecting to " + describeIdentity(usbIdentity(d)) + "…");
+        await openPermitted(d, "Connected to");
+        return;
+      }
+      const dongles = devices.filter(isDongle);
+      if (dongles.length === 1) {
+        logLine("sys", "A permitted dongle is plugged in (" + describeIdentity(usbIdentity(dongles[0])) + "); connecting…");
+        await openPermitted(dongles[0], "Connected to");
+      } else if (dongles.length > 1) {
+        logLine("sys", dongles.length + " permitted dongles are plugged in — not guessing; pick one with “Connect dongle”.");
+      }
+    }
+    // pagehide: the browser tears the handle down itself and an await cannot
+    // finish here, so the notice goes out before the close (best effort)
+    window.addEventListener("pagehide", () => { if (transport) postReleased(deviceChannel, connIdentity); });
 
     // WebUSB requires `filters`; the "any device" path uses `[]` (Chromium) and
     // falls back to `[{}]` for implementations that reject an empty list.
@@ -1614,20 +1954,29 @@
       }
     }
 
+    // The chooser path (Connect buttons); one open at a time through the gate.
     async function connect(anyDevice) {
-      if (transport) return;
+      return openGate.run(() => connectLocked(anyDevice));
+    }
+    async function connectLocked(anyDevice) {
+      if (transport) return false;
       let device;
       try {
         device = await requestUsbDevice(anyDevice);
       } catch (e) {
         if (e && e.name === "NotFoundError") logLine("sys", "Device selection cancelled — no device chosen.");
         else logLine("err", "Device selection failed: " + (e && e.message ? e.message : e));
-        return;
+        return false;
       }
-      await openTransport(device);
+      return openTransport(device, "Connected to");
+    }
+    // The chooser-less path (auto-connect, plug-in, reconnect): an already
+    // permitted USBDevice, through the same gate.
+    async function openPermitted(device, label) {
+      return openGate.run(() => (transport ? false : openTransport(device, label)));
     }
 
-    async function openTransport(device) {
+    async function openTransport(device, label) {
       const t = new UsbTransport(device);
       setStatus("busy", "Opening…");
       try {
@@ -1639,16 +1988,16 @@
       }
       transport = t;
       parser.reset();
-      const reconnected = expectRestart;
-      expectRestart = false;
+      expectRestart = false; expectBootloader = false;
       // Every dongle shares the VID/PID; the firmware-assigned USB serial number
       // (derived from the MAC) is what identifies THIS dongle across a reboot.
       const serial = (device.serialNumber || "").trim();
-      lastDeviceIds = { vendorId: device.vendorId, productId: device.productId, serial };
+      connIdentity = usbIdentity(device);
+      reconnect.connected();
       t.startPump(handleRxBytes);
       setStatus("connected", "Connected");
       updateUI();
-      logLine("ok", (reconnected ? "Reconnected to " : "Connected to ") + t.describe() +
+      logLine("ok", (label || "Connected to") + " " + t.describe() +
               (serial ? " (serial " + serial + ")" : " (no USB serial number)") +
               " — vendor interface " + t.iface + ", bulk IN 0x" +
               t.epIn.toString(16) + " (" + t.inPacketSize + " B) / OUT 0x" + t.epOut.toString(16) + ".");
@@ -1674,6 +2023,7 @@
       const t = transport;
       transport = null;
       expectBootloader = false; expectRestart = false; // the user closed the link; nothing is expected to come back
+      reconnect.stop(); const released = connIdentity; connIdentity = null;
       failPending(new Error("disconnected"));
       await t.close();
       parser.reset();
@@ -1681,6 +2031,7 @@
       updateUI();
       setStatus("", "Disconnected");
       logLine("sys", "Disconnected.");
+      postReleased(deviceChannel, released); // only once the device is closed: a hub may reopen it on this notice
     }
     function onTransportGone(t, why) {
       if (transport !== t) return;
@@ -1691,51 +2042,23 @@
       forgetDeviceState();
       updateUI();
       if (expectBootloader) {
-        expectBootloader = false; expectRestart = false;
         setStatus("", "Disconnected");
         logLine("sys", "USB link dropped as expected — the dongle is in the ROM bootloader (download mode). Flash it with idf.py flash / esptool on the port it re-enumerated as, then reset or replug it and use “Connect dongle”.");
       } else if (expectRestart) {
-        setStatus("busy", "Dongle restarting…");
-        logLine("sys", "USB link dropped as expected — the dongle is restarting. Waiting for it to come back…");
-        expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
-        setTimeout(() => {
-          if (transport || !expectRestart) return;
-          expectRestart = false;
-          setStatus("", "Disconnected");
-          logLine("warn", "The dongle did not re-enumerate within " + (AUTO_RECONNECT_WINDOW_MS / 1000) + " s. Replug it and use “Connect dongle”.");
-        }, AUTO_RECONNECT_WINDOW_MS + 500);
+        setStatus(els.autoConnect.checked ? "busy" : "", els.autoConnect.checked ? "Dongle restarting…" : "Disconnected");
+        logLine("sys", "USB link dropped as expected — the dongle is restarting." + (els.autoConnect.checked ? " Waiting for it to come back…" : " Auto-connect is off: use “Connect dongle” once it is back."));
       } else {
         setStatus("", "Disconnected");
         logLine("err", why || "USB device disconnected.");
       }
+      expectBootloader = false; expectRestart = false;
+      // The supervisor re-opens the same dongle when it re-enumerates (suppressed
+      // after a bootloader reboot, off when the switch is off).
+      reconnect.onLinkLost(connIdentity);
     }
     if (navigator.usb && navigator.usb.addEventListener) {
       navigator.usb.addEventListener("disconnect", (e) => {
         if (transport && e.device === transport.device) onTransportGone(transport, "USB device disconnected.");
-      });
-      // After a reboot we asked for, the (already permitted) device reappears:
-      // reopen it without a click — WebUSB only needs a gesture for requestDevice.
-      navigator.usb.addEventListener("connect", async (e) => {
-        if (transport || !expectRestart || Date.now() > expectRestartUntil) return;
-        const d = e.device;
-        if (!lastDeviceIds) return;
-        if (d.vendorId !== lastDeviceIds.vendorId || d.productId !== lastDeviceIds.productId) return;
-        const name = (d.productName || "USB device") + " (" + d.vendorId.toString(16).padStart(4, "0") + ":" + d.productId.toString(16).padStart(4, "0") + ")";
-        const serial = (d.serialNumber || "").trim();
-        if (lastDeviceIds.serial) {
-          if (serial !== lastDeviceIds.serial) {
-            logLine("warn", "Ignoring " + name + " (serial " + (serial || "none") + "): not the dongle that was updated (serial " + lastDeviceIds.serial + ").");
-            return;
-          }
-          logLine("sys", "Dongle is back (serial " + serial + "); reconnecting…");
-        } else {
-          logLine("warn", "A dongle matching VID/PID appeared" + (serial ? " (serial " + serial + ")" : "") +
-                  "; the updated dongle had no USB serial, so this match is by VID/PID only. Reconnecting…");
-        }
-        await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
-        if (transport) return;
-        const ok = await openTransport(d);
-        if (!ok) logLine("warn", "Automatic reconnect failed — use “Connect dongle”.");
       });
     }
 
@@ -2337,7 +2660,7 @@
       if (!transport) return;
       const ok = await askConfirm(els.actionConfirm, els.actReboot, "Reboot the dongle now? The USB link drops for a few seconds.", "Reboot");
       if (!ok || !transport) return;
-      expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+      expectRestart = true; reconnect.expectReboot();
       try {
         await sendAction(DEV_ACTION.REBOOT, "Reboot");
         logLine("ok", "Reboot acknowledged; the dongle is restarting.");
@@ -2346,7 +2669,7 @@
         if (e && (e.timeout || e.transportLost)) {
           logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
         } else {
-          expectRestart = false;
+          expectRestart = false; reconnect.connected(); // still connected: nothing to expect
           logLine("err", "Reboot failed: " + e.message);
           setNote(els.actionNote, "err", "Reboot failed: " + e.message);
         }
@@ -2433,7 +2756,7 @@
       if (!transport) return;
       const ok = await askConfirm(els.sysConfirm, els.sysRebootBtn, "Reboot the dongle now (after " + rebootDelayMs() + " ms)? The USB link drops for a few seconds.", "Reboot");
       if (!ok || !transport) return;
-      const armRestart = () => { expectRestart = true; expectBootloader = false; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS; };
+      const armRestart = () => { expectRestart = true; expectBootloader = false; reconnect.expectReboot(); };
       try {
         await transact(systemModuleId(), SYS.REBOOT, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true, onSend: armRestart });
         logLine("ok", "Reboot acknowledged; the dongle is restarting.");
@@ -2442,7 +2765,7 @@
         if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
         } else {
-          expectRestart = false;
+          expectRestart = false; reconnect.connected(); // still connected: nothing to expect
           logLine("err", "Reboot failed: " + e.message);
           setNote(els.sysNote, "err", "Reboot failed: " + e.message);
         }
@@ -2454,7 +2777,8 @@
         "Reboot into the ROM bootloader (download mode)? The dongle stops acting as a controller and re-enumerates as the ESP32-S3 ROM USB device until it is flashed and reset / replugged.",
         "Reboot into bootloader");
       if (!ok || !transport) return;
-      const armBootloader = () => { expectBootloader = true; expectRestart = false; };
+      // the ROM enumerates as a different USB device: no automatic reconnect
+      const armBootloader = () => { expectBootloader = true; expectRestart = false; reconnect.suppress(); };
       try {
         await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true, onSend: armBootloader });
         logLine("ok", "Reboot into bootloader acknowledged.");
@@ -2463,7 +2787,7 @@
         if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is entering the bootloader.");
         } else {
-          expectBootloader = false;
+          expectBootloader = false; reconnect.connected(); // still connected: lift the suppression
           logLine("err", "Reboot into bootloader failed: " + e.message);
           setNote(els.sysNote, "err", "Reboot into bootloader failed: " + e.message);
         }
@@ -2612,15 +2936,15 @@
       // The device does not reply OK to MARK_INVALID: it reboots. Only a missing
       // reply (timeout / link loss) counts as success; ERROR, stall or a send
       // failure means the rollback was refused or never delivered.
-      expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+      expectRestart = true; reconnect.expectReboot();
       awaitingVerify = null;
       try {
         await transact(otaModuleId(), OTA.MARK_INVALID, null, { expect: [], timeoutMs: REBOOT_TIMEOUT_MS, noRecover: true });
-        expectRestart = false;
+        expectRestart = false; reconnect.connected();
         logLine("err", "Rollback not performed: the dongle replied instead of rebooting.");
       } catch (e) {
         if (e && (e.deviceError || e.stalled || e.sendFailed)) {
-          expectRestart = false;
+          expectRestart = false; reconnect.connected();
           logLine("err", "Rollback failed: " + e.message);
           setNote(els.otaStatusNote, "err", "Rollback failed: " + e.message);
         } else {
@@ -2686,7 +3010,7 @@
         logLine("sys", "FINISH: dongle is validating (SHA-256) and activating the image…");
         setNote(els.otaNote, "muted", "Validating image on the dongle…");
         await transact(otaModuleId(), OTA.FINISH, null, { expect: [OTA.OK], timeoutMs: OTA_FINISH_TIMEOUT_MS, quiet: true });
-        expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+        expectRestart = true; reconnect.expectReboot();
         awaitingVerify = { before: beforeFirmware };
         els.otaFill.className = "progress-fill done"; els.otaFill.style.width = "100%";
         setStatus("connected", "Update complete");
@@ -3091,7 +3415,9 @@
       if (cached && Date.now() - cached.checkedAt < RELEASE_CACHE_MS) { latestRelease = cached.release; latestCheckedAt = cached.checkedAt; }
       renderUpdateStatus();
     }
-    logLine("sys", "Dongle Console ready. Plug in the dongle and click “Connect dongle” (it shows up as a Nintendo Switch Pro Controller, 057e:2009).");
+    logLine("sys", "Dongle Console ready. Plug in the dongle and click “Connect dongle” (it shows up as a Nintendo Switch Pro Controller, 057e:2009)" +
+            (els.autoConnect.checked ? "; a dongle this page was already granted connects by itself." : "."));
+    autoConnectOnLoad();
   </script>
 </body>
 </html>
