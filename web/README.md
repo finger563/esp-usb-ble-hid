@@ -67,6 +67,30 @@ after a reboot). **Apply changes** sends only the keys you changed; the form
 always re-renders from the dongle's reply. **Reset to defaults** restores the
 firmware defaults.
 
+### System (module `7`, espp SystemService; module `8`, espp MonitorService)
+
+- **System** — chip model / revision / cores and features, CPU clock, ESP-IDF
+  and application versions, build date, ELF SHA-256, running / boot partition
+  and OTA state, last reset reason, uptime, MAC, flash / PSRAM sizes, free and
+  lowest-free heap, and which controls the firmware offers. Read once after
+  connecting; **Refresh** re-reads it.
+- **Reboot** / **Reboot into bootloader** (in-page confirmation, optional
+  delay in ms) are enabled only when the firmware's capabilities allow them.
+  A plain reboot behaves like the Device tab's: the console reconnects when
+  the dongle re-enumerates. *Reboot into bootloader* restarts the ESP32-S3 in
+  its ROM download mode: the dongle re-enumerates as the ROM's USB port, flash
+  it with `idf.py flash` / `esptool`, then reset or replug it and connect
+  again (the console does not reconnect on its own because the device is no
+  longer the dongle).
+- **Memory** — one gauge per heap region reported by the monitor service
+  (used %, free, lowest free, largest block; the red mark is the peak usage
+  since boot). Read when the tab is first opened and on **Refresh**. The card
+  is hidden when the firmware does not advertise the monitor module.
+
+The firmware advertises both modules with their discovery v2 protocol ids
+(`espp.system`, `espp.monitor`); the console resolves them by protocol first
+and falls back to the published ids `0x07` / `0x08`.
+
 ### Firmware (module `0`, espp OTA)
 
 - **Running image** — firmware string and rollback state. A freshly flashed
@@ -128,8 +152,9 @@ truncated). **Clear log** empties it.
 ## Testing the protocol code
 
 The first `<script id="proto">` block is DOM-free and exports its functions
-when loaded under node (`module.exports`), so the frame codec, discovery /
-INFO / BONDS parsers, the settings TLV encoder / decoder and the firmware
+when loaded under node (`module.exports`), so the frame codec, discovery (v1
+and v2) / INFO / BONDS / system INFO / HEAP parsers, the settings TLV encoder
+/ decoder and the firmware
 version comparison (`parseVersion`, `compareFirmware`, `pickFirmwareAsset`,
 `normalizeRelease`) can be unit-checked by extracting that block into a `.js`
 file and `require`-ing it.

@@ -3,6 +3,9 @@
 // The dongle's "services" on the USB vendor stream (espp dispatcher modules):
 //   module 0x00  OTA firmware update        (espp::OtaService)
 //   module 0x04  crash-dump download         (espp::CoreDumpService)
+//   module 0x07  system info / reboot        (espp::SystemService: identity, reboot,
+//                                             reboot into the ROM bootloader)
+//   module 0x08  heap + task monitor         (espp::MonitorService)
 //   module 0x10  device configuration        (DeviceConfig, components/device_config)
 // plus the persisted settings (NVS) the rest of the app reads.
 
@@ -30,8 +33,8 @@ struct ServicesCallbacks {
   std::function<void(const device_config::Settings &)> on_settings_changed{nullptr};
 };
 
-/// Initialize NVS, load the settings, and register the OTA / core-dump / config
-/// services on @p link (the vendor stream's dispatcher worker); replies go out
+/// Initialize NVS, load the settings, and register the OTA / core-dump / system /
+/// monitor / config services on @p link (the vendor stream's dispatcher worker); replies go out
 /// through the link's sender. With @p link null (a build without the vendor
 /// interface) the settings, OTA engine and crash report are still set up, but
 /// no service is instantiated -- there is no stream to answer on.

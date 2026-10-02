@@ -123,6 +123,21 @@ controller is connected (dim and steady by default; a blink-on-every-input
 debugging mode is optional), BLE device name. *Apply changes* sends only what
 you changed; *Reset to defaults* restores the firmware defaults.
 
+### System
+
+Chip, ESP-IDF and application versions, build time, running / boot
+partition and OTA state, last reset reason, uptime, MAC, flash / PSRAM and
+heap figures (espp `system` component), plus heap gauges with the peak usage
+since boot (espp `monitor` component). Two buttons, each with an in-page
+confirmation:
+
+- **Reboot** — the console reconnects when the dongle re-enumerates.
+- **Reboot into bootloader** — the dongle restarts in the ESP32-S3 ROM
+  download mode and re-enumerates as the ROM's USB port, so `idf.py flash` /
+  `esptool` can program it without reaching the BOOT button (handy for a
+  dongle living in a Switch dock). It stays there until it is flashed and
+  reset or replugged; the console cannot reconnect on its own.
+
 ### Firmware
 
 ![Web console, Firmware tab: running image, update check and installer](docs/screenshots/console-firmware.jpg)
@@ -192,15 +207,15 @@ BLE gamepad ──notify──▶ Xbox report parser ──▶ GamepadInputs ─
                                            HID iface (Pro Controller)     vendor iface (WebUSB)
                                                    │                              │
                                             Nintendo Switch              espp::Dispatcher
-                                                                      ┌──────┼──────────┐
-                                                                   OTA   Core Dump   Device Config
+                                                        ┌───────┬──────┼───────┬──────────┐
+                                                      OTA  Core Dump  System  Monitor  Device Config
 ```
 
 | Piece | Where | What it does |
 |---|---|---|
 | BLE central | `main/ble.cpp` | Scanning, pairing, bonding, HID subscription, and a 100 ms supervisor that owns the LED, encryption retries and reconnects |
 | USB device | `main/usb.cpp` | Composite device (HID + vendor + optional CDC), Pro Controller handshake and report sender, the vendor stream's `espp::DispatcherWorker` |
-| Services | `main/services.cpp` | Settings in NVS, and the OTA / core-dump / device-config services registered on the worker (one call each) |
+| Services | `main/services.cpp` | Settings in NVS, and the OTA / core-dump / system / monitor / device-config services registered on the worker (one call each) |
 | Device config | `components/device_config` | The web console's protocol (module `0x10`) and module class, with host-side tests |
 | Controller parsing | `components/xbox`, `components/gamepad_inputs` | Xbox report layout → generic gamepad inputs |
 | Display | `components/gui` | The T-Dongle-S3 status screen (SquareLine / LVGL) |
@@ -213,6 +228,8 @@ dongle is also a ready-made example of a device with a browser-based web console
 |---|---|---|
 | OTA | `0x00` | `espp::OtaService` (`espp/ota`) |
 | Core dump | `0x04` | `espp::CoreDumpService` (`espp/coredump`) |
+| System | `0x07` | `espp::SystemService` (`espp/system`): info, reboot, reboot into the ROM bootloader |
+| Monitor | `0x08` | `espp::MonitorService` (`espp/monitor`): heap regions and the task table |
 | Device config | `0x10` | this repo |
 
 Adding a module of your own means one protocol header, one class and one
@@ -239,8 +256,8 @@ walks through the contract.
 
 ## Credits and references
 
-Built on [espp](https://github.com/esp-cpp/espp) (`switch_pro`, `usb_device`,
-`ota`, `coredump`, `dispatcher`, `hid-rp`, BSPs) and
+Built on [espp](https://github.com/esp-cpp/espp) >= 1.3.6 (`switch_pro`, `usb_device`,
+`ota`, `coredump`, `system`, `monitor`, `dispatcher`, `hid-rp`, BSPs) and
 [esp-nimble-cpp](https://github.com/h2zero/esp-nimble-cpp). The Pro Controller
 implementation owes a great deal to the community's reverse-engineering work:
 
