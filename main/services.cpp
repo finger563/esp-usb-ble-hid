@@ -10,9 +10,11 @@
 #include "coredump_service.hpp"
 #include "format.hpp"
 #include "logger.hpp"
+#include "monitor_service.hpp"
 #include "nvs.hpp"
 #include "ota.hpp"
 #include "ota_service.hpp"
+#include "system_service.hpp"
 
 #include "usb.hpp"
 
@@ -146,6 +148,8 @@ static std::unique_ptr<espp::Ota> ota;
 static std::unique_ptr<espp::OtaService> ota_service;
 static std::unique_ptr<espp::CoreDump> core_dump;
 static std::unique_ptr<espp::CoreDumpService> coredump_service;
+static std::unique_ptr<espp::SystemService> system_service;
+static std::unique_ptr<espp::MonitorService> monitor_service;
 static std::unique_ptr<DeviceConfig> device_config_module;
 static std::string crash_report;
 
@@ -195,6 +199,31 @@ void services_init(espp::DispatcherWorker *link, const ServicesCallbacks &callba
         *core_dump,
         espp::CoreDumpService::Config{.send = send, .log_level = espp::Logger::Verbosity::INFO});
     link->register_module(*coredump_service);
+  }
+
+  // --- system (module 7): identity / status, reboot, reboot into the ROM
+  // bootloader (download mode: the dongle re-enumerates as the S3 ROM's USB
+  // port, so esptool / `idf.py flash` work without touching the BOOT button,
+  // handy for a dongle that lives in a Switch). usb_persist stays off: the
+  // composite HID + vendor device is not ROM-CDC/DFU-compatible. ---
+  if (link) {
+    system_service = std::make_unique<espp::SystemService>(espp::SystemService::Config{
+        .send = send,
+        .on_reboot_request =
+            [](espp::SystemService::RebootKind kind) {
+              logger.warn("Console requested a {}; allowing it",
+                          kind == espp::SystemService::RebootKind::Bootloader
+                              ? "reboot into the bootloader"
+                              : "reboot");
+              return true;
+            },
+        .log_level = espp::Logger::Verbosity::INFO});
+    link->register_module(*system_service);
+    // --- monitor (module 8): heap regions + the task table, on request or
+    // streamed (needs the FreeRTOS run-time stats, see sdkconfig.defaults) ---
+    monitor_service = std::make_unique<espp::MonitorService>(
+        espp::MonitorService::Config{.send = send, .log_level = espp::Logger::Verbosity::INFO});
+    link->register_module(*monitor_service);
   }
 
   // --- device configuration (module 0x10) ---

@@ -159,6 +159,10 @@ bool usb_write_vendor(std::span<const uint8_t> frame) {
 #if CONFIG_DONGLE_USB_VENDOR_INTERFACE
   if (!usb || !mounted.load())
     return false;
+  // Replies come from the dispatcher worker, but the monitor service streams
+  // from its own task: serialize the writers so frames never interleave.
+  static std::mutex vendor_tx_mutex;
+  std::lock_guard<std::mutex> lock(vendor_tx_mutex);
   std::error_code ec;
   return usb->write_vendor(frame, ec);
 #else
@@ -183,12 +187,12 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
   cfg.serial_number = fmt::format("{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}", mac[0], mac[1], mac[2],
                                   mac[3], mac[4], mac[5]);
   cfg.log_level = espp::Logger::Verbosity::WARN;
-  // Descriptor details a Switch compares against a real Pro Controller (espp
-  // >= 1.3.4): device release 2.10, 500 mA bus power (the dongle also feeds the
-  // BLE link) and remote wakeup, as the original reports them.
-  cfg.bcd_device = 0x0210;
-  cfg.max_power_ma = 500;
-  cfg.remote_wakeup = true;
+  // Descriptor details a Switch compares against a real Pro Controller: device
+  // release, bus power and remote wakeup as the original reports them (one
+  // source of truth: espp::SwitchPro, espp >= 1.3.6).
+  cfg.bcd_device = espp::SwitchPro::bcd_device;
+  cfg.max_power_ma = espp::SwitchPro::max_power_ma;
+  cfg.remote_wakeup = espp::SwitchPro::remote_wakeup;
 
   espp::UsbDevice::HidFunction hid;
   hid.interface_name = "Switch Pro Controller";

@@ -302,6 +302,13 @@
     .progress-fill.done { background: var(--ok); }
     .progress-fill.failed { background: var(--danger); }
     .stats { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+    .gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+    .gauge { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel-2); }
+    .gauge .name { font-weight: 600; font-size: 13px; }
+    .gauge .track { position: relative; height: 10px; border-radius: 5px; overflow: hidden; background: var(--panel); border: 1px solid var(--line); margin: 6px 0; }
+    .gauge .used { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); }
+    .gauge .peak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); }
+    .gauge .nums { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; display: flex; gap: 10px; flex-wrap: wrap; }
 
     pre.report {
       margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line);
@@ -374,6 +381,7 @@
   <nav class="tabs" role="tablist" aria-label="Console sections">
     <button role="tab" id="tabbtn-device" data-tab="device" aria-selected="true" aria-controls="tab-device" type="button">Device<span class="dot"></span></button>
     <button role="tab" id="tabbtn-settings" data-tab="settings" aria-selected="false" aria-controls="tab-settings" tabindex="-1" type="button">Settings<span class="dot"></span></button>
+    <button role="tab" id="tabbtn-system" data-tab="system" aria-selected="false" aria-controls="tab-system" tabindex="-1" type="button">System<span class="dot"></span></button>
     <button role="tab" id="tabbtn-firmware" data-tab="firmware" aria-selected="false" aria-controls="tab-firmware" tabindex="-1" type="button">Firmware<span class="dot"></span></button>
     <button role="tab" id="tabbtn-coredump" data-tab="coredump" aria-selected="false" aria-controls="tab-coredump" tabindex="-1" type="button">Crash dump<span class="dot"></span></button>
   </nav>
@@ -509,6 +517,32 @@
     </section>
 
     <!-- ============================ Firmware ============================ -->
+    <section id="tab-system" role="tabpanel" aria-labelledby="tabbtn-system" hidden>
+      <div class="card wide">
+        <div class="card-head">
+          <h2>System</h2>
+          <span id="sysInfo" class="muted small-text"></span>
+          <button id="sysRefreshBtn" class="small" type="button" disabled>Refresh</button>
+        </div>
+        <dl id="sysRows" class="kv"><dt>Info</dt><dd class="muted">(not read yet)</dd></dl>
+        <div class="actions">
+          <label class="small-text muted">Delay <input id="sysDelay" type="number" min="0" max="65535" step="50" value="250" style="width: 6em;"> ms</label>
+          <button id="sysRebootBtn" class="danger" type="button" disabled>Reboot</button>
+          <button id="sysBootloaderBtn" class="danger" type="button" disabled>Reboot into bootloader</button>
+        </div>
+        <div id="sysConfirm" class="confirm-slot"></div>
+        <div id="sysNote" class="note muted small-text">Reboot into bootloader puts the dongle in the ESP32-S3 ROM download mode: it re-enumerates as the ROM's USB port (no buttons needed, even inside a Switch dock), <code>idf.py flash</code> / <code>esptool</code> program it, then it must be reset or replugged. The console cannot reconnect on its own after that.</div>
+      </div>
+      <div id="monCard" class="card wide">
+        <div class="card-head">
+          <h2>Memory</h2>
+          <span id="monInfo" class="muted small-text"></span>
+          <button id="monRefreshBtn" class="small" type="button" disabled>Refresh</button>
+        </div>
+        <div id="monGauges" class="gauges"><p class="muted small-text" style="margin: 0;">(not read yet)</p></div>
+        <div id="monNote" class="note muted small-text">Heap regions as reported by the monitor service; the red mark is the peak usage (lowest free) since boot.</div>
+      </div>
+    </section>
     <section id="tab-firmware" role="tabpanel" aria-labelledby="tabbtn-firmware" hidden>
       <div class="card">
         <div class="card-head">
@@ -630,8 +664,11 @@
     const FLAG_CORRELATION = 0x02;                     // bit1: optional u16 correlation id after `type`
 
     // ---- dispatcher modules on this device --------------------------------
-    const MODULE = { OTA: 0x00, COREDUMP: 0x04, DEVICE: 0x10, DISCOVERY: 0xFF };
+    const MODULE = { OTA: 0x00, COREDUMP: 0x04, SYSTEM: 0x07, MONITOR: 0x08, DEVICE: 0x10, DISCOVERY: 0xFF };
     const T_LIST_MODULES = 0x00;
+    // discovery v2 protocol identifiers (DispatcherModuleInfo.protocol); a module
+    // advertising one of these is used whatever id the firmware gave it
+    const PROTOCOL = { DEVICE: "esp-usb-ble-hid.device-config", SYSTEM: "espp.system", MONITOR: "espp.monitor" };
 
     // device_config_protocol.hpp
     const DEV = { GET_INFO: 0x01, GET_SETTINGS: 0x02, SET_SETTINGS: 0x03, RESET_SETTINGS: 0x04, ACTION: 0x05,
@@ -657,6 +694,29 @@
                  SUMMARY: 0xC0, SIZE: 0xC1, DATA: 0xC2, OK: 0xC3, ERROR: 0xC4 };
     const CD_MAX_READ = MAX_PAYLOAD - 4;   // DATA payload = u32 offset + bytes
 
+    // system_protocol.hpp (espp.system v1)
+    const SYS = { GET_INFO: 0x01, REBOOT: 0x02, REBOOT_TO_BOOTLOADER: 0x03, INFO: 0x81, OK: 0x83, ERROR: 0x84 };
+    const SYS_TAG = { CHIP_MODEL: 1, CHIP_REVISION: 2, CORES: 3, CHIP_FEATURES: 4, IDF_VERSION: 5, PROJECT_NAME: 6,
+                      APP_VERSION: 7, BUILD_DATE: 8, BUILD_TIME: 9, ELF_SHA256: 10, RUNNING_PARTITION: 11,
+                      BOOT_PARTITION: 12, OTA_STATE: 13, RESET_REASON: 14, UPTIME_MS: 15, MAC: 16, FLASH_SIZE: 17,
+                      PSRAM_SIZE: 18, CPU_MHZ: 19, FREE_HEAP: 20, MIN_FREE_HEAP: 21, CAPABILITIES: 22 };
+    const SYS_CAP_REBOOT = 0x01, SYS_CAP_BOOTLOADER = 0x02;
+    const SYS_RESET_REASON = ["unknown", "power-on", "external pin", "software", "panic", "interrupt watchdog",
+                              "task watchdog", "other watchdog", "deep-sleep wake", "brownout", "SDIO", "USB", "JTAG",
+                              "efuse error", "power glitch", "CPU lockup"];
+    const SYS_OTA_STATE = { 0: "new", 1: "pending verify", 2: "valid", 3: "invalid", 4: "aborted", 0xFE: "undefined", 0xFF: "n/a (factory)" };
+    const SYS_CHIP_FEATURES = [[0x01, "embedded flash"], [0x02, "Wi-Fi 2.4 GHz"], [0x10, "BLE"], [0x20, "BT classic"],
+                               [0x40, "IEEE 802.15.4"], [0x80, "embedded PSRAM"]];
+
+    // monitor_protocol.hpp (espp.monitor v1); only the heap request is used here
+    const MON = { GET_HEAP: 0x01, GET_TASKS: 0x02, SET_STREAM: 0x03, HEAP: 0x81, TASKS: 0x82, OK: 0x83, ERROR: 0x84 };
+    // MALLOC_CAP_* names for the heap gauges (esp_heap_caps.h; the low qualifier
+    // bits EXEC / 32BIT / 8BIT / DMA are left out of the label)
+    const HEAP_CAPS = [[1 << 10, "SPIRAM"], [1 << 11, "internal"], [1 << 12, "default"], [1 << 13, "IRAM 8-bit"],
+                       [1 << 14, "retention"], [1 << 15, "RTC RAM"], [1 << 16, "SPM / TCM"], [1 << 17, "AHB DMA desc"],
+                       [1 << 18, "AXI DMA desc"], [1 << 19, "cache-aligned"], [1 << 20, "SIMD"],
+                       [1 << 21, "SPIRAM (no enc)"], [1 << 31, "invalid"]];
+
     const MODULE_SPEC = {
       [MODULE.DEVICE]: {
         label: "Device", errorType: DEV.ERROR, parseError: parseDeviceError,
@@ -673,6 +733,14 @@
         label: "CoreDump", errorType: CD.ERROR, parseError: parseCodeMessageError,
         names: { 0x40: "GET_SUMMARY", 0x41: "GET_SIZE", 0x42: "READ", 0x43: "ERASE",
                  0xC0: "SUMMARY", 0xC1: "SIZE", 0xC2: "DATA", 0xC3: "OK", 0xC4: "ERROR" },
+      },
+      [MODULE.SYSTEM]: {
+        label: "System", errorType: SYS.ERROR, parseError: parseCodeMessageError,
+        names: { 0x01: "GET_INFO", 0x02: "REBOOT", 0x03: "REBOOT_TO_BOOTLOADER", 0x81: "INFO", 0x83: "OK", 0x84: "ERROR" },
+      },
+      [MODULE.MONITOR]: {
+        label: "Monitor", errorType: MON.ERROR, parseError: parseCodeMessageError,
+        names: { 0x01: "GET_HEAP", 0x02: "GET_TASKS", 0x03: "SET_STREAM", 0x81: "HEAP", 0x82: "TASKS", 0x83: "OK", 0x84: "ERROR" },
       },
       [MODULE.DISCOVERY]: { label: "Discovery", errorType: -1, parseError: null, names: { 0x00: "LIST_MODULES" } },
     };
@@ -785,6 +853,9 @@
       new DataView(p.buffer).setUint32(0, value >>> 0, true);
       return p;
     }
+    function u16(value) {
+      return new Uint8Array([value & 0xFF, (value >>> 8) & 0xFF]);
+    }
     function readU32(payload, offset) {
       return new DataView(payload.buffer, payload.byteOffset + offset, 4).getUint32(0, true);
     }
@@ -803,15 +874,90 @@
     }
 
     // ---- dispatcher discovery (module 0xFF / ListModules) -------------------
-    // [version u8][reserved u8][device str][fw str][count u8] then count x [id u8][name str][app str][desc str]
+    // [version u8][reserved u8][device str][fw str][count u8] then count x
+    // [id u8][name str][app str][desc str] and, from version 2 on,
+    // [protocol str][protocol_version u16]. Records carry no length, so the
+    // layout is frozen at v2: later versions parse as v2 (trailing bytes after
+    // the record list are ignored).
     function parseDiscovery(payload) {
       const r = new Reader(payload);
       const version = r.u8(); r.u8();
       const device = r.str(), fw = r.str();
       const count = r.u8();
       const modules = [];
-      for (let m = 0; m < count; m++) modules.push({ id: r.u8(), name: r.str(), app: r.str(), desc: r.str() });
+      for (let m = 0; m < count; m++) {
+        const mod = { id: r.u8(), name: r.str(), app: r.str(), desc: r.str(), protocol: "", protocolVersion: 0 };
+        if (version >= 2) { mod.protocol = r.str(); mod.protocolVersion = r.u16(); }
+        modules.push(mod);
+      }
       return { version, device, fw, modules };
+    }
+    // Module id to use for a protocol: the advertised one when the firmware
+    // names it (discovery v2), else the published default.
+    function resolveModuleId(discovery, protocol, fallback) {
+      if (discovery && protocol) {
+        const m = discovery.modules.find((x) => x.protocol === protocol);
+        if (m) return m.id;
+      }
+      return fallback;
+    }
+
+    // ---- system service: INFO --------------------------------------------------
+    // [tag u8][len u8][value] records; unknown tags are skipped (counted).
+    function parseSystemInfo(payload) {
+      const rec = new Map();
+      let i = 0, unknown = 0;
+      while (i < payload.length) {
+        if (i + 2 > payload.length) throw new Error("truncated INFO record header at byte " + i);
+        const tag = payload[i], len = payload[i + 1];
+        i += 2;
+        if (i + len > payload.length) throw new Error("truncated INFO record (tag " + tag + ")");
+        const v = payload.subarray(i, i + len);
+        i += len;
+        switch (tag) {
+          case SYS_TAG.CHIP_MODEL: case SYS_TAG.IDF_VERSION: case SYS_TAG.PROJECT_NAME: case SYS_TAG.APP_VERSION:
+          case SYS_TAG.BUILD_DATE: case SYS_TAG.BUILD_TIME: case SYS_TAG.RUNNING_PARTITION: case SYS_TAG.BOOT_PARTITION:
+            rec.set(tag, utf8.decode(v)); break;
+          case SYS_TAG.CHIP_REVISION:
+            if (len === 2) rec.set(tag, v[0] | (v[1] << 8)); break;
+          case SYS_TAG.CORES: case SYS_TAG.OTA_STATE: case SYS_TAG.RESET_REASON:
+            if (len === 1) rec.set(tag, v[0]); break;
+          case SYS_TAG.CHIP_FEATURES: case SYS_TAG.FLASH_SIZE: case SYS_TAG.PSRAM_SIZE: case SYS_TAG.CPU_MHZ:
+          case SYS_TAG.FREE_HEAP: case SYS_TAG.MIN_FREE_HEAP: case SYS_TAG.CAPABILITIES:
+            if (len === 4) rec.set(tag, readU32(v, 0)); break;
+          case SYS_TAG.UPTIME_MS:
+            if (len === 8) rec.set(tag, readU32(v, 0) + readU32(v, 4) * 4294967296); break;
+          case SYS_TAG.ELF_SHA256: case SYS_TAG.MAC:
+            rec.set(tag, Array.from(v).map((b) => b.toString(16).padStart(2, "0")).join(tag === SYS_TAG.MAC ? ":" : "")); break;
+          default:
+            unknown++;
+        }
+      }
+      return { rec, unknown };
+    }
+
+    // ---- monitor service: HEAP -------------------------------------------------
+    // [count u8] then count x [flags u32][free u32][min_free u32][largest u32][allocated u32][total u32]
+    function parseHeap(payload) {
+      if (payload.length < 1) throw new Error("empty HEAP payload");
+      const n = payload[0];
+      if (payload.length < 1 + 24 * n) throw new Error("truncated HEAP payload");
+      const regions = [];
+      for (let i = 0, o = 1; i < n; i++, o += 24) {
+        regions.push({ flags: readU32(payload, o), free: readU32(payload, o + 4), minFree: readU32(payload, o + 8),
+                       largest: readU32(payload, o + 12), allocated: readU32(payload, o + 16), total: readU32(payload, o + 20) });
+      }
+      return regions;
+    }
+    function heapRegionName(flags) {
+      const names = HEAP_CAPS.filter(([bit]) => (flags & bit) !== 0).map(([, n]) => n);
+      if (!names.length) names.push("caps 0x" + (flags >>> 0).toString(16));
+      return names.join(" + ");
+    }
+    function fmtBytes(n) {
+      if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + " MiB";
+      if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";
+      return n + " B";
     }
 
     // INFO / SETTINGS / BONDS payloads start with the schema version; a different
@@ -1094,9 +1240,11 @@
     // Exported for node-side unit checks (harmless in the browser).
     const DongleProto = { crc32, buildFrame, StreamParser, encodeSettings, decodeSettings, parseInfo,
                           parseBonds, encodeForgetBond, bondAddressString,
-                          parseDiscovery, parseDeviceError, parseCodeMessageError, parseOtaStatus, extractElf,
+                          parseDiscovery, resolveModuleId, parseDeviceError, parseCodeMessageError, parseOtaStatus, extractElf,
+                          parseSystemInfo, parseHeap, heapRegionName, fmtBytes, u16,
                           parseVersion, compareVersionCore, compareFirmware, pickFirmwareAsset, normalizeRelease,
-                          MODULE, DEV, OTA, CD, DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE };
+                          MODULE, PROTOCOL, DEV, OTA, CD, SYS, SYS_TAG, SYS_CAP_REBOOT, SYS_CAP_BOOTLOADER, MON,
+                          DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE };
     if (typeof module !== "undefined" && module.exports) module.exports = DongleProto;
   </script>
 
@@ -1130,6 +1278,8 @@
                       "markValidBtn2", "rollbackBtn2", "otaConfirm", "otaStatusNote",
                       "updateChecked", "checkUpdatesBtn", "updateStatus", "installReleaseBtn", "installReleaseInfo", "installConfirm",
                       "fileInput", "fileInfo", "chunkSize", "uploadBtn", "abortBtn", "otaFill", "otaBytes", "otaPercent", "otaRate", "otaNote",
+                      "sysInfo", "sysRefreshBtn", "sysRows", "sysDelay", "sysRebootBtn", "sysBootloaderBtn", "sysConfirm", "sysNote",
+                      "monCard", "monInfo", "monRefreshBtn", "monGauges", "monNote",
                       "cdInfo", "cdRefreshBtn", "cdReport", "cdElfBtn", "cdRawBtn", "cdEraseBtn", "cdConfirm", "cdFill", "cdBytes", "cdPercent", "cdRate", "cdNote",
                       "cmdCoredump", "logFrames", "clearLogBtn", "log"]) {
       els[id] = document.getElementById(id);
@@ -1137,7 +1287,13 @@
     const tabButtons = Array.from(document.querySelectorAll('[role="tab"]'));
     const tabPanels = {};
     for (const b of tabButtons) tabPanels[b.dataset.tab] = document.getElementById(b.getAttribute("aria-controls"));
-    const TAB_MODULE = { device: MODULE.DEVICE, settings: MODULE.DEVICE, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
+    const TAB_MODULE = { device: MODULE.DEVICE, settings: MODULE.DEVICE, system: MODULE.SYSTEM, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
+    // tabs whose module is found by its discovery v2 protocol id first
+    const TAB_PROTOCOL = { device: PROTOCOL.DEVICE, settings: PROTOCOL.DEVICE, system: PROTOCOL.SYSTEM };
+    function tabModuleId(tab) { return resolveModuleId(discovered, TAB_PROTOCOL[tab], TAB_MODULE[tab]); }
+    function deviceModuleId() { return resolveModuleId(discovered, PROTOCOL.DEVICE, MODULE.DEVICE); }
+    function systemModuleId() { return resolveModuleId(discovered, PROTOCOL.SYSTEM, MODULE.SYSTEM); }
+    function monitorModuleId() { return resolveModuleId(discovered, PROTOCOL.MONITOR, MODULE.MONITOR); }
 
     // ---- logging ---------------------------------------------------------------
     function logLine(cls, text) {
@@ -1246,7 +1402,7 @@
     }
     function applyDiscoveryToTabs() {
       for (const b of tabButtons) {
-        const id = TAB_MODULE[b.dataset.tab];
+        const id = tabModuleId(b.dataset.tab);
         b.classList.remove("present", "missing");
         if (!transport || !discovered) { b.disabled = false; b.title = ""; continue; }
         const present = moduleAvailable(id);
@@ -1364,6 +1520,7 @@
     let lastDeviceIds = null;     // { vendorId, productId, serial } of the last connected dongle (auto-reconnect)
     let expectRestart = false;    // a reboot we asked for is coming; a disconnect is not an error
     let expectRestartUntil = 0;
+    let expectBootloader = false; // we sent REBOOT_TO_BOOTLOADER: the dongle comes back as the ROM's USB device, not as itself
 
     if (!navigator.usb) {
       els.unsupported.hidden = false;
@@ -1434,6 +1591,7 @@
       lastInfo = null;
       lastOtaStatus = null;
       clearLink();
+      clearSystem();
     }
     async function disconnect() {
       if (!transport) return;
@@ -1455,7 +1613,11 @@
       parser.reset();
       forgetDeviceState();
       updateUI();
-      if (expectRestart) {
+      if (expectBootloader) {
+        expectBootloader = false; expectRestart = false;
+        setStatus("", "Disconnected");
+        logLine("sys", "USB link dropped as expected — the dongle is in the ROM bootloader (download mode). Flash it with idf.py flash / esptool on the port it re-enumerated as, then reset or replug it and use “Connect dongle”.");
+      } else if (expectRestart) {
         setStatus("busy", "Dongle restarting…");
         logLine("sys", "USB link dropped as expected — the dongle is restarting. Waiting for it to come back…");
         expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
@@ -1615,12 +1777,14 @@
     async function afterConnect() {
       await runDiscovery();
       if (!transport) return;
-      if (moduleAvailable(MODULE.DEVICE)) {
+      if (moduleAvailable(deviceModuleId())) {
         await refreshInfo(false);
         await refreshBonds(false);
         await loadSettings();
       }
       if (moduleAvailable(MODULE.OTA)) await checkOtaStatus(true);
+      if (moduleAvailable(systemModuleId())) await refreshSystemInfo(true);
+      if (moduleAvailable(monitorModuleId()) && activeTab === "system") await refreshHeap(true);
       if (moduleAvailable(MODULE.COREDUMP) && activeTab === "coredump") await refreshCoreDump();
       if (transport) setStatus("connected", "Connected");
       // Firmware version is known now (INFO / OTA STATUS): compare it with the
@@ -1633,9 +1797,10 @@
       try {
         const [reply] = await transact(MODULE.DISCOVERY, T_LIST_MODULES, null, { expect: [T_LIST_MODULES], timeoutMs: DISCOVERY_TIMEOUT_MS, noRecover: true });
         discovered = parseDiscovery(reply.payload);
-        const names = discovered.modules.map((m) => m.name + " (0x" + m.id.toString(16).padStart(2, "0") + ")").join(", ") || "none";
+        const names = discovered.modules.map((m) => m.name + " (0x" + m.id.toString(16).padStart(2, "0") + (m.protocol ? ", " + m.protocol + " v" + m.protocolVersion : "") + ")").join(", ") || "none";
         logLine("sys", "Discovery: " + (discovered.device || "(unnamed device)") + (discovered.fw ? " fw " + discovered.fw : "") + " — modules: " + names + ".");
-        for (const [tab, id] of Object.entries(TAB_MODULE)) {
+        for (const tab of Object.keys(TAB_MODULE)) {
+          const id = tabModuleId(tab);
           if (!moduleAvailable(id)) logLine("warn", "Module 0x" + id.toString(16).padStart(2, "0") + " (" + tab + " tab) is not advertised by this firmware; that tab is disabled.");
         }
       } catch (e) {
@@ -1664,7 +1829,7 @@
       }
       applyDiscoveryToTabs();
 
-      const dev = connected && moduleAvailable(MODULE.DEVICE) && !busy;
+      const dev = connected && moduleAvailable(deviceModuleId()) && !busy;
       els.infoBtn.disabled = !dev;
       els.bondsRefresh.disabled = !dev;
       for (const b of els.bondsList.querySelectorAll("button")) b.disabled = !dev;
@@ -1689,6 +1854,14 @@
       els.chunkSize.disabled = uploading;
       els.checkUpdatesBtn.disabled = updateChecking;
       els.installReleaseBtn.disabled = !(ota && !busy && latestRelease && latestRelease.asset);
+
+      const sys = connected && moduleAvailable(systemModuleId());
+      els.sysRefreshBtn.disabled = !sys || busy;
+      els.sysRebootBtn.disabled = !sys || busy || !(systemCaps & SYS_CAP_REBOOT);
+      els.sysBootloaderBtn.disabled = !sys || busy || !(systemCaps & SYS_CAP_BOOTLOADER);
+      const mon = connected && moduleAvailable(monitorModuleId());
+      els.monCard.hidden = !!(connected && discovered) && !mon;
+      els.monRefreshBtn.disabled = !mon || busy;
 
       const cd = connected && moduleAvailable(MODULE.COREDUMP);
       els.cdRefreshBtn.disabled = !cd || busy;
@@ -1803,10 +1976,10 @@
     }
 
     async function refreshInfo(quiet) {
-      if (!transport || infoInFlight || !moduleAvailable(MODULE.DEVICE)) return;
+      if (!transport || infoInFlight || !moduleAvailable(deviceModuleId())) return;
       infoInFlight = true;
       try {
-        const [reply] = await transact(MODULE.DEVICE, DEV.GET_INFO, null, { expect: [DEV.INFO], quiet });
+        const [reply] = await transact(deviceModuleId(), DEV.GET_INFO, null, { expect: [DEV.INFO], quiet });
         renderInfo(parseInfo(reply.payload));
       } catch (e) {
         if (!(e && e.transportLost)) { logLine("err", "Status read failed: " + e.message); setNote(els.infoNote, "err", "Status read failed: " + e.message); }
@@ -1867,10 +2040,10 @@
     }
 
     async function refreshBonds(quiet) {
-      if (!transport || bondsInFlight || !moduleAvailable(MODULE.DEVICE)) return;
+      if (!transport || bondsInFlight || !moduleAvailable(deviceModuleId())) return;
       bondsInFlight = true;
       try {
-        const [reply] = await transact(MODULE.DEVICE, DEV.GET_BONDS, null, { expect: [DEV.BONDS], quiet });
+        const [reply] = await transact(deviceModuleId(), DEV.GET_BONDS, null, { expect: [DEV.BONDS], quiet });
         renderBonds(parseBonds(reply.payload).bonds);
         if (!quiet) setNote(els.bondsNote, "muted", "");
       } catch (e) {
@@ -1895,7 +2068,7 @@
         "Forget controller");
       if (!ok || !transport) return;
       try {
-        const [, list] = await transact(MODULE.DEVICE, DEV.FORGET_BOND, encodeForgetBond(b), { expect: [[DEV.OK], [DEV.BONDS]] });
+        const [, list] = await transact(deviceModuleId(), DEV.FORGET_BOND, encodeForgetBond(b), { expect: [[DEV.OK], [DEV.BONDS]] });
         renderBonds(parseBonds(list.payload).bonds);
         logLine("ok", "Forgot " + who + (b.label ? " (" + b.mac + ")" : "") + ".");
         setNote(els.bondsNote, "ok", "Forgot " + who + ".");
@@ -1972,7 +2145,7 @@
     async function loadSettings() {
       if (!transport) return;
       try {
-        const [reply] = await transact(MODULE.DEVICE, DEV.GET_SETTINGS, null, { expect: [DEV.SETTINGS] });
+        const [reply] = await transact(deviceModuleId(), DEV.GET_SETTINGS, null, { expect: [DEV.SETTINGS] });
         const decoded = decodeSettings(reply.payload);
         renderSettings(decoded.values);
         if (decoded.unknown.length) logLine("warn", "SETTINGS carried unknown key(s) " + decoded.unknown.join(", ") + " (newer firmware?) — left untouched.");
@@ -1994,7 +2167,7 @@
       els.settingsApply.disabled = true;
       try {
         const payload = encodeSettings(partial);
-        const [, settings] = await transact(MODULE.DEVICE, DEV.SET_SETTINGS, payload, { expect: [[DEV.OK], [DEV.SETTINGS]] });
+        const [, settings] = await transact(deviceModuleId(), DEV.SET_SETTINGS, payload, { expect: [[DEV.OK], [DEV.SETTINGS]] });
         renderSettings(decodeSettings(settings.payload).values);
         logLine("ok", "Applied " + keys.length + " setting(s): " + keys.join(", ") + ".");
         setNote(els.settingsNote, "ok", "Saved. " + (keys.includes("ble_name") ? "The BLE name applies after a reboot." : ""));
@@ -2012,7 +2185,7 @@
       const ok = await askConfirm(els.settingsConfirm, els.settingsReset, "Reset every setting to the firmware defaults?", "Reset to defaults");
       if (!ok || !transport) return;
       try {
-        const [, settings] = await transact(MODULE.DEVICE, DEV.RESET_SETTINGS, null, { expect: [[DEV.OK], [DEV.SETTINGS]] });
+        const [, settings] = await transact(deviceModuleId(), DEV.RESET_SETTINGS, null, { expect: [[DEV.OK], [DEV.SETTINGS]] });
         renderSettings(decodeSettings(settings.payload).values);
         logLine("ok", "Settings reset to defaults.");
         setNote(els.settingsNote, "ok", "Defaults restored.");
@@ -2025,7 +2198,7 @@
 
     // ---- actions ---------------------------------------------------------------
     async function sendAction(action, label) {
-      const [ok] = await transact(MODULE.DEVICE, DEV.ACTION, new Uint8Array([action]), { expect: [DEV.OK], timeoutMs: action === DEV_ACTION.REBOOT ? REBOOT_TIMEOUT_MS : CMD_TIMEOUT_MS, noRecover: action === DEV_ACTION.REBOOT });
+      const [ok] = await transact(deviceModuleId(), DEV.ACTION, new Uint8Array([action]), { expect: [DEV.OK], timeoutMs: action === DEV_ACTION.REBOOT ? REBOOT_TIMEOUT_MS : CMD_TIMEOUT_MS, noRecover: action === DEV_ACTION.REBOOT });
       if (ok.payload.length && ok.payload[0] !== DEV.ACTION) logLine("warn", label + ": OK acknowledged request 0x" + ok.payload[0].toString(16) + " (expected ACTION)");
       return ok;
     }
@@ -2079,6 +2252,173 @@
         }
       }
     });
+
+    // =====================================================================
+    // System tab (module 7 = espp SystemService, module 8 = espp MonitorService)
+    // =====================================================================
+    let systemCaps = 0;          // CAPABILITIES record of the last INFO (gates the reboot buttons)
+    let lastSystemInfo = null;
+
+    function clearSystem() {
+      systemCaps = 0; lastSystemInfo = null;
+      els.sysRows.textContent = "";
+      kvRow(els.sysRows, "Info", "(not read yet)", "muted");
+      els.sysInfo.textContent = "";
+      els.monGauges.textContent = "";
+      const p = document.createElement("p"); p.className = "muted small-text"; p.style.margin = "0"; p.textContent = "(not read yet)";
+      els.monGauges.appendChild(p);
+      els.monInfo.textContent = "";
+    }
+    function kvRow(dl, key, value, cls) {
+      const dt = document.createElement("dt"); dt.textContent = key;
+      const dd = document.createElement("dd"); dd.textContent = value; if (cls) dd.className = cls;
+      dl.appendChild(dt); dl.appendChild(dd);
+    }
+    function renderSystemInfo(parsed) {
+      const rec = parsed.rec, has = (t) => rec.has(t), T = SYS_TAG;
+      lastSystemInfo = parsed;
+      systemCaps = has(T.CAPABILITIES) ? rec.get(T.CAPABILITIES) : 0;
+      const rows = [];
+      if (has(T.CHIP_MODEL) || has(T.CHIP_REVISION) || has(T.CORES)) {
+        const rev = has(T.CHIP_REVISION) ? " rev " + Math.floor(rec.get(T.CHIP_REVISION) / 100) + "." + (rec.get(T.CHIP_REVISION) % 100) : "";
+        const cores = has(T.CORES) ? " · " + rec.get(T.CORES) + " core" + (rec.get(T.CORES) === 1 ? "" : "s") : "";
+        rows.push(["Chip", (rec.get(T.CHIP_MODEL) || "?") + rev + cores]);
+      }
+      if (has(T.CHIP_FEATURES)) {
+        const f = rec.get(T.CHIP_FEATURES);
+        rows.push(["Features", SYS_CHIP_FEATURES.filter(([bit]) => f & bit).map(([, n]) => n).join(", ") || "—"]);
+      }
+      if (has(T.CPU_MHZ)) rows.push(["CPU", rec.get(T.CPU_MHZ) + " MHz"]);
+      if (has(T.IDF_VERSION)) rows.push(["ESP-IDF", rec.get(T.IDF_VERSION)]);
+      if (has(T.PROJECT_NAME) || has(T.APP_VERSION))
+        rows.push(["Application", (rec.get(T.PROJECT_NAME) || "?") + (has(T.APP_VERSION) ? " " + rec.get(T.APP_VERSION) : "")]);
+      if (has(T.BUILD_DATE) || has(T.BUILD_TIME))
+        rows.push(["Built", [rec.get(T.BUILD_DATE), rec.get(T.BUILD_TIME)].filter(Boolean).join(" ")]);
+      if (has(T.ELF_SHA256)) rows.push(["ELF SHA-256", rec.get(T.ELF_SHA256), "mono"]);
+      if (has(T.RUNNING_PARTITION) || has(T.BOOT_PARTITION) || has(T.OTA_STATE)) {
+        const ota = has(T.OTA_STATE) ? " · OTA state: " + (SYS_OTA_STATE[rec.get(T.OTA_STATE)] || rec.get(T.OTA_STATE)) : "";
+        rows.push(["Partitions", "running '" + (rec.get(T.RUNNING_PARTITION) || "?") + "', boot '" + (rec.get(T.BOOT_PARTITION) || "?") + "'" + ota]);
+      }
+      if (has(T.RESET_REASON)) rows.push(["Last reset", SYS_RESET_REASON[rec.get(T.RESET_REASON)] || ("code " + rec.get(T.RESET_REASON))]);
+      if (has(T.UPTIME_MS)) rows.push(["Uptime", formatUptime(Math.floor(rec.get(T.UPTIME_MS) / 1000))]);
+      if (has(T.MAC)) rows.push(["MAC", rec.get(T.MAC), "mono"]);
+      if (has(T.FLASH_SIZE) || has(T.PSRAM_SIZE))
+        rows.push(["Memory", "flash " + fmtBytes(rec.get(T.FLASH_SIZE) || 0) + " · PSRAM " + (rec.get(T.PSRAM_SIZE) ? fmtBytes(rec.get(T.PSRAM_SIZE)) : "none")]);
+      if (has(T.FREE_HEAP) || has(T.MIN_FREE_HEAP))
+        rows.push(["Heap", "free " + fmtBytes(rec.get(T.FREE_HEAP) || 0) + " · lowest " + fmtBytes(rec.get(T.MIN_FREE_HEAP) || 0)]);
+      rows.push(["Control", [(systemCaps & SYS_CAP_REBOOT) ? "reboot" : null, (systemCaps & SYS_CAP_BOOTLOADER) ? "reboot into bootloader" : null].filter(Boolean).join(", ") || "none offered"]);
+      els.sysRows.textContent = "";
+      for (const [k, v, cls] of rows) kvRow(els.sysRows, k, v, cls);
+      els.sysInfo.textContent = "read " + new Date().toLocaleTimeString() + (parsed.unknown ? " · " + parsed.unknown + " unknown record" + (parsed.unknown === 1 ? "" : "s") : "");
+    }
+    async function refreshSystemInfo(quiet) {
+      if (!transport || busy) return;
+      try {
+        const [reply] = await transact(systemModuleId(), SYS.GET_INFO, null, { expect: [SYS.INFO], quiet: !!quiet });
+        renderSystemInfo(parseSystemInfo(reply.payload));
+        setNote(els.sysNote, "muted", "");
+      } catch (e) {
+        logLine("err", "System GET_INFO failed: " + e.message);
+        setNote(els.sysNote, "err", "Reading the system info failed: " + e.message);
+      }
+      updateUI();
+    }
+    els.sysRefreshBtn.addEventListener("click", () => refreshSystemInfo(false));
+
+    function rebootDelayMs() {
+      const v = Math.round(Number(els.sysDelay.value));
+      return Number.isFinite(v) ? Math.min(65535, Math.max(0, v)) : 250;
+    }
+    els.sysRebootBtn.addEventListener("click", async () => {
+      if (!transport) return;
+      const ok = await askConfirm(els.sysConfirm, els.sysRebootBtn, "Reboot the dongle now (after " + rebootDelayMs() + " ms)? The USB link drops for a few seconds.", "Reboot");
+      if (!ok || !transport) return;
+      expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+      try {
+        await transact(systemModuleId(), SYS.REBOOT, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true });
+        logLine("ok", "Reboot acknowledged; the dongle is restarting.");
+        setNote(els.sysNote, "muted", "Rebooting… the console reconnects automatically when the dongle re-enumerates.");
+      } catch (e) {
+        if (e && (e.timeout || e.transportLost)) {
+          logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
+        } else {
+          expectRestart = false;
+          logLine("err", "Reboot failed: " + e.message);
+          setNote(els.sysNote, "err", "Reboot failed: " + e.message);
+        }
+      }
+    });
+    els.sysBootloaderBtn.addEventListener("click", async () => {
+      if (!transport) return;
+      const ok = await askConfirm(els.sysConfirm, els.sysBootloaderBtn,
+        "Reboot into the ROM bootloader (download mode)? The dongle stops acting as a controller and re-enumerates as the ESP32-S3 ROM USB device until it is flashed and reset / replugged.",
+        "Reboot into bootloader");
+      if (!ok || !transport) return;
+      expectBootloader = true; expectRestart = false;
+      try {
+        await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true });
+        logLine("ok", "Reboot into bootloader acknowledged.");
+        setNote(els.sysNote, "warn", "Entering download mode… flash with idf.py flash / esptool on the ROM's USB port, then reset or replug the dongle and connect again.");
+      } catch (e) {
+        if (e && (e.timeout || e.transportLost)) {
+          logLine("sys", "Dongle went away before acknowledging — it is entering the bootloader.");
+        } else {
+          expectBootloader = false;
+          logLine("err", "Reboot into bootloader failed: " + e.message);
+          setNote(els.sysNote, "err", "Reboot into bootloader failed: " + e.message);
+        }
+      }
+    });
+
+    function renderHeap(allRegions) {
+      // a region the chip does not have (no PSRAM on the T-Dongle-S3) comes back all-zero
+      const regions = allRegions.filter((r) => r.total || r.free || r.allocated);
+      els.monGauges.textContent = "";
+      for (const r of regions) {
+        const total = r.total || (r.free + r.allocated) || 1;
+        const usedPct = Math.min(100, 100 * (total - r.free) / total);
+        const peakPct = Math.min(100, 100 * (total - r.minFree) / total);
+        const name = heapRegionName(r.flags);
+        const g = document.createElement("div"); g.className = "gauge";
+        const title = document.createElement("div"); title.className = "name"; title.textContent = name + " · " + fmtBytes(total);
+        const track = document.createElement("div"); track.className = "track";
+        track.setAttribute("role", "meter"); track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100");
+        track.setAttribute("aria-valuenow", usedPct.toFixed(0)); track.setAttribute("aria-label", name + " heap used");
+        const used = document.createElement("div"); used.className = "used"; used.style.width = usedPct.toFixed(1) + "%";
+        const peak = document.createElement("div"); peak.className = "peak"; peak.style.left = "calc(" + peakPct.toFixed(1) + "% - 1px)";
+        peak.title = "peak usage (lowest free: " + fmtBytes(r.minFree) + ")";
+        track.appendChild(used); track.appendChild(peak);
+        const nums = document.createElement("div"); nums.className = "nums";
+        for (const t of ["used " + usedPct.toFixed(0) + "%", "free " + fmtBytes(r.free), "lowest free " + fmtBytes(r.minFree), "largest block " + fmtBytes(r.largest)]) {
+          const sp = document.createElement("span"); sp.textContent = t; nums.appendChild(sp);
+        }
+        g.appendChild(title); g.appendChild(track); g.appendChild(nums);
+        els.monGauges.appendChild(g);
+      }
+      if (!regions.length) {
+        const p = document.createElement("p"); p.className = "muted small-text"; p.style.margin = "0"; p.textContent = "The dongle reported no heap regions."; els.monGauges.appendChild(p);
+      }
+      els.monInfo.textContent = "read " + new Date().toLocaleTimeString();
+    }
+    async function refreshHeap(quiet) {
+      if (!transport || busy) return;
+      try {
+        const [reply] = await transact(monitorModuleId(), MON.GET_HEAP, null, { expect: [MON.HEAP], quiet: !!quiet });
+        renderHeap(parseHeap(reply.payload));
+        setNote(els.monNote, "muted", "Heap regions as reported by the monitor service; the red mark is the peak usage (lowest free) since boot.");
+      } catch (e) {
+        logLine("err", "Monitor GET_HEAP failed: " + e.message);
+        setNote(els.monNote, "err", "Reading the heap failed: " + e.message);
+      }
+    }
+    els.monRefreshBtn.addEventListener("click", () => refreshHeap(false));
+    // first visit of the System tab while connected: read the heap once
+    for (const b of tabButtons) {
+      if (b.dataset.tab !== "system") continue;
+      b.addEventListener("click", () => {
+        if (transport && !busy && !els.monInfo.textContent && moduleAvailable(monitorModuleId())) refreshHeap(true);
+      });
+    }
 
     // =====================================================================
     // Firmware tab (module 0 = espp OTA)

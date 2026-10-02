@@ -85,7 +85,9 @@ public:
   espp::Dispatcher::ModuleInfo module_info() const {
     return {.name = "Device Config",
             .app = "dongle_console.html",
-            .description = "Dongle status, settings, paired controllers and actions"};
+            .description = "Dongle status, settings, paired controllers and actions",
+            .protocol = device_config::kProtocolId,
+            .protocol_version = device_config::kProtocolVersion};
   }
 
   /// A copy of the current settings (thread-safe).

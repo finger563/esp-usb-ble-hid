@@ -50,6 +50,9 @@ namespace device_config {
 static constexpr uint8_t kModule = 0x10;
 /// Payload schema version carried in INFO / SETTINGS.
 static constexpr uint8_t kProtocolVersion = 1;
+/// Discovery v2 protocol identifier (DispatcherModuleInfo::protocol): the web
+/// console finds this module by it and only falls back to kModule.
+static constexpr const char *kProtocolId = "esp-usb-ble-hid.device-config";
 
 enum class Msg : uint8_t {
   GetInfo = 0x01,
