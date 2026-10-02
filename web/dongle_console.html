@@ -720,36 +720,45 @@
 
     const MODULE_SPEC = {
       [MODULE.DEVICE]: {
-        label: "Device", protocol: PROTOCOL.DEVICE, errorType: DEV.ERROR, parseError: parseDeviceError,
+        label: "Device", protocol: PROTOCOL.DEVICE, version: DEV_PROTOCOL_VERSION, errorType: DEV.ERROR, parseError: parseDeviceError,
         names: { 0x01: "GET_INFO", 0x02: "GET_SETTINGS", 0x03: "SET_SETTINGS", 0x04: "RESET_SETTINGS", 0x05: "ACTION",
                  0x06: "GET_BONDS", 0x07: "FORGET_BOND",
                  0x81: "INFO", 0x82: "SETTINGS", 0x83: "OK", 0x84: "ERROR", 0x85: "BONDS" },
       },
       [MODULE.OTA]: {
-        label: "OTA", protocol: PROTOCOL.OTA, errorType: OTA.ERROR, parseError: parseCodeMessageError,
+        label: "OTA", protocol: PROTOCOL.OTA, version: 1, errorType: OTA.ERROR, parseError: parseCodeMessageError,
         names: { 0x01: "BEGIN", 0x02: "DATA", 0x03: "FINISH", 0x04: "ABORT", 0x05: "OK", 0x06: "ERROR", 0x07: "PROGRESS",
                  0x08: "GET_STATUS", 0x09: "MARK_VALID", 0x0A: "MARK_INVALID", 0x0B: "STATUS" },
       },
       [MODULE.COREDUMP]: {
-        label: "CoreDump", protocol: PROTOCOL.COREDUMP, errorType: CD.ERROR, parseError: parseCodeMessageError,
+        label: "CoreDump", protocol: PROTOCOL.COREDUMP, version: 1, correlates: true, errorType: CD.ERROR, parseError: parseCodeMessageError,
         names: { 0x40: "GET_SUMMARY", 0x41: "GET_SIZE", 0x42: "READ", 0x43: "ERASE",
                  0xC0: "SUMMARY", 0xC1: "SIZE", 0xC2: "DATA", 0xC3: "OK", 0xC4: "ERROR" },
       },
       [MODULE.SYSTEM]: {
-        label: "System", protocol: PROTOCOL.SYSTEM, errorType: SYS.ERROR, parseError: parseRequestCodeMessageError,
+        label: "System", protocol: PROTOCOL.SYSTEM, version: 1, correlates: true, errorType: SYS.ERROR, parseError: parseRequestCodeMessageError,
         names: { 0x01: "GET_INFO", 0x02: "REBOOT", 0x03: "REBOOT_TO_BOOTLOADER", 0x81: "INFO", 0x83: "OK", 0x84: "ERROR" },
       },
       [MODULE.MONITOR]: {
-        label: "Monitor", protocol: PROTOCOL.MONITOR, errorType: MON.ERROR, parseError: parseRequestCodeMessageError,
+        label: "Monitor", protocol: PROTOCOL.MONITOR, version: 1, correlates: true, errorType: MON.ERROR, parseError: parseRequestCodeMessageError,
         names: { 0x01: "GET_HEAP", 0x02: "GET_TASKS", 0x03: "SET_STREAM", 0x81: "HEAP", 0x82: "TASKS", 0x83: "OK", 0x84: "ERROR" },
       },
       [MODULE.DISCOVERY]: { label: "Discovery", errorType: -1, parseError: null, names: { 0x00: "LIST_MODULES" } },
     };
+    // `version` is the protocol version this console implements; a record that
+    // advertises the protocol at another version is a different wire format and
+    // is treated as absent. `correlates` marks the espp services that echo the
+    // request's correlation id (system / monitor / coredump).
+    function supportedProtocolVersion(protocol) {
+      for (const spec of Object.values(MODULE_SPEC)) if (spec.protocol === protocol) return spec.version;
+      return null;
+    }
     // Module id -> spec for one connection. Starts from the published ids; a
-    // discovery v2 record whose protocol id matches a spec moves that spec to
-    // the advertised id (the published id is dropped when it moved), a record
-    // with an unknown / empty protocol keeps whatever the published table says
-    // for its id, and v1 / absent discovery leaves the defaults alone.
+    // discovery v2 record whose protocol id matches a spec (at the supported
+    // version) moves that spec to the advertised id (the published id is dropped
+    // when it moved), a record with an unknown / empty protocol keeps whatever
+    // the published table says for its id, and v1 / absent discovery leaves the
+    // defaults alone.
     function buildModuleSpecs(discovery) {
       const specs = new Map();
       for (const [id, spec] of Object.entries(MODULE_SPEC)) specs.set(Number(id), spec);
@@ -758,7 +767,7 @@
       for (const [id, spec] of Object.entries(MODULE_SPEC)) if (spec.protocol) byProtocol.set(spec.protocol, { id: Number(id), spec });
       for (const m of discovery.modules) {
         const known = m.protocol ? byProtocol.get(m.protocol) : null;
-        if (!known) continue;
+        if (!known || m.protocolVersion !== known.spec.version) continue;
         if (known.id !== m.id && specs.get(known.id) === known.spec) specs.delete(known.id);
         specs.set(m.id, known.spec);
       }
@@ -795,19 +804,25 @@
     }
 
     // ---- frame builder: always a v1 request (reply bit clear) ---------------
-    function buildFrame(module, type, payload) {
+    // `correlation` (u16, optional) is stamped on requests to the services that
+    // echo it, so a streamed event (which carries none) can never pass for the
+    // reply to an in-flight request.
+    function buildFrame(module, type, payload, correlation) {
       payload = payload || new Uint8Array(0);
       if (payload.length > MAX_PAYLOAD) throw new Error("payload exceeds " + MAX_PAYLOAD + " bytes");
-      const frame = new Uint8Array(HEADER_SIZE + payload.length + CRC_SIZE);
+      const ext = correlation == null ? 0 : 2;
+      const headerSize = HEADER_SIZE + ext;
+      const frame = new Uint8Array(headerSize + payload.length + CRC_SIZE);
       const view = new DataView(frame.buffer);
       view.setUint16(0, 0x4F54, true);   // magic 'T''O' on the wire
-      frame[2] = FLAGS_REQUEST;
+      frame[2] = FLAGS_REQUEST | (ext ? FLAG_CORRELATION : 0);
       frame[3] = module & 0xFF;
       frame[4] = type & 0xFF;
-      view.setUint32(5, payload.length, true);
-      frame.set(payload, HEADER_SIZE);
-      view.setUint32(HEADER_SIZE + payload.length,
-                     crc32(frame.subarray(0, HEADER_SIZE + payload.length)), true);
+      if (ext) view.setUint16(5, correlation & 0xFFFF, true);
+      view.setUint32(5 + ext, payload.length, true);
+      frame.set(payload, headerSize);
+      view.setUint32(headerSize + payload.length,
+                     crc32(frame.subarray(0, headerSize + payload.length)), true);
       return frame;
     }
 
@@ -920,17 +935,24 @@
     // (ids are routing keys, so that would be a different service). The
     // published id only stands in for v1 / failed discovery or a legacy record
     // with an empty protocol string.
+    // A record that speaks the protocol at an unsupported version also yields
+    // null: the id exists, but not with the wire format this console implements.
     function resolveModuleId(discovery, protocol, fallback) {
       if (!discovery || !protocol) return fallback;
-      const m = discovery.modules.find((x) => x.protocol === protocol);
+      const speaks = discovery.modules.filter((x) => x.protocol === protocol);
+      const m = speaks.find((x) => x.protocolVersion === supportedProtocolVersion(protocol));
       if (m) return m.id;
+      if (speaks.length) return null;
       if (discovery.version < 2) return fallback;
       const at = discovery.modules.find((x) => x.id === fallback);
       return (!at || !at.protocol) ? fallback : null;
     }
     function moduleLabel(id, tab) {
-      if (id === null) return "no module speaks " + (TAB_PROTOCOL[tab] || "its protocol");
-      return "module 0x" + id.toString(16).padStart(2, "0");
+      if (id !== null) return "module 0x" + id.toString(16).padStart(2, "0");
+      const protocol = TAB_PROTOCOL[tab] || "its protocol";
+      const other = discovered ? discovered.modules.find((x) => x.protocol === protocol) : null;
+      if (other) return protocol + " is advertised at v" + other.protocolVersion + ", this console speaks v" + supportedProtocolVersion(protocol);
+      return "no module speaks " + protocol + " v" + supportedProtocolVersion(protocol);
     }
 
     // ---- system service: INFO --------------------------------------------------
@@ -1641,6 +1663,7 @@
     function forgetDeviceState() {
       discovered = null;
       moduleSpecs = buildModuleSpecs(null);
+      correlationSeen = false; // learned per device
       lastInfo = null;
       lastOtaStatus = null;
       clearLink();
@@ -1722,7 +1745,14 @@
     els.anyBtn.addEventListener("click", async () => { if (!transport) await connect(true); });
 
     // ---- RX routing + serialized transactions ---------------------------------------
-    let pendingTxn = null;   // { module, stages: [Set], frames: [], resolve, reject, timer, quiet }
+    let pendingTxn = null;   // { module, correlation, stages: [Set], frames: [], resolve, reject, timer, quiet }
+    let correlationCounter = 0;
+    function nextCorrelation() { correlationCounter = (correlationCounter + 1) & 0xFFFF; return correlationCounter; }
+    // Whether this device has echoed a correlation id yet: once it has, a reply
+    // WITHOUT one can only be a streamed event or a stale / foreign frame and is
+    // ignored; before that an uncorrelated reply is still accepted (older
+    // firmware that does not echo ids).
+    let correlationSeen = false;
     let txnChain = Promise.resolve();
     let busy = false;        // a long operation (OTA upload / dump download) owns the link
 
@@ -1748,7 +1778,7 @@
         otaProgress(readU32(f.payload, 0), readU32(f.payload, 4) || null);
         return;
       }
-      if (pendingTxn && f.reply && f.module === pendingTxn.module) {
+      if (pendingTxn && f.reply && f.module === pendingTxn.module && replyMatchesPending(f)) {
         const spec = moduleSpecs.get(f.module);
         if (spec && f.type === spec.errorType) {
           const info = spec.parseError(f.payload);
@@ -1772,6 +1802,18 @@
         logLine("warn", "Unsolicited " + moduleName(f.module, moduleSpecs) + " " + typeName(f.module, f.type, moduleSpecs) + " (" + f.payload.length + " B) ignored.");
     }
 
+    // Pair a reply with the in-flight request by correlation id (when the
+    // request carried one).
+    function replyMatchesPending(f) {
+      if (pendingTxn.correlation === null) return true;
+      if (f.correlation !== null) {
+        if (f.correlation !== pendingTxn.correlation) return false;
+        correlationSeen = true;
+        return true;
+      }
+      return !correlationSeen;
+    }
+
     // Send one request and await its reply/replies. `opts.expect` is a list of
     // reply types (one stage) or a list of lists (consecutive stages, e.g. OK then
     // SETTINGS). Resolves with the array of matched frames. Rejects on the
@@ -1784,12 +1826,14 @@
       const label = moduleName(module, moduleSpecs) + " " + typeName(module, type, moduleSpecs);
       const attempt = () => new Promise((resolve, reject) => {
         if (!transport) { reject(Object.assign(new Error("not connected"), { transportLost: true, notSent: true })); return; }
+        const spec = moduleSpecs.get(module);
+        const correlation = (spec && spec.correlates) ? nextCorrelation() : null;
         let frame;
-        try { frame = buildFrame(module, type, payload); } catch (e) { reject(e); return; }
-        if (els.logFrames.checked && !opts.quiet) logLine("tx", label + " " + hex(frame));
+        try { frame = buildFrame(module, type, payload, correlation); } catch (e) { reject(e); return; }
+        if (els.logFrames.checked && !opts.quiet) logLine("tx", label + (correlation !== null ? " #" + correlation : "") + " " + hex(frame));
         if (opts.onSend) opts.onSend(); // the request is going out now (not while it waited in the queue)
         pendingTxn = {
-          module, stages, frames: [], resolve, reject, quiet: !!opts.quiet,
+          module, correlation, stages, frames: [], resolve, reject, quiet: !!opts.quiet,
           timer: setTimeout(() => {
             if (!pendingTxn) return;
             const p = pendingTxn; pendingTxn = null;
