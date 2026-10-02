@@ -1317,11 +1317,14 @@
     for (const b of tabButtons) tabPanels[b.dataset.tab] = document.getElementById(b.getAttribute("aria-controls"));
     const TAB_MODULE = { device: MODULE.DEVICE, settings: MODULE.DEVICE, system: MODULE.SYSTEM, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
     // tabs whose module is found by its discovery v2 protocol id first
-    const TAB_PROTOCOL = { device: PROTOCOL.DEVICE, settings: PROTOCOL.DEVICE, system: PROTOCOL.SYSTEM };
+    const TAB_PROTOCOL = { device: PROTOCOL.DEVICE, settings: PROTOCOL.DEVICE, system: PROTOCOL.SYSTEM,
+                           firmware: PROTOCOL.OTA, coredump: PROTOCOL.COREDUMP };
     function tabModuleId(tab) { return resolveModuleId(discovered, TAB_PROTOCOL[tab], TAB_MODULE[tab]); }
     function deviceModuleId() { return resolveModuleId(discovered, PROTOCOL.DEVICE, MODULE.DEVICE); }
     function systemModuleId() { return resolveModuleId(discovered, PROTOCOL.SYSTEM, MODULE.SYSTEM); }
     function monitorModuleId() { return resolveModuleId(discovered, PROTOCOL.MONITOR, MODULE.MONITOR); }
+    function otaModuleId() { return resolveModuleId(discovered, PROTOCOL.OTA, MODULE.OTA); }
+    function coredumpModuleId() { return resolveModuleId(discovered, PROTOCOL.COREDUMP, MODULE.COREDUMP); }
 
     // ---- logging ---------------------------------------------------------------
     function logLine(cls, text) {
@@ -1722,7 +1725,7 @@
       if (els.logFrames.checked && !quiet)
         logLine("rx", moduleName(f.module, moduleSpecs) + " " + typeName(f.module, f.type, moduleSpecs) +
                 (f.correlation !== null ? " #" + f.correlation : "") + " " + hex(f.payload));
-      if (f.module === MODULE.OTA && f.reply && f.type === OTA.PROGRESS && f.payload.length === 8) {
+      if (f.module === otaModuleId() && f.reply && f.type === OTA.PROGRESS && f.payload.length === 8) {
         otaProgress(readU32(f.payload, 0), readU32(f.payload, 4) || null);
         return;
       }
@@ -1814,10 +1817,10 @@
         await refreshBonds(false);
         await loadSettings();
       }
-      if (moduleAvailable(MODULE.OTA)) await checkOtaStatus(true);
+      if (moduleAvailable(otaModuleId())) await checkOtaStatus(true);
       if (moduleAvailable(systemModuleId())) await refreshSystemInfo(true);
       if (activeTab === "system") await ensureHeapLoaded();
-      if (moduleAvailable(MODULE.COREDUMP) && activeTab === "coredump") await refreshCoreDump();
+      if (moduleAvailable(coredumpModuleId()) && activeTab === "coredump") await refreshCoreDump();
       if (transport) setStatus("connected", "Connected");
       // Firmware version is known now (INFO / OTA STATUS): compare it with the
       // latest GitHub release in the background (cached for 10 min).
@@ -1875,7 +1878,7 @@
       els.actPair.disabled = !dev; els.actForget.disabled = !dev; els.actReboot.disabled = !dev;
       els.infoAuto.textContent = dev ? "auto-refresh 2 s" : "auto-refresh paused";
 
-      const ota = connected && moduleAvailable(MODULE.OTA);
+      const ota = connected && moduleAvailable(otaModuleId());
       const file = els.fileInput.files && els.fileInput.files[0];
       els.uploadBtn.disabled = !(ota && file && !busy);
       els.abortBtn.disabled = !uploading;
@@ -1896,7 +1899,7 @@
       els.monCard.hidden = !!(connected && discovered) && !mon;
       els.monRefreshBtn.disabled = !mon || busy;
 
-      const cd = connected && moduleAvailable(MODULE.COREDUMP);
+      const cd = connected && moduleAvailable(coredumpModuleId());
       els.cdRefreshBtn.disabled = !cd || busy;
       els.cdElfBtn.disabled = !cd || busy || !dumpSize;
       els.cdRawBtn.disabled = !cd || busy || !dumpSize;
@@ -2495,9 +2498,9 @@
     }
 
     async function checkOtaStatus(quietLog) {
-      if (!transport || !moduleAvailable(MODULE.OTA)) return null;
+      if (!transport || !moduleAvailable(otaModuleId())) return null;
       try {
-        const [reply] = await transact(MODULE.OTA, OTA.GET_STATUS, null, { expect: [OTA.STATUS], quiet: quietLog });
+        const [reply] = await transact(otaModuleId(), OTA.GET_STATUS, null, { expect: [OTA.STATUS], quiet: quietLog });
         const st = parseOtaStatus(reply.payload);
         if (!st) throw new Error("empty STATUS reply");
         renderOtaStatus(st);
@@ -2525,7 +2528,7 @@
     async function markValid() {
       if (!transport) return;
       try {
-        await transact(MODULE.OTA, OTA.MARK_VALID, null, { expect: [OTA.OK] });
+        await transact(otaModuleId(), OTA.MARK_VALID, null, { expect: [OTA.OK] });
         awaitingVerify = null;
         logLine("ok", "Running image confirmed; rollback cancelled.");
         setNote(els.otaStatusNote, "ok", "Running image confirmed.");
@@ -2548,7 +2551,7 @@
       expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
       awaitingVerify = null;
       try {
-        await transact(MODULE.OTA, OTA.MARK_INVALID, null, { expect: [], timeoutMs: REBOOT_TIMEOUT_MS, noRecover: true });
+        await transact(otaModuleId(), OTA.MARK_INVALID, null, { expect: [], timeoutMs: REBOOT_TIMEOUT_MS, noRecover: true });
         expectRestart = false;
         logLine("err", "Rollback not performed: the dongle replied instead of rebooting.");
       } catch (e) {
@@ -2581,7 +2584,7 @@
     // ("Download and install"): `image` is the complete app .bin, `name` is only
     // used for messages.
     async function flashImage(name, image) {
-      if (!transport || busy || !moduleAvailable(MODULE.OTA)) return;
+      if (!transport || busy || !moduleAvailable(otaModuleId())) return;
       if (!image || image.length === 0) { logLine("err", "Refusing to flash an empty image (" + name + ")."); return; }
       if (image.length > MAX_IMAGE_SIZE) { logLine("err", "Refusing to flash " + name + ": it is larger than any ESP flash."); return; }
       if (image[0] !== ESP_IMAGE_MAGIC) {
@@ -2604,12 +2607,12 @@
 
       try {
         logLine("sys", "BEGIN: " + name + ", " + image.length.toLocaleString() + " bytes (the dongle erases its update partition — this takes a few seconds)…");
-        await transact(MODULE.OTA, OTA.BEGIN, u32(image.length), { expect: [OTA.OK], timeoutMs: OTA_BEGIN_TIMEOUT_MS, quiet: true });
+        await transact(otaModuleId(), OTA.BEGIN, u32(image.length), { expect: [OTA.OK], timeoutMs: OTA_BEGIN_TIMEOUT_MS, quiet: true });
         logLine("sys", "Dongle ready; streaming " + chunkSize + " B chunks, one in flight…");
         while (sent < image.length) {
           if (abortRequested) throw Object.assign(new Error("aborted by user"), { userAbort: true });
           const chunk = image.subarray(sent, Math.min(sent + chunkSize, image.length));
-          const [ok] = await transact(MODULE.OTA, OTA.DATA, chunk, { expect: [OTA.OK], timeoutMs: OTA_DATA_TIMEOUT_MS, quiet: true });
+          const [ok] = await transact(otaModuleId(), OTA.DATA, chunk, { expect: [OTA.OK], timeoutMs: OTA_DATA_TIMEOUT_MS, quiet: true });
           sent += chunk.length;
           const received = ok.payload.length === 4 ? readU32(ok.payload, 0) : null;
           otaProgress(received !== null ? received : sent, image.length);
@@ -2618,7 +2621,7 @@
         }
         logLine("sys", "FINISH: dongle is validating (SHA-256) and activating the image…");
         setNote(els.otaNote, "muted", "Validating image on the dongle…");
-        await transact(MODULE.OTA, OTA.FINISH, null, { expect: [OTA.OK], timeoutMs: OTA_FINISH_TIMEOUT_MS, quiet: true });
+        await transact(otaModuleId(), OTA.FINISH, null, { expect: [OTA.OK], timeoutMs: OTA_FINISH_TIMEOUT_MS, quiet: true });
         expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
         awaitingVerify = { before: beforeFirmware };
         els.otaFill.className = "progress-fill done"; els.otaFill.style.width = "100%";
@@ -2631,14 +2634,14 @@
         if (e && e.userAbort) {
           logLine("sys", "Sending ABORT…");
           try {
-            await transact(MODULE.OTA, OTA.ABORT, null, { expect: [OTA.OK] });
+            await transact(otaModuleId(), OTA.ABORT, null, { expect: [OTA.OK] });
             logLine("sys", "Update aborted; the dongle discarded the partial image.");
           } catch (abortErr) { logLine("err", "Abort delivery failed: " + abortErr.message); }
           setNote(els.otaNote, "warn", "Update aborted.");
         } else {
           logLine("err", "Update failed: " + e.message);
           setNote(els.otaNote, "err", "Update failed: " + e.message);
-          if (transport) { try { await transact(MODULE.OTA, OTA.ABORT, null, { expect: [OTA.OK] }); } catch (_) {} }
+          if (transport) { try { await transact(otaModuleId(), OTA.ABORT, null, { expect: [OTA.OK] }); } catch (_) {} }
         }
         if (transport) setStatus(e && e.userAbort ? "connected" : "error", e && e.userAbort ? "Connected" : "Update failed");
       } finally {
@@ -2844,7 +2847,7 @@
 
     async function installRelease() {
       const rel = latestRelease, asset = rel && rel.asset;
-      if (!transport || busy || !asset || !moduleAvailable(MODULE.OTA)) return;
+      if (!transport || busy || !asset || !moduleAvailable(otaModuleId())) return;
       const running = runningFirmwareVersion();
       const cmp = running ? compareFirmware(running, rel.tag) : null;
       const caveat = cmp && (cmp.status === "dev" || cmp.status === "ahead") ? " The dongle currently runs a newer build (" + running + ")."
@@ -2901,12 +2904,12 @@
     }
 
     async function refreshCoreDump() {
-      if (!transport || !moduleAvailable(MODULE.COREDUMP) || busy) return;
+      if (!transport || !moduleAvailable(coredumpModuleId()) || busy) return;
       busy = true; updateUI();
       try {
-        const [summary] = await transact(MODULE.COREDUMP, CD.GET_SUMMARY, null, { expect: [CD.SUMMARY] });
+        const [summary] = await transact(coredumpModuleId(), CD.GET_SUMMARY, null, { expect: [CD.SUMMARY] });
         lastReport = summary.payload.length ? utf8.decode(summary.payload) : "";
-        const [size] = await transact(MODULE.COREDUMP, CD.GET_SIZE, null, { expect: [CD.SIZE] });
+        const [size] = await transact(coredumpModuleId(), CD.GET_SIZE, null, { expect: [CD.SIZE] });
         dumpSize = size.payload.length === 4 ? readU32(size.payload, 0) : 0;
         if (lastReport) {
           els.cdReport.textContent = lastReport;
@@ -2923,7 +2926,7 @@
     }
     els.cdRefreshBtn.addEventListener("click", refreshCoreDump);
     tabButtons.find((b) => b.dataset.tab === "coredump").addEventListener("click", () => {
-      if (transport && !lastReport && !dumpSize && moduleAvailable(MODULE.COREDUMP)) refreshCoreDump();
+      if (transport && !lastReport && !dumpSize && moduleAvailable(coredumpModuleId())) refreshCoreDump();
     });
 
     async function downloadImage() {
@@ -2938,7 +2941,7 @@
         const view = new DataView(payload.buffer);
         view.setUint32(0, read, true);
         view.setUint16(4, length, true);
-        const [reply] = await transact(MODULE.COREDUMP, CD.READ, payload, { expect: [CD.DATA], quiet: true });
+        const [reply] = await transact(coredumpModuleId(), CD.READ, payload, { expect: [CD.DATA], quiet: true });
         if (reply.payload.length < 4) throw new Error("malformed DATA reply");
         const offset = readU32(reply.payload, 0);
         const bytes = reply.payload.subarray(4);
@@ -3000,7 +3003,7 @@
       if (!ok || !transport) return;
       busy = true; updateUI(); setStatus("busy", "Erasing…");
       try {
-        await transact(MODULE.COREDUMP, CD.ERASE, null, { expect: [CD.OK], timeoutMs: CD_ERASE_TIMEOUT_MS });
+        await transact(coredumpModuleId(), CD.ERASE, null, { expect: [CD.OK], timeoutMs: CD_ERASE_TIMEOUT_MS });
         logLine("ok", "Core dump erased.");
         dumpSize = 0; lastReport = "";
         els.cdInfo.textContent = "no core dump image stored";
