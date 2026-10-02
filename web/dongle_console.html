@@ -1910,7 +1910,7 @@
         const d = e.device;
         if (transport || !els.autoConnect.checked || reconnect.isActive() || !isDongle(d)) return;
         await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
-        if (transport || reconnect.isActive() || openGate.isBusy()) return;
+        if (transport || !els.autoConnect.checked || reconnect.isActive() || openGate.isBusy()) return; // the switch may have been turned off meanwhile
         logLine("sys", "Dongle plugged in (" + describeIdentity(usbIdentity(d)) + "); connecting…");
         await openPermitted(d, "Connected to");
       });
@@ -1922,8 +1922,13 @@
       if (!navigator.usb || !els.autoConnect.checked || typeof navigator.usb.getDevices !== "function") return;
       let devices = [];
       try { devices = await navigator.usb.getDevices(); } catch (_) { return; }
-      if (transport || openGate.isBusy()) return;
+      if (transport || !els.autoConnect.checked || openGate.isBusy()) return; // re-checked: the switch may have changed while enumerating
       if (connectParams.autoconnect) {
+        // the espp hub links serial devices too; this console speaks WebUSB only
+        if (connectParams.transport && connectParams.transport !== "usb") {
+          logLine("warn", "Auto-connect: the link names a " + connectParams.transport + " device (" + describeIdentity(connectParams) + "), but this console connects over WebUSB only — use “Connect dongle”.");
+          return;
+        }
         const d = pickUsbDevice(devices, connectParams);
         if (!d) { logLine("warn", "Auto-connect: no permitted " + describeIdentity(connectParams) + " is plugged in — use “Connect dongle” (the browser only lists devices this page was already granted)."); return; }
         logLine("sys", "Auto-connecting to " + describeIdentity(usbIdentity(d)) + "…");
@@ -2664,7 +2669,7 @@
       try {
         await sendAction(DEV_ACTION.REBOOT, "Reboot");
         logLine("ok", "Reboot acknowledged; the dongle is restarting.");
-        setNote(els.actionNote, "muted", "Rebooting… the console reconnects automatically when the dongle re-enumerates.");
+        setNote(els.actionNote, "muted", "Rebooting… " + (els.autoConnect.checked ? "the console reconnects automatically when the dongle re-enumerates." : "Auto-connect is off: use “Connect dongle” once it re-enumerates."));
       } catch (e) {
         if (e && (e.timeout || e.transportLost)) {
           logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
@@ -2760,7 +2765,7 @@
       try {
         await transact(systemModuleId(), SYS.REBOOT, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true, onSend: armRestart });
         logLine("ok", "Reboot acknowledged; the dongle is restarting.");
-        setNote(els.sysNote, "muted", "Rebooting… the console reconnects automatically when the dongle re-enumerates.");
+        setNote(els.sysNote, "muted", "Rebooting… " + (els.autoConnect.checked ? "the console reconnects automatically when the dongle re-enumerates." : "Auto-connect is off: use “Connect dongle” once it re-enumerates."));
       } catch (e) {
         if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
@@ -2949,7 +2954,7 @@
           setNote(els.otaStatusNote, "err", "Rollback failed: " + e.message);
         } else {
           logLine("ok", "Rollback accepted; the dongle is rebooting into the previous image.");
-          setNote(els.otaStatusNote, "muted", "Rolling back… the console reconnects when the dongle re-enumerates.");
+          setNote(els.otaStatusNote, "muted", "Rolling back… " + (els.autoConnect.checked ? "the console reconnects automatically when the dongle re-enumerates." : "Auto-connect is off: use “Connect dongle” once it re-enumerates."));
         }
       }
     }
@@ -3015,8 +3020,9 @@
         els.otaFill.className = "progress-fill done"; els.otaFill.style.width = "100%";
         setStatus("connected", "Update complete");
         setNote(els.otaNote, "ok", "Update complete — the dongle is restarting into the new firmware. It boots pending-verify; " +
-                "once it reconnects, confirm it in “Running image” (the firmware must not confirm itself).");
-        logLine("ok", "Update complete (" + sent.toLocaleString() + " bytes in " + ((Date.now() - startedAt) / 1000).toFixed(1) + " s). Dongle restarting — expect a USB disconnect, then an automatic reconnect.");
+                (els.autoConnect.checked ? "once the console reconnects, " : "reconnect with “Connect dongle”, then ") +
+                "confirm it in “Running image” (the firmware must not confirm itself).");
+        logLine("ok", "Update complete (" + sent.toLocaleString() + " bytes in " + ((Date.now() - startedAt) / 1000).toFixed(1) + " s). Dongle restarting — expect a USB disconnect" + (els.autoConnect.checked ? ", then an automatic reconnect." : "; Auto-connect is off, so use “Connect dongle” once it is back."));
       } catch (e) {
         els.otaFill.className = "progress-fill failed";
         if (e && e.userAbort) {
