@@ -915,12 +915,22 @@
     }
     // Module id to use for a protocol: the advertised one when the firmware
     // names it (discovery v2), else the published default.
+    // Returns null when discovery v2 succeeded, nothing advertises the protocol
+    // and the published id is taken by a record that speaks a different protocol
+    // (ids are routing keys, so that would be a different service). The
+    // published id only stands in for v1 / failed discovery or a legacy record
+    // with an empty protocol string.
     function resolveModuleId(discovery, protocol, fallback) {
-      if (discovery && protocol) {
-        const m = discovery.modules.find((x) => x.protocol === protocol);
-        if (m) return m.id;
-      }
-      return fallback;
+      if (!discovery || !protocol) return fallback;
+      const m = discovery.modules.find((x) => x.protocol === protocol);
+      if (m) return m.id;
+      if (discovery.version < 2) return fallback;
+      const at = discovery.modules.find((x) => x.id === fallback);
+      return (!at || !at.protocol) ? fallback : null;
+    }
+    function moduleLabel(id, tab) {
+      if (id === null) return "no module speaks " + (TAB_PROTOCOL[tab] || "its protocol");
+      return "module 0x" + id.toString(16).padStart(2, "0");
     }
 
     // ---- system service: INFO --------------------------------------------------
@@ -1356,6 +1366,13 @@
       el.className = "note small-text " + (cls || "muted");
       el.textContent = text || "";
     }
+    // the system tab's note carries permanent download-mode instructions; keep a
+    // copy so a transient status can give way to them again
+    const SYS_NOTE_DEFAULT = Array.from(els.sysNote.childNodes, (n) => n.cloneNode(true));
+    function restoreSysNote() {
+      els.sysNote.className = "note muted small-text";
+      els.sysNote.replaceChildren(...SYS_NOTE_DEFAULT.map((n) => n.cloneNode(true)));
+    }
     function formatUptime(s) {
       const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
       const parts = [];
@@ -1432,6 +1449,7 @@
     let discovered = null; // { device, fw, modules } or null (unknown)
     let moduleSpecs = buildModuleSpecs(null); // id -> spec for this connection (rebuilt from discovery)
     function moduleAvailable(id) {
+      if (id === null) return false;
       return !discovered || discovered.modules.some((m) => m.id === id);
     }
     function applyDiscoveryToTabs() {
@@ -1442,7 +1460,7 @@
         const present = moduleAvailable(id);
         b.classList.add(present ? "present" : "missing");
         b.disabled = !present;
-        b.title = present ? "" : "This firmware does not advertise dispatcher module 0x" + id.toString(16).padStart(2, "0");
+        b.title = present ? "" : "This firmware does not advertise this tab's service (" + moduleLabel(id, b.dataset.tab) + ")";
       }
       const active = tabButtons.find((b) => b.dataset.tab === activeTab);
       if (active && active.disabled) {
@@ -1632,6 +1650,7 @@
       if (!transport) return;
       const t = transport;
       transport = null;
+      expectBootloader = false; expectRestart = false; // the user closed the link; nothing is expected to come back
       failPending(new Error("disconnected"));
       await t.close();
       parser.reset();
@@ -1764,10 +1783,11 @@
       const timeoutMs = opts.timeoutMs || CMD_TIMEOUT_MS;
       const label = moduleName(module, moduleSpecs) + " " + typeName(module, type, moduleSpecs);
       const attempt = () => new Promise((resolve, reject) => {
-        if (!transport) { reject(Object.assign(new Error("not connected"), { transportLost: true })); return; }
+        if (!transport) { reject(Object.assign(new Error("not connected"), { transportLost: true, notSent: true })); return; }
         let frame;
         try { frame = buildFrame(module, type, payload); } catch (e) { reject(e); return; }
         if (els.logFrames.checked && !opts.quiet) logLine("tx", label + " " + hex(frame));
+        if (opts.onSend) opts.onSend(); // the request is going out now (not while it waited in the queue)
         pendingTxn = {
           module, stages, frames: [], resolve, reject, quiet: !!opts.quiet,
           timer: setTimeout(() => {
@@ -1837,7 +1857,7 @@
         logLine("sys", "Discovery: " + (discovered.device || "(unnamed device)") + (discovered.fw ? " fw " + discovered.fw : "") + " — modules: " + names + ".");
         for (const tab of Object.keys(TAB_MODULE)) {
           const id = tabModuleId(tab);
-          if (!moduleAvailable(id)) logLine("warn", "Module 0x" + id.toString(16).padStart(2, "0") + " (" + tab + " tab) is not advertised by this firmware; that tab is disabled.");
+          if (!moduleAvailable(id)) logLine("warn", "The " + tab + " tab's service is not advertised by this firmware (" + moduleLabel(id, tab) + "); that tab is disabled.");
         }
       } catch (e) {
         logLine("warn", "No discovery reply (" + e.message + "). Assuming all modules are present.");
@@ -2352,7 +2372,7 @@
       try {
         const [reply] = await transact(systemModuleId(), SYS.GET_INFO, null, { expect: [SYS.INFO], quiet: !!quiet });
         renderSystemInfo(parseSystemInfo(reply.payload));
-        setNote(els.sysNote, "muted", "");
+        restoreSysNote();
       } catch (e) {
         logLine("err", "System GET_INFO failed: " + e.message);
         setNote(els.sysNote, "err", "Reading the system info failed: " + e.message);
@@ -2369,13 +2389,13 @@
       if (!transport) return;
       const ok = await askConfirm(els.sysConfirm, els.sysRebootBtn, "Reboot the dongle now (after " + rebootDelayMs() + " ms)? The USB link drops for a few seconds.", "Reboot");
       if (!ok || !transport) return;
-      expectRestart = true; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS;
+      const armRestart = () => { expectRestart = true; expectBootloader = false; expectRestartUntil = Date.now() + AUTO_RECONNECT_WINDOW_MS; };
       try {
-        await transact(systemModuleId(), SYS.REBOOT, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true });
+        await transact(systemModuleId(), SYS.REBOOT, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true, onSend: armRestart });
         logLine("ok", "Reboot acknowledged; the dongle is restarting.");
         setNote(els.sysNote, "muted", "Rebooting… the console reconnects automatically when the dongle re-enumerates.");
       } catch (e) {
-        if (e && (e.timeout || e.transportLost)) {
+        if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is rebooting.");
         } else {
           expectRestart = false;
@@ -2390,13 +2410,13 @@
         "Reboot into the ROM bootloader (download mode)? The dongle stops acting as a controller and re-enumerates as the ESP32-S3 ROM USB device until it is flashed and reset / replugged.",
         "Reboot into bootloader");
       if (!ok || !transport) return;
-      expectBootloader = true; expectRestart = false;
+      const armBootloader = () => { expectBootloader = true; expectRestart = false; };
       try {
-        await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true });
+        await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true, onSend: armBootloader });
         logLine("ok", "Reboot into bootloader acknowledged.");
         setNote(els.sysNote, "warn", "Entering download mode… flash with idf.py flash / esptool on the ROM's USB port, then reset or replug the dongle and connect again.");
       } catch (e) {
-        if (e && (e.timeout || e.transportLost)) {
+        if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is entering the bootloader.");
         } else {
           expectBootloader = false;
