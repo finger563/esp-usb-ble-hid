@@ -104,9 +104,10 @@ permitted dongle is plugged in — with several it does not guess), when a
 permitted dongle is plugged in while the page is idle, and after a reboot the
 console itself asked for (the Device tab's *Reboot*, the System tab's
 *Reboot*, a firmware update or rollback): it waits for the same dongle,
-matched by its USB serial number, to re-enumerate and reconnects. A *Reboot
-into bootloader* never reconnects (the ROM shows up as a different USB
-device). The **Auto-connect** checkbox next to the Connect button (default on,
+matched by its USB serial number, to re-enumerate and reconnects. After a
+*Reboot into bootloader* it does not chase the ROM (which shows up as a
+different USB device); once the dongle is flashed and reset it re-enumerates
+as a dongle and is opened like any plug-in. The **Auto-connect** checkbox next to the Connect button (default on,
 remembered by the browser) turns all of that off; *Connect dongle* always
 works. This needs a secure context — the hosted page (HTTPS) or a local copy
 served from `http://localhost`; a `file://` page loses the grant on reload.

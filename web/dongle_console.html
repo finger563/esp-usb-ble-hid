@@ -369,7 +369,7 @@
     <div class="conn">
       <span id="status" class="pill">Disconnected</span>
       <span id="devBadge" class="devbadge" hidden></span>
-      <label class="auto small-text" title="Open a permitted dongle by itself: on page load, when one is plugged in, and after a reboot the console asked for (not after a reboot into the bootloader). Manual Connect always works."><input type="checkbox" id="autoConnect" checked> Auto-connect</label>
+      <label class="auto small-text" title="Open a permitted dongle by itself: on page load, when one is plugged in, and after a reboot the console asked for. After a reboot into the bootloader it does not chase the ROM device; once the dongle is flashed and reset it re-enumerates as a dongle and is opened like any plug-in. Manual Connect always works."><input type="checkbox" id="autoConnect" checked> Auto-connect</label>
       <button id="connectBtn" class="primary" type="button">Connect dongle</button>
       <button id="anyBtn" class="ghost" type="button" title="Show every USB device instead of only the dongle (VID 057E / PID 2009)">Pick any USB device…</button>
     </div>
@@ -1929,7 +1929,13 @@
           logLine("warn", "Auto-connect: the link names a " + connectParams.transport + " device (" + describeIdentity(connectParams) + "), but this console connects over WebUSB only — use “Connect dongle”.");
           return;
         }
-        const d = pickUsbDevice(devices, connectParams);
+        // only a permitted DONGLE is ever opened by itself: a link naming another
+        // vid/pid, or one whose ids did not parse, must not pick some other device
+        if (connectParams.vid !== DEFAULT_VID || connectParams.pid !== DEFAULT_PID) {
+          logLine("warn", "Auto-connect: the link names " + describeIdentity(connectParams) + ", which is not a dongle (" + describeIdentity({ transport: "usb", vid: DEFAULT_VID, pid: DEFAULT_PID, serial: null }) + ") — use “Connect dongle”.");
+          return;
+        }
+        const d = pickUsbDevice(devices.filter(isDongle), connectParams);
         if (!d) { logLine("warn", "Auto-connect: no permitted " + describeIdentity(connectParams) + " is plugged in — use “Connect dongle” (the browser only lists devices this page was already granted)."); return; }
         logLine("sys", "Auto-connecting to " + describeIdentity(usbIdentity(d)) + "…");
         await openPermitted(d, "Connected to");
@@ -2048,7 +2054,7 @@
       updateUI();
       if (expectBootloader) {
         setStatus("", "Disconnected");
-        logLine("sys", "USB link dropped as expected — the dongle is in the ROM bootloader (download mode). Flash it with idf.py flash / esptool on the port it re-enumerated as, then reset or replug it and use “Connect dongle”.");
+        logLine("sys", "USB link dropped as expected — the dongle is in the ROM bootloader (download mode). Flash it with idf.py flash / esptool on the port it re-enumerated as, then reset or replug it" + (els.autoConnect.checked ? " — Auto-connect opens it again once it is back as a dongle." : " and use “Connect dongle”."));
       } else if (expectRestart) {
         setStatus(els.autoConnect.checked ? "busy" : "", els.autoConnect.checked ? "Dongle restarting…" : "Disconnected");
         logLine("sys", "USB link dropped as expected — the dongle is restarting." + (els.autoConnect.checked ? " Waiting for it to come back…" : " Auto-connect is off: use “Connect dongle” once it is back."));
@@ -2789,7 +2795,7 @@
       try {
         await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true, onSend: armBootloader });
         logLine("ok", "Reboot into bootloader acknowledged.");
-        setNote(els.sysNote, "warn", "Entering download mode… flash with idf.py flash / esptool on the ROM's USB port, then reset or replug the dongle and connect again.");
+        setNote(els.sysNote, "warn", "Entering download mode… flash with idf.py flash / esptool on the ROM's USB port, then reset or replug the dongle" + (els.autoConnect.checked ? "; Auto-connect opens it again once it is back as a dongle." : " and connect again."));
       } catch (e) {
         if (e && (e.timeout || e.transportLost) && !e.notSent) {
           logLine("sys", "Dongle went away before acknowledging — it is entering the bootloader.");
