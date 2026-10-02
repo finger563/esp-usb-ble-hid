@@ -97,6 +97,24 @@ in a Chromium-based browser (Chrome, Edge, Brave; it uses WebUSB) and click
 [`web/dongle_console.html`](web/dongle_console.html) works from a local copy
 too. Its only network access is the optional release check.
 
+**Auto-connect.** The browser remembers, per origin and device, which dongles
+you granted the page, so after the first *Connect dongle* the console can open
+that dongle again without the chooser: on page load (when exactly one
+permitted dongle is plugged in — with several it does not guess), when a
+permitted dongle is plugged in while the page is idle, and after a reboot the
+console itself asked for (the Device tab's *Reboot*, the System tab's
+*Reboot*, a firmware update or rollback): it waits for the same dongle,
+matched by its USB serial number, to re-enumerate and reconnects. After a
+*Reboot into bootloader* it does not chase the ROM (which shows up as a
+different USB device); once the dongle is flashed and reset it re-enumerates
+as a dongle and is opened like any plug-in. The **Auto-connect** checkbox next to the Connect button (default on,
+remembered by the browser) turns all of that off; *Connect dongle* always
+works. This needs a secure context — the hosted page (HTTPS) or a local copy
+served from `http://localhost`; a `file://` page loses the grant on reload.
+A link of the form `dongle_console.html?autoconnect=1&vid=0x057e&pid=0x2009&serial=…`
+(what the espp Device Hub's hand-off links carry) connects to that specific
+dongle on load.
+
 ### Device
 
 ![Web console, Device tab: status, paired controllers and actions](docs/screenshots/console-device.jpg)
