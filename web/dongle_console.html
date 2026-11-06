@@ -3459,7 +3459,7 @@
       if (cached && Date.now() - cached.checkedAt < RELEASE_CACHE_MS) { latestRelease = cached.release; latestCheckedAt = cached.checkedAt; }
       renderUpdateStatus();
     }
-    logLine("sys", "Dongle Console ready. Plug in the dongle and click “Connect dongle” (it shows up as a Nintendo Switch Pro Controller, 057e:2009)" +
+    logLine("sys", "Dongle Console ready. Plug in the dongle and click “Connect dongle” (it shows up as a Nintendo Switch Pro Controller, 057e:2009, or in Xbox 360 mode as an Xbox 360 Controller, 045e:0e60)" +
             (els.autoConnect.checked ? "; a dongle this page was already granted connects by itself." : "."));
     autoConnectOnLoad();
   </script>
