@@ -135,11 +135,34 @@ dongle on load.
 
 ![Web console, Settings tab](docs/screenshots/console-settings.jpg)
 
-Stored in flash and kept across updates: invert left / right stick Y, swap
-A/B, swap X/Y, stick deadzone (0–50 %), LED brightness, the LED level while a
-controller is connected (dim and steady by default; a blink-on-every-input
-debugging mode is optional), BLE device name. *Apply changes* sends only what
-you changed; *Reset to defaults* restores the firmware defaults.
+Stored in flash and kept across updates: the USB controller type (below),
+invert left / right stick Y, swap A/B, swap X/Y, stick deadzone (0–50 %), LED
+brightness, the LED level while a controller is connected (dim and steady by
+default; a blink-on-every-input debugging mode is optional), BLE device name.
+*Apply changes* sends only what you changed; *Reset to defaults* restores the
+firmware defaults.
+
+#### USB controller type: Switch Pro or Xbox 360
+
+What the dongle is to the USB host. **Switch Pro Controller** (the default) is
+for the Switch and for anything that accepts a Pro Controller. **Xbox 360
+Controller (X-Input)** makes the dongle a wired Xbox 360 controller instead,
+for Windows, Linux, Steam (incl. the Steam Deck) and Android: games see a
+native X-Input gamepad, with analog triggers and the Guide button. It is not
+for the Switch, and macOS has no X-Input driver. The setting applies at the
+next boot (USB descriptors are fixed at enumeration), so change it, then
+*Reboot* on the Device tab; the console connects to the dongle in either mode,
+and the Device tab shows which mode is running and whether a change is waiting
+for a reboot.
+
+In Xbox 360 mode the dongle stays a composite device, so the console keeps
+working: it presents Microsoft's vendor ID with a product ID of its own (so
+Linux's xpad recognizes the controller interface, and Windows splits the
+device instead of letting its Xbox driver take all of it) and advertises the
+`XUSB10` compatible ID that Windows' Xbox 360 driver binds to. Rumble sent by
+the PC is accepted and ignored. The identity is set by `CONFIG_DONGLE_USB_XBOX_PID`
+and mirrored in the console's permitted-dongle list. These are Microsoft's
+identifiers: for emulation of your own device.
 
 ### System
 
@@ -188,7 +211,7 @@ web console.)*
 |---|---|---|
 | **Boards** | LilyGo T-Dongle-S3, Adafruit QT Py ESP32-S3 | The release programmer and binaries are built for the T-Dongle-S3 only; for the QT Py (or any other board) build from source with the board selected under *Hardware Configuration* in `menuconfig` |
 | **Controllers** | Xbox Wireless Controller (Bluetooth LE models: Xbox Series X\|S controller, Xbox One controllers with the BLE firmware update) | Any BLE gamepad can pair, but its reports are decoded with the Xbox layout — other layouts are a small parser away (`components/xbox`) |
-| **Hosts** | Nintendo Switch (docked or via a USB-C adapter), plus anything that accepts a USB Pro Controller: Windows, macOS, Linux, Android, iOS | The Switch needs *Pro Controller Wired Communication* enabled |
+| **Hosts** | Switch Pro mode: Nintendo Switch (docked or via a USB-C adapter), plus anything that accepts a USB Pro Controller: Windows, macOS, Linux, Android, iOS. Xbox 360 mode: Windows, Linux, Steam / Steam Deck, Android (X-Input hosts; not the Switch, not macOS) | The Switch needs *Pro Controller Wired Communication* enabled |
 
 ## Building from source
 
@@ -218,7 +241,8 @@ ESPP_OTA_VID=0x057E ESPP_OTA_PID=0x2009 idf.py ota-usb   # after idf.py build
 ## Under the hood
 
 ```
-BLE gamepad ──notify──▶ Xbox report parser ──▶ GamepadInputs ──settings──▶ espp::SwitchPro
+BLE gamepad ──notify──▶ Xbox report parser ──▶ GamepadInputs ──settings──▶ espp::SwitchPro (Switch Pro mode)
+                                                                       └────▶ espp::xinput::GamepadState (Xbox 360 mode)
                                                                                 │ input report
                                                             espp::UsbDevice ◀───┘
                                                         ┌────────┴──────────────────┐
