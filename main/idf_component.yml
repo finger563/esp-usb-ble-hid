@@ -24,4 +24,7 @@ dependencies:
   # device identity / reboot (incl. into the ROM bootloader) and heap / task monitor
   espp/system: '>=1.3.6'
   espp/monitor: '>=1.3.6'
-  espp/nvs: '>=1.3.6'
+  # >=1.3.10: NvsHandle::get(std::string) no longer returns NVS's zero terminator as
+  # part of the value (esp-cpp/espp#854), which made the stored BLE name fail
+  # validation at boot and reset every setting to its default
+  espp/nvs: '>=1.3.10'
