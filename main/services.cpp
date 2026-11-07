@@ -46,6 +46,7 @@ static device_config::Settings load_settings() {
                               s.led_connected_brightness, ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "led_blink", s.led_activity_blink,
                               s.led_activity_blink, ec);
+  nvs_storage->get_or_set_var(kNvsNamespace, "usb_ctl", s.usb_controller, s.usb_controller, ec);
   if (ec)
     logger.warn("Could not read all settings from NVS: {}", ec.message());
   // never trust stored values blindly (an older firmware may have stored
@@ -79,6 +80,7 @@ static bool save_settings(const device_config::Settings &s, std::string &error) 
   stage("ble_name", s.ble_name);
   stage("led_conn", s.led_connected_brightness);
   stage("led_blink", s.led_activity_blink);
+  stage("usb_ctl", s.usb_controller);
   if (!ec)
     handle.commit(ec);
   if (ec) {

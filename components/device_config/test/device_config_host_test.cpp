@@ -32,7 +32,7 @@ int main() {
   CHECK(s.validate().empty());
   const auto bytes = s.serialize();
   CHECK(bytes[0] == dc::kProtocolVersion);
-  CHECK(bytes[1] == 9); // nine TLVs
+  CHECK(bytes[1] == 10); // ten TLVs
   const auto back = dc::Settings::parse(bytes, dc::Settings{});
   CHECK(back.has_value());
   CHECK(back && *back == s);
@@ -95,6 +95,26 @@ int main() {
     CHECK(!bad.validate().empty());
     CHECK(dc::Settings{}.validate().empty()); // defaults are valid
   }
+  {
+    // usb controller: enum on the wire, out-of-range refused by validate(), a
+    // Switch Pro default, round-trips, and an older firmware's 9-TLV payload
+    // leaves the base value alone
+    CHECK(dc::Settings{}.usb_controller_kind() == dc::UsbController::SwitchPro);
+    dc::Settings x;
+    x.usb_controller = static_cast<uint8_t>(dc::UsbController::Xbox360);
+    CHECK(x.validate().empty());
+    const auto xb = x.serialize();
+    const auto xr = dc::Settings::parse(xb, dc::Settings{});
+    CHECK(xr && xr->usb_controller_kind() == dc::UsbController::Xbox360);
+    dc::Settings bad = x;
+    bad.usb_controller = 2;
+    CHECK(!bad.validate().empty());
+    const std::vector<uint8_t> xb_only = {dc::kProtocolVersion, 1, 0x0A, 1, 1};
+    const auto xo = dc::Settings::parse(xb_only, dc::Settings{});
+    CHECK(xo && xo->usb_controller_kind() == dc::UsbController::Xbox360 && xo->invert_left_y);
+    const std::vector<uint8_t> xb_bad_len = {dc::kProtocolVersion, 1, 0x0A, 2, 1, 0};
+    CHECK(!dc::Settings::parse(xb_bad_len, dc::Settings{}).has_value());
+  }
 
   // ---- Info round trip ----
   dc::Info info;
@@ -144,7 +164,20 @@ int main() {
     // the trailer is [3 x u32][link_state u8][link_detail str]: firmware from
     // before the link state stops after the counters, older firmware stops
     // before the counters
-    const size_t counters_only = ib.size() - 1 - 1; // no link_state, no (empty) link_detail
+    // the active USB controller is the last optional byte: round trip, and a
+    // payload from before it parses with the Switch Pro default
+    CHECK(dback && dback->usb_controller == uint8_t(dc::UsbController::SwitchPro));
+    dc::Info x = d;
+    x.usb_controller = uint8_t(dc::UsbController::Xbox360);
+    const auto xb = x.serialize();
+    CHECK(xb.size() == db.size());
+    const auto xback = dc::Info::parse(xb);
+    CHECK(xback && xback->usb_controller == uint8_t(dc::UsbController::Xbox360));
+    const auto no_usb = dc::Info::parse(std::span<const uint8_t>(xb.data(), xb.size() - 1));
+    CHECK(no_usb && no_usb->usb_controller == uint8_t(dc::UsbController::SwitchPro) &&
+          no_usb->link_detail == d.link_detail);
+    const size_t counters_only =
+        ib.size() - 1 - 1 - 1; // no usb_controller, link_state, (empty) link_detail
     const auto mid = dc::Info::parse(std::span<const uint8_t>(ib.data(), counters_only));
     CHECK(mid && mid->usb_hid_reports == info.usb_hid_reports &&
           mid->link_state == uint8_t(dc::Info::LinkState::Unknown) && mid->link_detail.empty());

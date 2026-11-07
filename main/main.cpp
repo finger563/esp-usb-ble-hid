@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -14,6 +15,7 @@
 
 #include "switch_pro.hpp"
 #include "xbox.hpp"
+#include "xinput.hpp"
 
 #include "ble.hpp"
 #include "bsp.hpp"
@@ -84,7 +86,8 @@ static void push_inputs_locked(GamepadInputs inputs) {
   // The Switch's Change Grip/Order screen registers a controller when L+R are
   // pressed: hold them for a moment after every USB enumeration (see
   // usb_registration_tick) so the dongle registers itself without a hand on
-  // the wireless controller.
+  // the wireless controller. (Switch Pro mode only: the window is never opened
+  // in Xbox 360 mode.)
   if (esp_timer_get_time() < registration_until_us) {
     inputs.buttons.l1 = 1;
     inputs.buttons.r1 = 1;
@@ -107,6 +110,40 @@ static void push_inputs_locked(GamepadInputs inputs) {
     inputs.buttons.x = y;
     inputs.buttons.y = x;
   }
+  if (usb_personality() == device_config::UsbController::Xbox360) {
+    // X-Input: the same physical layout as the wireless Xbox controller the
+    // inputs come from, so buttons map one to one; the sticks are the settings-
+    // adjusted values (with the default Y inversion, up is positive, which is
+    // what X-Input expects) scaled to the 16-bit axes, the triggers to 8 bits.
+    using espp::xinput::Button;
+    espp::xinput::GamepadState st;
+    const auto &b = inputs.buttons;
+    st.set(Button::A, b.a);
+    st.set(Button::B, b.b);
+    st.set(Button::X, b.x);
+    st.set(Button::Y, b.y);
+    st.set(Button::LeftBumper, b.l1);
+    st.set(Button::RightBumper, b.r1);
+    st.set(Button::LeftStick, b.l3);
+    st.set(Button::RightStick, b.r3);
+    st.set(Button::DpadUp, b.up);
+    st.set(Button::DpadDown, b.down);
+    st.set(Button::DpadLeft, b.left);
+    st.set(Button::DpadRight, b.right);
+    st.set(Button::Start, b.start);
+    st.set(Button::Back, b.select);
+    st.set(Button::Guide, b.home);
+    auto axis = [](float v) { return static_cast<int16_t>(std::clamp(v, -1.0f, 1.0f) * 32767.0f); };
+    auto trigger = [](float v) { return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+    st.lx = axis(inputs.left_joystick.x);
+    st.ly = axis(inputs.left_joystick.y);
+    st.rx = axis(inputs.right_joystick.x);
+    st.ry = axis(inputs.right_joystick.y);
+    st.left_trigger = trigger(inputs.l2.value);
+    st.right_trigger = trigger(inputs.r2.value);
+    usb_push_xinput(st);
+    return;
+  }
   usb_controller->update_input_report([&](espp::SwitchPro::InputReport &r) {
     r.reset();
     r.set_buttons(inputs.buttons);
@@ -127,6 +164,8 @@ static void push_inputs(GamepadInputs inputs) {
 // Polled every 50 ms: when the host has just finished the handshake and
 // started taking reports, hold L+R for kRegistrationWindowUs, then release.
 static void usb_registration_tick() {
+  if (usb_personality() != device_config::UsbController::SwitchPro)
+    return; // an X-Input host has no registration screen
   static bool was_ready = false;
   const bool ready = usb_hid_ready();
   const int64_t now = esp_timer_get_time();
@@ -203,6 +242,7 @@ static device_config::Info device_info() {
   info.ble_last_notify_age_ms = ble_ms_since_last_notification();
   info.usb_hid_reports = usb_hid_reports_sent();
   info.usb_hid_ready = usb_hid_ready();
+  info.usb_controller = static_cast<uint8_t>(usb_personality());
   // where the controller link is (and why it is there), for the console
   using LinkState = device_config::Info::LinkState;
   switch (ble_link_state()) {
@@ -381,11 +421,21 @@ extern "C" void app_main(void) {
     push_inputs(GamepadInputs{});
   });
 
-  // MARK: USB initialization
-  logger.info("USB initialization");
-  if (!start_usb(usb_controller)) {
+  // MARK: USB initialization -- as the controller the settings ask for
+  // (descriptors are fixed at enumeration, so a changed setting applies at
+  // the next boot; the console says so)
+  const auto personality = settings.usb_controller_kind();
+  logger.info("USB initialization ({})", personality == device_config::UsbController::Xbox360
+                                             ? "Xbox 360 / X-Input"
+                                             : "Switch Pro");
+  if (!start_usb(personality, usb_controller)) {
     logger.error("USB initialization failed");
   }
+#if HAS_DISPLAY
+  // the screen's USB side shows what the dongle is to the host
+  gui->set_usb_host(personality == device_config::UsbController::Xbox360 ? Gui::UsbHost::Xbox360
+                                                                         : Gui::UsbHost::SwitchPro);
+#endif // HAS_DISPLAY
   // hold L+R for a moment after every USB enumeration so the Switch's Change
   // Grip/Order screen registers the dongle (see usb_registration_tick)
   static espp::Timer usb_registration_timer({.name = "usb-reg",

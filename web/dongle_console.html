@@ -286,7 +286,7 @@
     .field.slider input[type="range"] { grid-column: 1; }
     .field.slider output { font-family: var(--font-mono); font-size: 12.5px; text-align: right; }
     .field.text { grid-template-columns: 1fr; }
-    .field.text input { width: 100%; }
+    .field.text input, .field.text select { width: 100%; }
     .switch { position: relative; width: 40px; height: 22px; display: inline-block; }
     .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; width: 100%; height: 100%; cursor: pointer; }
     .switch i { position: absolute; inset: 0; border-radius: 11px; background: var(--line-strong); transition: background 0.15s; }
@@ -371,7 +371,7 @@
       <span id="devBadge" class="devbadge" hidden></span>
       <label class="auto small-text" title="Open a permitted dongle by itself: on page load, when one is plugged in, and after a reboot the console asked for. After a reboot into the bootloader it does not chase the ROM device; once the dongle is flashed and reset it re-enumerates as a dongle and is opened like any plug-in. Manual Connect always works."><input type="checkbox" id="autoConnect" checked> Auto-connect</label>
       <button id="connectBtn" class="primary" type="button">Connect dongle</button>
-      <button id="anyBtn" class="ghost" type="button" title="Show every USB device instead of only the dongle (VID 057E / PID 2009)">Pick any USB device…</button>
+      <button id="anyBtn" class="ghost" type="button" title="Show every USB device instead of only the dongle (057E:2009 in Switch Pro mode, 045E:0E60 in Xbox 360 mode)">Pick any USB device…</button>
     </div>
   </header>
 
@@ -404,6 +404,7 @@
           <span id="bPair" class="badge">Pairing</span>
         </div>
         <dl class="kv">
+          <dt>USB controller</dt><dd id="iUsbController">—</dd>
           <dt>Controller</dt><dd id="iController" class="mono">—</dd>
           <dt>Battery</dt><dd><span id="iBattery">—</span><span id="iBatteryMeter" class="meter" hidden><i></i></span></dd>
           <dt>Paired controllers</dt><dd id="iBonds">—</dd>
@@ -463,6 +464,14 @@
           <button id="settingsReload" class="small" type="button" disabled>Reload</button>
         </div>
         <form id="settingsForm" class="form" autocomplete="off">
+          <div class="field text">
+            <label for="s_usb_controller">USB controller</label>
+            <select id="s_usb_controller" data-key="usb_controller" disabled>
+              <option value="0">Switch Pro Controller</option>
+              <option value="1">Xbox 360 Controller (X-Input)</option>
+            </select>
+            <span class="hint">What the dongle is to the USB host. Switch Pro for the Switch and anything that takes a Pro Controller; Xbox 360 for Windows, Linux, Steam and Android (not the Switch, not macOS). Applies after reboot; the console reconnects to either.</span>
+          </div>
           <div class="field">
             <label for="s_invert_left_y">Invert left stick Y</label>
             <span class="switch"><input type="checkbox" id="s_invert_left_y" data-key="invert_left_y" disabled><i></i></span>
@@ -651,7 +660,13 @@
     "use strict";
 
     // ---- USB identity: the dongle enumerates as a Switch Pro Controller ----
-    const DEFAULT_VID = 0x057E, DEFAULT_PID = 0x2009;
+    const DEFAULT_VID = 0x057E, DEFAULT_PID = 0x2009; // Switch Pro mode (Nintendo's Pro Controller)
+    // Xbox 360 mode: Microsoft's vendor ID with the dongle's own product ID
+    // (CONFIG_DONGLE_USB_XBOX_PID in the firmware; keep the two in step)
+    const XBOX_VID = 0x045E, XBOX_PID = 0x0E60;
+    // every USB identity a dongle can present; the console only opens these by itself
+    const DONGLE_IDS = [{ vendorId: DEFAULT_VID, productId: DEFAULT_PID }, { vendorId: XBOX_VID, productId: XBOX_PID }];
+    const isDongleIdentity = (vid, pid) => DONGLE_IDS.some((d) => d.vendorId === vid && d.productId === pid);
     const VENDOR_CLASS = 0xFF;
 
     // ---- espp stream_frame v2 --------------------------------------------
@@ -680,7 +695,9 @@
     const DEV_ERROR_CODE = { 1: "malformed", 2: "invalid value", 3: "unknown request", 4: "failed", 5: "not found" };
     const DEV_KEY = { invert_left_y: 1, invert_right_y: 2, swap_ab: 3, swap_xy: 4,
                       deadzone_percent: 5, led_brightness: 6, ble_name: 7,
-                      led_connected_brightness: 8, led_activity_blink: 9 };
+                      led_connected_brightness: 8, led_activity_blink: 9, usb_controller: 10 };
+    // usb_controller values (device_config::UsbController)
+    const USB_CONTROLLER = { 0: "Switch Pro", 1: "Xbox 360" };
     const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
     const DEV_PROTOCOL_VERSION = 1;
     const DEV_MAX_DEADZONE = 50, DEV_MAX_BLE_NAME = 31;
@@ -1040,6 +1057,8 @@
       const bleNotifications = optU32(), bleLastNotifyAgeMs = optU32(), usbHidReports = optU32();
       const linkStateCode = r.b.length - r.i >= 1 ? r.u8() : 0;
       const linkDetail = r.b.length - r.i >= 1 ? r.str() : "";
+      // (later still, optional) what the dongle is on USB this boot; null when not sent
+      const usbController = r.b.length - r.i >= 1 ? r.u8() : null;
       return {
         version, flags,
         usbMounted: !!(flags & INFO_FLAG.USB_MOUNTED),
@@ -1053,6 +1072,7 @@
         bleNotifications, bleLastNotifyAgeMs, usbHidReports,
         // link bring-up step + the dongle's note: null / "" when this firmware does not send them
         linkState: LINK_STATE[linkStateCode] || null, linkDetail,
+        usbController,
       };
     }
 
@@ -1061,7 +1081,7 @@
     const SETTING_KEYS = Object.keys(DEV_KEY);
     const SETTING_KIND = { invert_left_y: "bool", invert_right_y: "bool", swap_ab: "bool", swap_xy: "bool",
                            deadzone_percent: "u8", led_brightness: "u8", ble_name: "str",
-                           led_connected_brightness: "u8", led_activity_blink: "bool" };
+                           led_connected_brightness: "u8", led_activity_blink: "bool", usb_controller: "u8" };
     function encodeSettings(values) {
       const out = [DEV_PROTOCOL_VERSION, 0];
       let count = 0;
@@ -1118,6 +1138,7 @@
       if (key === "deadzone_percent" && (value < 0 || value > DEV_MAX_DEADZONE)) return "deadzone must be 0.." + DEV_MAX_DEADZONE + " %";
       if (key === "led_brightness" && (value < 0 || value > 100)) return "LED brightness must be 0..100 %";
       if (key === "led_connected_brightness" && (value < 0 || value > 100)) return "LED level while connected must be 0..100 %";
+      if (key === "usb_controller" && !(value in USB_CONTROLLER)) return "USB controller must be Switch Pro or Xbox 360";
       if (key === "ble_name") {
         if (!value.length || value.length > DEV_MAX_BLE_NAME) return "BLE name must be 1.." + DEV_MAX_BLE_NAME + " characters";
         for (const ch of value) { const c = ch.charCodeAt(0); if (c < 0x20 || c >= 0x7F) return "BLE name must be printable ASCII"; }
@@ -1330,7 +1351,7 @@
     const els = {};
     for (const id of ["status", "devBadge", "connectBtn", "anyBtn", "autoConnect", "unsupported",
                       "infoAuto", "infoBtn", "bUsb", "bBle", "bScan", "bPair",
-                      "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iUpdate", "iHardware", "iIdf", "infoNote",
+                      "iUsbController", "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iUpdate", "iHardware", "iIdf", "infoNote",
                       "lState", "lBle", "lUsb", "linkNote",
                       "bondsCount", "bondsRefresh", "bondsList", "bondsConfirm", "bondsNote",
                       "settingsDirty", "settingsReload", "settingsForm", "settingsApply", "settingsReset", "settingsConfirm", "settingsNote",
@@ -1846,6 +1867,8 @@
     let connIdentity = null;      // usbIdentity() of the connected (or just lost) dongle: every dongle shares the
                                   // VID/PID, the firmware-assigned USB serial (from the MAC) tells them apart
     let expectRestart = false;    // a reboot we asked for is coming; a disconnect is not an error
+    let usbControllerChangePending = false; // the USB controller type was changed but not yet applied: the next
+                                            // boot enumerates under the other identity (see renderInfo / DONGLE_IDS)
     let expectBootloader = false; // we sent REBOOT_TO_BOOTLOADER: the dongle comes back as the ROM's USB device, not as itself
 
     if (!navigator.usb) {
@@ -1869,7 +1892,7 @@
       if (!els.autoConnect.checked) reconnect.stop("auto-connect is off");
     });
     const connectParams = parseConnectParams(location.search);
-    const isDongle = (d) => !!d && d.vendorId === DEFAULT_VID && d.productId === DEFAULT_PID;
+    const isDongle = (d) => !!d && isDongleIdentity(d.vendorId, d.productId);
     const deviceChannel = openDeviceChannel();
     // One open at a time (Connect buttons, auto-connect, reconnect), and never
     // while already connected — see createOpenGate.
@@ -1894,12 +1917,35 @@
     // The lookup runs outside the open gate, so re-check afterwards that the
     // attempt was not cancelled (switch turned off) and that no manual connect
     // completed meanwhile — the gate refuses while connected as well.
+    // A dongle that rebooted with a USB controller-type change waiting comes
+    // back under its other identity (DONGLE_IDS) with the same serial number:
+    // look for the serial under every dongle identity, and say so when it is
+    // back under one this page was never granted (only Connect dongle can
+    // authorize it; the browser hands out permitted devices only).
+    async function findPermittedDongle(identity) {
+      const same = await findPermittedUsbDevice(identity);
+      if (same || !identity || !identity.serial) return same;
+      for (const id of DONGLE_IDS) {
+        if (id.vendorId === identity.vid && id.productId === identity.pid) continue;
+        const other = await findPermittedUsbDevice({ transport: "usb", vid: id.vendorId, pid: id.productId, serial: identity.serial });
+        if (other) return other;
+      }
+      return null;
+    }
     async function reconnectAttempt(identity, attempt, token) {
       if (transport) return true;
-      const d = await findPermittedUsbDevice(identity);
+      const d = await findPermittedDongle(identity);
       if (token.cancelled() || transport) return false;
-      if (!d) return false;
-      if (attempt === 1 || !token.cancelled()) logLine("sys", "Dongle is back (" + describeIdentity(usbIdentity(d)) + "); reconnecting…");
+      if (!d) {
+        if (attempt === 3 && usbControllerChangePending)
+          logLine("warn", "The dongle was set to the other USB controller type, so it is coming back under its other USB identity (" +
+                  DONGLE_IDS.map((id) => describeIdentity({ transport: "usb", vid: id.vendorId, pid: id.productId })).join(" / ") +
+                  "). If this page was never granted that identity, click “Connect dongle” to authorize it.");
+        return false;
+      }
+      const back = usbIdentity(d);
+      const other = identity && (back.vid !== identity.vid || back.pid !== identity.pid);
+      if (attempt === 1 || other || !token.cancelled()) logLine("sys", "Dongle is back (" + describeIdentity(back) + (other ? ", its other USB identity" : "") + "); reconnecting…");
       return !!(await openPermitted(d, "Reconnected to"));
     }
     // A permitted dongle was plugged in while the console is idle: open it (a
@@ -1908,7 +1954,19 @@
     if (navigator.usb && navigator.usb.addEventListener) {
       navigator.usb.addEventListener("connect", async (e) => {
         const d = e.device;
-        if (transport || !els.autoConnect.checked || reconnect.isActive() || !isDongle(d)) return;
+        if (transport || !els.autoConnect.checked || !isDongle(d)) return;
+        if (reconnect.isActive()) {
+          // the supervisor matches the exact identity it lost; the dongle it is
+          // recovering can arrive under its other identity (a controller-type
+          // change applied by the reboot): same serial, different VID/PID
+          const lost = connIdentity;
+          if (!(lost && lost.serial && d.serialNumber === lost.serial && (d.vendorId !== lost.vid || d.productId !== lost.pid))) return;
+          await new Promise((r) => setTimeout(r, 600));
+          if (transport || !els.autoConnect.checked || openGate.isBusy()) return;
+          logLine("sys", "Dongle is back under its other USB identity (" + describeIdentity(usbIdentity(d)) + "); reconnecting…");
+          await openPermitted(d, "Reconnected to");
+          return;
+        }
         await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
         if (transport || !els.autoConnect.checked || reconnect.isActive() || openGate.isBusy()) return; // the switch may have been turned off meanwhile
         logLine("sys", "Dongle plugged in (" + describeIdentity(usbIdentity(d)) + "); connecting…");
@@ -1931,7 +1989,7 @@
         }
         // only a permitted DONGLE is ever opened by itself: a link naming another
         // vid/pid, or one whose ids did not parse, must not pick some other device
-        if (connectParams.vid !== DEFAULT_VID || connectParams.pid !== DEFAULT_PID) {
+        if (!isDongleIdentity(connectParams.vid, connectParams.pid)) {
           logLine("warn", "Auto-connect: the link names " + describeIdentity(connectParams) + ", which is not a dongle (" + describeIdentity({ transport: "usb", vid: DEFAULT_VID, pid: DEFAULT_PID, serial: null }) + ") — use “Connect dongle”.");
           return;
         }
@@ -1956,7 +2014,7 @@
     // WebUSB requires `filters`; the "any device" path uses `[]` (Chromium) and
     // falls back to `[{}]` for implementations that reject an empty list.
     async function requestUsbDevice(anyDevice) {
-      const dongle = { filters: [{ vendorId: DEFAULT_VID, productId: DEFAULT_PID }] };
+      const dongle = { filters: DONGLE_IDS };
       if (!anyDevice) return navigator.usb.requestDevice(dongle);
       try { return await navigator.usb.requestDevice({ filters: [] }); }
       catch (e) {
@@ -2270,7 +2328,7 @@
       els.settingsReload.disabled = !dev;
       // a key the firmware did not report (older firmware) stays read-only: it
       // could never be applied (settingsDirtyKeys skips it)
-      for (const input of els.settingsForm.querySelectorAll("input")) input.disabled = !dev || !deviceSettings || !(input.dataset.key in deviceSettings);
+      for (const input of els.settingsForm.querySelectorAll("input[data-key], select[data-key]")) input.disabled = !dev || !deviceSettings || !(input.dataset.key in deviceSettings);
       els.settingsApply.disabled = !dev || !deviceSettings || !settingsDirtyKeys().length || !!settingsInvalid();
       els.settingsReset.disabled = !dev || !deviceSettings;
       els.actPair.disabled = !dev; els.actForget.disabled = !dev; els.actReboot.disabled = !dev;
@@ -2321,6 +2379,14 @@
       els.bBle.textContent = info.bleConnected ? "Controller connected" : "No controller";
       els.bScan.textContent = info.bleScanning ? "Scanning" : "Idle";
       els.bPair.textContent = info.pairing ? "Pairing mode" : "Not pairing";
+      if (info.usbController === null) els.iUsbController.textContent = "Switch Pro (this firmware reports no mode)";
+      else {
+        const wanted = deviceSettings && ("usb_controller" in deviceSettings) ? deviceSettings.usb_controller : null;
+        const pending = wanted !== null && wanted !== info.usbController;
+        usbControllerChangePending = pending;
+        els.iUsbController.textContent = (USB_CONTROLLER[info.usbController] || ("unknown (" + info.usbController + ")")) +
+          (pending ? " — set to " + USB_CONTROLLER[wanted] + ", reboot to apply" : "");
+      }
       els.iController.textContent = info.controller || (info.bleConnected ? "(serial unknown)" : "none");
       if (info.bleConnected && info.battery > 0) {
         els.iBattery.textContent = info.battery + " %";
@@ -2371,12 +2437,27 @@
         }
       }
       let usbText = "not mounted", usbTone = "";
+      const xbox = info.usbController === 1;
+      const sent = stats ? ", " + info.usbHidReports.toLocaleString() + (info.usbHidReports === 1 ? " report" : " reports") + " sent" : "";
       if (info.usbMounted && !stats) {
         // older firmware reports neither the handshake state nor the counters
         usbText = "mounted (this firmware reports no handshake state)";
+      } else if (info.usbMounted && xbox) {
+        // X-Input has no handshake: "ready" means the host's driver is reading
+        // the controller interface (the last report was taken). Without a
+        // driver (macOS has none) the first report stays queued and this
+        // shows as not read; the console itself is unaffected.
+        if (info.usbHidReady) {
+          usbText = (stats && info.usbHidReports === 0 ? "ready, no report sent yet" : "X-Input reports taken by the host" + sent); usbTone = "ok";
+        } else {
+          // the firmware reports a stall only after a report has been in
+          // flight for a few poll intervals, not the gap before a normal poll
+          usbText = "host is not reading X-Input reports" + sent; usbTone = "warn";
+          problems.push("No X-Input driver is reading the controller interface — macOS has none (the console still works); on Windows check joy.cpl / Game Controllers, on Linux that xpad bound. The reports resume as soon as a driver reads them.");
+        }
       } else if (info.usbMounted) {
         if (info.usbHidReady) {
-          usbText = "handshake done" + (stats ? ", " + info.usbHidReports.toLocaleString() + (info.usbHidReports === 1 ? " report" : " reports") + " sent" : "");
+          usbText = "handshake done" + sent;
           usbTone = "ok";
         } else {
           usbText = "waiting for host handshake"; usbTone = "warn";
@@ -2518,7 +2599,7 @@
     // ---- settings --------------------------------------------------------------
     let deviceSettings = null;   // authoritative values from the last SETTINGS reply
     const settingInputs = {};
-    for (const input of els.settingsForm.querySelectorAll("input[data-key]")) settingInputs[input.dataset.key] = input;
+    for (const input of els.settingsForm.querySelectorAll("input[data-key], select[data-key]")) settingInputs[input.dataset.key] = input;
 
     function formValue(key) {
       const input = settingInputs[key];
@@ -2568,6 +2649,7 @@
       els.settingsDirty.hidden = !dirty.length;
       els.settingsDirty.textContent = dirty.length + (dirty.length === 1 ? " unsaved change" : " unsaved changes");
       if (why) setNote(els.settingsNote, "err", why);
+      else if (dirty.length && dirty.includes("usb_controller")) setNote(els.settingsNote, "warn", "The USB controller type takes effect after the dongle reboots (Device tab → Reboot); the console reconnects to it in either mode.");
       else if (dirty.length && dirty.includes("ble_name")) setNote(els.settingsNote, "warn", "The new BLE name takes effect after the dongle reboots.");
       else if (!deviceSettings) setNote(els.settingsNote, "muted", "");
       else setNote(els.settingsNote, "muted", dirty.length ? "" : "Settings match the dongle.");
@@ -3430,7 +3512,7 @@
       if (cached && Date.now() - cached.checkedAt < RELEASE_CACHE_MS) { latestRelease = cached.release; latestCheckedAt = cached.checkedAt; }
       renderUpdateStatus();
     }
-    logLine("sys", "Dongle Console ready. Plug in the dongle and click “Connect dongle” (it shows up as a Nintendo Switch Pro Controller, 057e:2009)" +
+    logLine("sys", "Dongle Console ready. Plug in the dongle and click “Connect dongle” (it shows up as a Nintendo Switch Pro Controller, 057e:2009, or in Xbox 360 mode as an Xbox 360 Controller, 045e:0e60)" +
             (els.autoConnect.checked ? "; a dongle this page was already granted connects by itself." : "."));
     autoConnectOnLoad();
   </script>
