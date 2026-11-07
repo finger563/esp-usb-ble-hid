@@ -40,12 +40,11 @@ espp::DispatcherWorker &usb_dispatcher();
 void usb_set_rx_overflow_callback(std::function<void()> callback);
 #endif // CONFIG_DONGLE_USB_VENDOR_INTERFACE
 
-/// Bring up the USB device as @p personality. Switch Pro: the controller's
+/// Bring up the USB device as @p which. Switch Pro: the controller's
 /// input report is streamed to the host from a dedicated sender task once the
 /// host enables reports; update it with controller->update_input_report().
 /// Xbox 360: push each new state with usb_push_xinput() (@p ctrl is unused).
-bool start_usb(device_config::UsbController personality,
-               const std::shared_ptr<espp::SwitchPro> &ctrl);
+bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::SwitchPro> &ctrl);
 
 /// What the device is on USB this boot (the setting the firmware booted with).
 device_config::UsbController usb_personality();
