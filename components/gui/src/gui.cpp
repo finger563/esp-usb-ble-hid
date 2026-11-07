@@ -27,33 +27,36 @@ void Gui::init_ui() {
   lv_obj_set_width(label_, 150);
 }
 
+// Each side of the screen is a big icon (the controller on the BLE side, the
+// host on the USB side) with a small link badge under it. The badge appears
+// when the link is up, and the big icon shows its own colors then; while the
+// link is down it is a white silhouette (the design's recolor).
+static void show_link(lv_obj_t *icon, lv_obj_t *badge, bool connected) {
+  if (connected) {
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+  }
+  lv_obj_set_style_image_recolor(icon, lv_color_white(), LV_PART_MAIN);
+  lv_obj_set_style_image_recolor_opa(icon, connected ? LV_OPA_TRANSP : LV_OPA_COVER, LV_PART_MAIN);
+}
+
 void Gui::set_usb_connected(bool connected) {
   std::lock_guard<std::recursive_mutex> lk(mutex_);
-  // hide or show the usb image
-  // ui_UsbIcon
-  if (connected) {
-    lv_obj_clear_flag(ui_UsbIcon, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(ui_UsbIcon, LV_OBJ_FLAG_HIDDEN);
-  }
+  show_link(ui_SwitchIcon, ui_UsbIcon, connected);
 }
 
 void Gui::set_usb_host(UsbHost host) {
   std::lock_guard<std::recursive_mutex> lk(mutex_);
   // the USB side of the screen shows what the dongle is to the host
-  // ui_SwitchIcon (the image object keeps its name from the design)
+  // ui_SwitchIcon (the image object keeps its name from the design); the
+  // link state's recolor (set_usb_connected) applies to either image
   lv_image_set_src(ui_SwitchIcon, host == UsbHost::Xbox360 ? &ui_img_xbox_png : &ui_img_switch_png);
 }
 
 void Gui::set_ble_connected(bool connected) {
   std::lock_guard<std::recursive_mutex> lk(mutex_);
-  // hide or show the ble image
-  // ui_BtIcon
-  if (connected) {
-    lv_obj_clear_flag(ui_BtIcon, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(ui_BtIcon, LV_OBJ_FLAG_HIDDEN);
-  }
+  show_link(ui_XboxIcon, ui_BtIcon, connected);
 }
 
 void Gui::on_value_changed(lv_event_t *e) {
