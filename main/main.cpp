@@ -235,10 +235,8 @@ static bool device_action(device_config::Action action, std::string &error) {
     start_ble_pairing_thread(notifyCB);
     return true;
   case device_config::Action::ClearBonds:
-    if (!ble_clear_bonds()) {
-      error = "could not clear the bond store";
+    if (!ble_clear_bonds(error))
       return false; // keep the names: their bonds may still exist
-    }
     services_clear_bond_names();
     // no bonds left, so this enters pairing mode
     start_ble_reconnection_thread(notifyCB);
@@ -271,10 +269,8 @@ static std::vector<device_config::BondInfo> device_bonds() {
 
 static bool device_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type,
                                std::string &error) {
-  if (!ble_forget_bond(address, address_type)) {
-    error = "no such paired controller";
+  if (!ble_forget_bond(address, address_type, error))
     return false;
-  }
   services_forget_bond_name(address);
   if (ble_bond_count() == 0) {
     // nothing left to reconnect to: enter pairing mode

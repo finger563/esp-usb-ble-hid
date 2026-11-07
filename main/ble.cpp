@@ -460,6 +460,26 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
 static void start_scan(bool pairing);
 
 // (Re)start the scan when nothing is connected, at most every kScanRetryUs.
+// Bond deletion needs the radio idle: the host refuses to unpair while a scan
+// (or advertising) is active, as the peer's resolving-list entry cannot be
+// removed then (BLE_HS_EBUSY), and the dongle scans whenever nothing is
+// connected. Every scan start goes through start_scan(), which takes
+// scan_mutex; a ScanHold owns the mutex for its whole lifetime (so no path can
+// start a scan between the stop and the end of the deletion) and stops the
+// scan. A start that arrives meanwhile waits on the mutex and runs once the
+// hold is released. Nothing takes scan_mutex on the NimBLE host task, so the
+// host's work for the deletion cannot wait on it.
+static std::mutex scan_mutex;
+class ScanHold {
+public:
+  ScanHold() { NimBLEDevice::getScan()->stop(); }
+  ScanHold(const ScanHold &) = delete;
+  ScanHold &operator=(const ScanHold &) = delete;
+
+private:
+  std::lock_guard<std::mutex> lock_{scan_mutex}; // taken before the constructor body runs
+};
+
 static void ensure_scanning(int64_t now) {
   if (NimBLEDevice::getScan()->isScanning()) {
     link_state = BleLinkState::Scanning;
@@ -630,6 +650,7 @@ void init_ble(const std::string &device_name) {
 // Start (or restart) the scan. Called from the main task at boot, from the
 // console's actions, and from the scan timer; the LED is handled by the timer.
 static void start_scan(bool pairing) {
+  std::lock_guard<std::mutex> lk(scan_mutex); // see ScanHold
   is_pairing = pairing;
   breathing_period = pairing ? pairing_breathing_period : reconnecting_breathing_period;
 
@@ -760,10 +781,19 @@ std::vector<BleBond> ble_bonds() {
   return bonds;
 }
 
-bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type) {
-  const NimBLEAddress addr(address.data(), address_type);
-  if (!NimBLEDevice::isBonded(addr))
+bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type,
+                     std::string &error) {
+  // The bond list hands out the address as NimBLE stores it (getVal(), least
+  // significant byte first); NimBLEAddress's byte-array constructor expects
+  // the printed order and reverses, so build it from a ble_addr_t instead.
+  ble_addr_t raw{};
+  raw.type = address_type;
+  std::copy(address.begin(), address.end(), raw.val);
+  const NimBLEAddress addr(raw);
+  if (!NimBLEDevice::isBonded(addr)) {
+    error = "no such paired controller";
     return false;
+  }
   // drop the live connection first if it is this controller (the client would
   // otherwise re-bond)
   for (auto *client : NimBLEDevice::getConnectedClients()) {
@@ -772,14 +802,24 @@ bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type
       reset_link_state("bond forgotten");
     }
   }
-  return NimBLEDevice::deleteBond(addr);
+  ScanHold hold;
+  if (!NimBLEDevice::deleteBond(addr)) {
+    error = "the bond store could not delete the bond";
+    return false;
+  }
+  return true;
 }
 
-bool ble_clear_bonds() {
+bool ble_clear_bonds(std::string &error) {
   // drop the live connection first (its client would otherwise re-bond)
   for (auto *client : NimBLEDevice::getConnectedClients()) {
     client->disconnect();
   }
   reset_link_state("all bonds cleared");
-  return NimBLEDevice::deleteAllBonds();
+  ScanHold hold;
+  if (!NimBLEDevice::deleteAllBonds()) {
+    error = "the bond store could not be cleared (some bonds may remain)";
+    return false;
+  }
+  return true;
 }

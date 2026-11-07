@@ -69,9 +69,13 @@ using bond_name_callback_t = std::function<void(const std::array<uint8_t, 6> &ad
                                                 uint8_t address_type, const std::string &name)>;
 void ble_set_bond_name_callback(bond_name_callback_t callback);
 /// Forget one bond (disconnecting it first if it is the connected controller).
-/// Returns false if no such bond exists.
-bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type);
-/// Disconnect any connected controller and forget every bond. Returns false if
-/// the bond store could not be cleared (bonds may remain).
-bool ble_clear_bonds();
+/// Pauses the scan for the deletion (the host refuses to unpair while
+/// scanning). Returns false, with @p error set, if no such bond exists or the
+/// bond store could not delete it.
+bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type,
+                     std::string &error);
+/// Disconnect any connected controller and forget every bond, pausing the scan
+/// for the deletion. Returns false, with @p error set, if the bond store could
+/// not be cleared (bonds may remain).
+bool ble_clear_bonds(std::string &error);
 std::string get_connected_client_serial_number();
