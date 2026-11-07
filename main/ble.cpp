@@ -460,7 +460,26 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
 static void start_scan(bool pairing);
 
 // (Re)start the scan when nothing is connected, at most every kScanRetryUs.
+// Bond deletion needs the radio idle: the host refuses to unpair while a scan
+// (or advertising) is active, as the peer's resolving-list entry cannot be
+// removed then (BLE_HS_EBUSY), and the dongle scans whenever nothing is
+// connected. A ScanHold stops the scan and keeps the supervisor from starting
+// it again until the hold is released; the next tick then restarts it.
+static std::atomic<bool> scan_hold{false};
+class ScanHold {
+public:
+  ScanHold() {
+    scan_hold = true;
+    NimBLEDevice::getScan()->stop();
+  }
+  ~ScanHold() { scan_hold = false; }
+  ScanHold(const ScanHold &) = delete;
+  ScanHold &operator=(const ScanHold &) = delete;
+};
+
 static void ensure_scanning(int64_t now) {
+  if (scan_hold)
+    return;
   if (NimBLEDevice::getScan()->isScanning()) {
     link_state = BleLinkState::Scanning;
     return;
@@ -755,10 +774,13 @@ std::vector<BleBond> ble_bonds() {
   return bonds;
 }
 
-bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type) {
+bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type,
+                     std::string &error) {
   const NimBLEAddress addr(address.data(), address_type);
-  if (!NimBLEDevice::isBonded(addr))
+  if (!NimBLEDevice::isBonded(addr)) {
+    error = "no such paired controller";
     return false;
+  }
   // drop the live connection first if it is this controller (the client would
   // otherwise re-bond)
   for (auto *client : NimBLEDevice::getConnectedClients()) {
@@ -767,14 +789,24 @@ bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type
       reset_link_state("bond forgotten");
     }
   }
-  return NimBLEDevice::deleteBond(addr);
+  ScanHold hold;
+  if (!NimBLEDevice::deleteBond(addr)) {
+    error = "the bond store could not delete the bond";
+    return false;
+  }
+  return true;
 }
 
-bool ble_clear_bonds() {
+bool ble_clear_bonds(std::string &error) {
   // drop the live connection first (its client would otherwise re-bond)
   for (auto *client : NimBLEDevice::getConnectedClients()) {
     client->disconnect();
   }
   reset_link_state("all bonds cleared");
-  return NimBLEDevice::deleteAllBonds();
+  ScanHold hold;
+  if (!NimBLEDevice::deleteAllBonds()) {
+    error = "the bond store could not be cleared (some bonds may remain)";
+    return false;
+  }
+  return true;
 }
