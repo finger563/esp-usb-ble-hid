@@ -153,7 +153,11 @@ for the Switch, and macOS has no X-Input driver. The setting applies at the
 next boot (USB descriptors are fixed at enumeration), so change it, then
 *Reboot* on the Device tab; the console connects to the dongle in either mode,
 and the Device tab shows which mode is running and whether a change is waiting
-for a reboot.
+for a reboot. Reboot before updating the firmware: a change still waiting
+takes effect when the new image boots, and the `espp-ota` command-line tool,
+which reconnects to the identity it flashed, then reports the dongle missing
+and leaves the image unconfirmed (`espp-ota mark-valid` with the new identity
+fixes that; the console handles either identity).
 
 In Xbox 360 mode the dongle stays a composite device, so the console keeps
 working: it presents Microsoft's vendor ID with a product ID of its own (so
