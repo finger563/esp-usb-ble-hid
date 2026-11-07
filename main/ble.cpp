@@ -664,10 +664,15 @@ static void start_scan(bool pairing) {
     // the link supervisor: (re)scans when nothing is connected, drives the
     // encryption + HID subscription of a connected controller, owns the LED
     using namespace std::chrono_literals;
+    // The callback runs NimBLE's client calls (security request, service
+    // discovery, subscribe, name read) and formats log / detail strings on this
+    // task: with NimBLE-cpp 2.6 that overflows espp's 4 KB default timer stack
+    // on the first connection.
     scanTimer = std::make_unique<espp::Timer>(
         espp::Timer::Config{.name = "Scan Timer",
                             .period = 100ms,
                             .callback = timer_callback,
+                            .stack_size_bytes = 8192,
                             .log_level = espp::Logger::Verbosity::INFO});
   }
 }
