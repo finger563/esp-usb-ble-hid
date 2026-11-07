@@ -1867,6 +1867,8 @@
     let connIdentity = null;      // usbIdentity() of the connected (or just lost) dongle: every dongle shares the
                                   // VID/PID, the firmware-assigned USB serial (from the MAC) tells them apart
     let expectRestart = false;    // a reboot we asked for is coming; a disconnect is not an error
+    let usbControllerChangePending = false; // the USB controller type was changed but not yet applied: the next
+                                            // boot enumerates under the other identity (see renderInfo / DONGLE_IDS)
     let expectBootloader = false; // we sent REBOOT_TO_BOOTLOADER: the dongle comes back as the ROM's USB device, not as itself
 
     if (!navigator.usb) {
@@ -1915,12 +1917,35 @@
     // The lookup runs outside the open gate, so re-check afterwards that the
     // attempt was not cancelled (switch turned off) and that no manual connect
     // completed meanwhile — the gate refuses while connected as well.
+    // A dongle that rebooted with a USB controller-type change waiting comes
+    // back under its other identity (DONGLE_IDS) with the same serial number:
+    // look for the serial under every dongle identity, and say so when it is
+    // back under one this page was never granted (only Connect dongle can
+    // authorize it; the browser hands out permitted devices only).
+    async function findPermittedDongle(identity) {
+      const same = await findPermittedUsbDevice(identity);
+      if (same || !identity || !identity.serial) return same;
+      for (const id of DONGLE_IDS) {
+        if (id.vendorId === identity.vid && id.productId === identity.pid) continue;
+        const other = await findPermittedUsbDevice({ transport: "usb", vid: id.vendorId, pid: id.productId, serial: identity.serial });
+        if (other) return other;
+      }
+      return null;
+    }
     async function reconnectAttempt(identity, attempt, token) {
       if (transport) return true;
-      const d = await findPermittedUsbDevice(identity);
+      const d = await findPermittedDongle(identity);
       if (token.cancelled() || transport) return false;
-      if (!d) return false;
-      if (attempt === 1 || !token.cancelled()) logLine("sys", "Dongle is back (" + describeIdentity(usbIdentity(d)) + "); reconnecting…");
+      if (!d) {
+        if (attempt === 3 && usbControllerChangePending)
+          logLine("warn", "The dongle was set to the other USB controller type, so it is coming back under its other USB identity (" +
+                  DONGLE_IDS.map((id) => describeIdentity({ transport: "usb", vid: id.vendorId, pid: id.productId })).join(" / ") +
+                  "). If this page was never granted that identity, click “Connect dongle” to authorize it.");
+        return false;
+      }
+      const back = usbIdentity(d);
+      const other = identity && (back.vid !== identity.vid || back.pid !== identity.pid);
+      if (attempt === 1 || other || !token.cancelled()) logLine("sys", "Dongle is back (" + describeIdentity(back) + (other ? ", its other USB identity" : "") + "); reconnecting…");
       return !!(await openPermitted(d, "Reconnected to"));
     }
     // A permitted dongle was plugged in while the console is idle: open it (a
@@ -1929,7 +1954,19 @@
     if (navigator.usb && navigator.usb.addEventListener) {
       navigator.usb.addEventListener("connect", async (e) => {
         const d = e.device;
-        if (transport || !els.autoConnect.checked || reconnect.isActive() || !isDongle(d)) return;
+        if (transport || !els.autoConnect.checked || !isDongle(d)) return;
+        if (reconnect.isActive()) {
+          // the supervisor matches the exact identity it lost; the dongle it is
+          // recovering can arrive under its other identity (a controller-type
+          // change applied by the reboot): same serial, different VID/PID
+          const lost = connIdentity;
+          if (!(lost && lost.serial && d.serialNumber === lost.serial && (d.vendorId !== lost.vid || d.productId !== lost.pid))) return;
+          await new Promise((r) => setTimeout(r, 600));
+          if (transport || !els.autoConnect.checked || openGate.isBusy()) return;
+          logLine("sys", "Dongle is back under its other USB identity (" + describeIdentity(usbIdentity(d)) + "); reconnecting…");
+          await openPermitted(d, "Reconnected to");
+          return;
+        }
         await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
         if (transport || !els.autoConnect.checked || reconnect.isActive() || openGate.isBusy()) return; // the switch may have been turned off meanwhile
         logLine("sys", "Dongle plugged in (" + describeIdentity(usbIdentity(d)) + "); connecting…");
@@ -2346,6 +2383,7 @@
       else {
         const wanted = deviceSettings && ("usb_controller" in deviceSettings) ? deviceSettings.usb_controller : null;
         const pending = wanted !== null && wanted !== info.usbController;
+        usbControllerChangePending = pending;
         els.iUsbController.textContent = (USB_CONTROLLER[info.usbController] || ("unknown (" + info.usbController + ")")) +
           (pending ? " — set to " + USB_CONTROLLER[wanted] + ", reboot to apply" : "");
       }
@@ -2410,8 +2448,10 @@
         // driver (macOS has none) the first report stays queued and this
         // shows as not read; the console itself is unaffected.
         if (info.usbHidReady) {
-          usbText = "X-Input reports read by the host" + sent; usbTone = "ok";
+          usbText = (stats && info.usbHidReports === 0 ? "ready, no report sent yet" : "X-Input reports taken by the host" + sent); usbTone = "ok";
         } else {
+          // the firmware reports a stall only after a report has been in
+          // flight for a few poll intervals, not the gap before a normal poll
           usbText = "host is not reading X-Input reports" + sent; usbTone = "warn";
           problems.push("No X-Input driver is reading the controller interface — macOS has none (the console still works); on Windows check joy.cpl / Game Controllers, on Linux that xpad bound. The reports resume as soon as a driver reads them.");
         }
