@@ -776,7 +776,13 @@ std::vector<BleBond> ble_bonds() {
 
 bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type,
                      std::string &error) {
-  const NimBLEAddress addr(address.data(), address_type);
+  // The bond list hands out the address as NimBLE stores it (getVal(), least
+  // significant byte first); NimBLEAddress's byte-array constructor expects
+  // the printed order and reverses, so build it from a ble_addr_t instead.
+  ble_addr_t raw{};
+  raw.type = address_type;
+  std::copy(address.begin(), address.end(), raw.val);
+  const NimBLEAddress addr(raw);
   if (!NimBLEDevice::isBonded(addr)) {
     error = "no such paired controller";
     return false;
