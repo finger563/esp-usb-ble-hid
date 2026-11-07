@@ -49,8 +49,11 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
 /// What the device is on USB this boot (the setting the firmware booted with).
 device_config::UsbController usb_personality();
 
-/// Xbox 360 mode: send an X-Input input report (no-op in Switch Pro mode or
-/// while the host is not ready). Safe from any task except the TinyUSB task.
+/// Xbox 360 mode: record the controller state as the X-Input report to send
+/// (no-op in Switch Pro mode). The sender task submits the latest state and
+/// keeps retrying until the host takes it (so a release, or the neutral state
+/// after a BLE disconnect, is never lost) and sends it again after a remount.
+/// Safe from any task.
 bool usb_push_xinput(const espp::xinput::GamepadState &state);
 
 /// Whether the USB host has configured (mounted) the device.
@@ -58,7 +61,9 @@ bool usb_is_mounted();
 
 /// Whether the host takes input: Switch Pro mode, the host has completed the
 /// handshake and enabled input reports (the streamed reports are consumed);
-/// Xbox 360 mode, the X-Input interface is mounted and accepting reports.
+/// Xbox 360 mode, the X-Input interface is mounted and the host is reading its
+/// reports (none has been left in flight for longer than a few poll intervals;
+/// a host without an X-Input driver never reads them).
 bool usb_hid_ready();
 
 /// Input reports accepted by the USB stack since boot (diagnostics).

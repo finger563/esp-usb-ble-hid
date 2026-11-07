@@ -36,6 +36,22 @@ static std::atomic<bool> ever_mounted{false};
 static std::atomic<int64_t> unmounted_at_us{0};
 static std::atomic<uint32_t> hid_reports_sent{0}; // input reports accepted by TinyUSB
 
+// --- X-Input TX: the latest state, sent from the sender task ----------------------
+//
+// usb_push_xinput() only records the state; the sender task submits it. A
+// report the endpoint cannot take yet (the previous one still in flight, or a
+// host that is not reading) is retried every tick until it is accepted, so a
+// release, or the neutral state after a BLE disconnect, is never lost; after a
+// (re)mount the state is sent again so the new host starts from the truth.
+// Guarded by hid_tx_mutex, woken through hid_tx_cv like the Switch replies.
+static espp::xinput::GamepadState xinput_state{};
+static uint32_t xinput_generation{0};      // bumped by every push
+static uint32_t xinput_sent_generation{0}; // the generation the host has
+static std::atomic<int64_t> xinput_last_sent_us{0};
+// A report in flight for longer than this means nobody is reading the X-Input
+// interface (a host without the driver; a working one polls every 4 ms).
+static constexpr int64_t kXinputStallUs = 250 * 1000;
+
 // --- HID TX: handshake replies + the streamed input report ---------------------
 //
 // Replies are produced on the TinyUSB task (when a host OUTPUT report arrives)
@@ -67,7 +83,9 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
   {
     std::unique_lock<std::mutex> lock(hid_tx_mutex);
     // the real Pro Controller reports every 8 ms (full-speed HID poll rate)
-    hid_tx_cv.wait_for(lock, 8ms, [] { return !hid_tx_queue.empty(); });
+    hid_tx_cv.wait_for(lock, 8ms, [] {
+      return !hid_tx_queue.empty() || xinput_generation != xinput_sent_generation;
+    });
     if (!hid_tx_queue.empty()) {
       rep = std::move(hid_tx_queue.front());
       hid_tx_queue.pop_front();
@@ -100,6 +118,25 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
     if (!report.empty() &&
         usb->write_hid_report(controller->input_report_id(), report, ec)) // best-effort
       hid_reports_sent.fetch_add(1);
+  } else if (personality == device_config::UsbController::Xbox360) {
+    // the latest state, until the endpoint takes it (see the X-Input TX note)
+    espp::xinput::GamepadState state;
+    uint32_t generation = 0;
+    bool pending = false;
+    {
+      std::lock_guard<std::mutex> lock(hid_tx_mutex);
+      if (xinput_generation != xinput_sent_generation) {
+        state = xinput_state;
+        generation = xinput_generation;
+        pending = true;
+      }
+    }
+    if (pending && usb->update_xinput_state(state)) {
+      std::lock_guard<std::mutex> lock(hid_tx_mutex);
+      xinput_sent_generation = generation; // a newer push keeps it pending
+      hid_reports_sent.fetch_add(1);
+      xinput_last_sent_us.store(esp_timer_get_time());
+    }
   }
   return false; // don't stop the task
 }
@@ -156,21 +193,29 @@ bool usb_is_mounted() { return mounted.load(); }
 bool usb_hid_ready() {
   if (!mounted.load() || !usb)
     return false;
-  if (personality == device_config::UsbController::Xbox360)
-    return usb->is_xinput_ready();
+  if (personality == device_config::UsbController::Xbox360) {
+    // "ready" = the host takes the reports: the endpoint is free, or the last
+    // report has been in flight for less than a poll interval or two (a
+    // snapshot between a submit and the host's next poll is not a stall)
+    if (usb->is_xinput_ready())
+      return true;
+    return esp_timer_get_time() - xinput_last_sent_us.load() < kXinputStallUs;
+  }
   return controller && controller->is_ready();
 }
 
 device_config::UsbController usb_personality() { return personality; }
 
 bool usb_push_xinput(const espp::xinput::GamepadState &state) {
-  if (personality != device_config::UsbController::Xbox360 || !usb || !mounted.load())
+  if (personality != device_config::UsbController::Xbox360 || !usb)
     return false;
-  // non-blocking: a report the endpoint cannot take right now is dropped, the
-  // next state change resends (XUSB keeps the last report it got)
-  if (!usb->update_xinput_state(state))
-    return false;
-  hid_reports_sent.fetch_add(1);
+  // recorded even while unmounted: the sender submits it once the host is there
+  {
+    std::lock_guard<std::mutex> lock(hid_tx_mutex);
+    xinput_state = state;
+    ++xinput_generation;
+  }
+  hid_tx_cv.notify_one();
   return true;
 }
 
@@ -267,10 +312,22 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
 #endif
 
 #if CONFIG_DONGLE_USB_CDC_CONSOLE
-  espp::UsbDevice::CdcFunction cdc;
-  cdc.interface_name = "Dongle Log Console";
-  cdc.route_console = true; // logs over the same cable (teed to UART0)
-  cfg.cdc = cdc;
+#if !CONFIG_DONGLE_USB_VENDOR_INTERFACE
+  // Without the vendor interface there is no MS OS 2.0 descriptor, so a
+  // composite Xbox device would carry neither the retail identity nor the
+  // XUSB10 compatible ID and Windows would bind nothing: in that build Xbox
+  // mode is X-Input alone (retail identity, binds everywhere), without the
+  // CDC log console.
+  if (xbox) {
+    logger.warn("Xbox 360 mode without the vendor interface: X-Input alone, no CDC log console");
+  } else
+#endif
+  {
+    espp::UsbDevice::CdcFunction cdc;
+    cdc.interface_name = "Dongle Log Console";
+    cdc.route_console = true; // logs over the same cable (teed to UART0)
+    cfg.cdc = cdc;
+  }
 #endif
 
   usb = std::make_unique<espp::UsbDevice>(cfg);
@@ -287,6 +344,12 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
     if (personality == device_config::UsbController::SwitchPro && controller)
       if (auto init = controller->on_attach())
         enqueue_hid(std::move(*init));
+    if (personality == device_config::UsbController::Xbox360) {
+      // the (new) host starts from the current state, not from what the
+      // previous one last took
+      std::lock_guard<std::mutex> lock(hid_tx_mutex);
+      xinput_sent_generation = xinput_generation - 1;
+    }
 #if CONFIG_DONGLE_USB_VENDOR_INTERFACE
     // a frame half-parsed before the (re)connect belongs to the old link
     usb_dispatcher().request_reset();

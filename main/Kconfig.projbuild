@@ -26,7 +26,10 @@ menu "USB Configuration"
             firmware update and crash-dump download) used by the browser
             console (web/dongle_console.html). Disable this to present a plain
             single-interface HID gamepad, e.g. if a host refuses the composite
-            device.
+            device. Without it, Xbox 360 mode is X-Input alone (the retail
+            identity; the CDC log console is left out in that mode), since the
+            MS OS 2.0 descriptor that lets Windows bind a composite X-Input
+            device comes with this interface.
 
     config DONGLE_USB_XBOX_PID
         hex "USB product ID in Xbox 360 mode (vendor ID 0x045E)"

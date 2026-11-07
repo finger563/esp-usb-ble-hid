@@ -159,6 +159,12 @@ which reconnects to the identity it flashed, then reports the dongle missing
 and leaves the image unconfirmed (`espp-ota mark-valid` with the new identity
 fixes that; the console handles either identity).
 
+Built without the vendor interface (`DONGLE_USB_VENDOR_INTERFACE=n`, not the
+default), Xbox 360 mode is X-Input alone with the retail identity, and the CDC
+log console is left out in that mode: without the vendor interface there is no
+MS OS 2.0 descriptor to carry the compatible ID, and a composite device
+without either would bind nothing on Windows.
+
 On a host without an X-Input driver (a Mac, for one) nothing reads the
 controller interface, so the Device tab's USB line says the host is not
 reading X-Input reports: expected, and the console itself still works; the
