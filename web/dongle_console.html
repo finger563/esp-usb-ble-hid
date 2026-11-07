@@ -2399,12 +2399,25 @@
         }
       }
       let usbText = "not mounted", usbTone = "";
+      const xbox = info.usbController === 1;
+      const sent = stats ? ", " + info.usbHidReports.toLocaleString() + (info.usbHidReports === 1 ? " report" : " reports") + " sent" : "";
       if (info.usbMounted && !stats) {
         // older firmware reports neither the handshake state nor the counters
         usbText = "mounted (this firmware reports no handshake state)";
+      } else if (info.usbMounted && xbox) {
+        // X-Input has no handshake: "ready" means the host's driver is reading
+        // the controller interface (the last report was taken). Without a
+        // driver (macOS has none) the first report stays queued and this
+        // shows as not read; the console itself is unaffected.
+        if (info.usbHidReady) {
+          usbText = "X-Input reports read by the host" + sent; usbTone = "ok";
+        } else {
+          usbText = "host is not reading X-Input reports" + sent; usbTone = "warn";
+          problems.push("No X-Input driver is reading the controller interface — macOS has none (the console still works); on Windows check joy.cpl / Game Controllers, on Linux that xpad bound. The reports resume as soon as a driver reads them.");
+        }
       } else if (info.usbMounted) {
         if (info.usbHidReady) {
-          usbText = "handshake done" + (stats ? ", " + info.usbHidReports.toLocaleString() + (info.usbHidReports === 1 ? " report" : " reports") + " sent" : "");
+          usbText = "handshake done" + sent;
           usbTone = "ok";
         } else {
           usbText = "waiting for host handshake"; usbTone = "warn";

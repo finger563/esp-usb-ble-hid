@@ -159,6 +159,11 @@ which reconnects to the identity it flashed, then reports the dongle missing
 and leaves the image unconfirmed (`espp-ota mark-valid` with the new identity
 fixes that; the console handles either identity).
 
+On a host without an X-Input driver (a Mac, for one) nothing reads the
+controller interface, so the Device tab's USB line says the host is not
+reading X-Input reports: expected, and the console itself still works; the
+reports flow as soon as a driver reads them (Windows, Linux, Steam).
+
 In Xbox 360 mode the dongle stays a composite device, so the console keeps
 working: it presents Microsoft's vendor ID with a product ID of its own (so
 Linux's xpad recognizes the controller interface, and Windows splits the
