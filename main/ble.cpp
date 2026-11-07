@@ -463,23 +463,24 @@ static void start_scan(bool pairing);
 // Bond deletion needs the radio idle: the host refuses to unpair while a scan
 // (or advertising) is active, as the peer's resolving-list entry cannot be
 // removed then (BLE_HS_EBUSY), and the dongle scans whenever nothing is
-// connected. A ScanHold stops the scan and keeps the supervisor from starting
-// it again until the hold is released; the next tick then restarts it.
-static std::atomic<bool> scan_hold{false};
+// connected. Every scan start goes through start_scan(), which takes
+// scan_mutex; a ScanHold owns the mutex for its whole lifetime (so no path can
+// start a scan between the stop and the end of the deletion) and stops the
+// scan. A start that arrives meanwhile waits on the mutex and runs once the
+// hold is released. Nothing takes scan_mutex on the NimBLE host task, so the
+// host's work for the deletion cannot wait on it.
+static std::mutex scan_mutex;
 class ScanHold {
 public:
-  ScanHold() {
-    scan_hold = true;
-    NimBLEDevice::getScan()->stop();
-  }
-  ~ScanHold() { scan_hold = false; }
+  ScanHold() { NimBLEDevice::getScan()->stop(); }
   ScanHold(const ScanHold &) = delete;
   ScanHold &operator=(const ScanHold &) = delete;
+
+private:
+  std::lock_guard<std::mutex> lock_{scan_mutex}; // taken before the constructor body runs
 };
 
 static void ensure_scanning(int64_t now) {
-  if (scan_hold)
-    return;
   if (NimBLEDevice::getScan()->isScanning()) {
     link_state = BleLinkState::Scanning;
     return;
@@ -649,6 +650,7 @@ void init_ble(const std::string &device_name) {
 // Start (or restart) the scan. Called from the main task at boot, from the
 // console's actions, and from the scan timer; the LED is handled by the timer.
 static void start_scan(bool pairing) {
+  std::lock_guard<std::mutex> lk(scan_mutex); // see ScanHold
   is_pairing = pairing;
   breathing_period = pairing ? pairing_breathing_period : reconnecting_breathing_period;
 
