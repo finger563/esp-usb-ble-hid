@@ -39,8 +39,15 @@ public:
     paused_ = false;
   }
 
+  /// What the dongle is on USB; the host icon follows it.
+  enum class UsbHost {
+    SwitchPro, ///< Switch Pro Controller: the Switch icon
+    Xbox360,   ///< Xbox 360 controller: the Xbox icon
+  };
+
   void set_usb_connected(bool connected);
   void set_ble_connected(bool connected);
+  void set_usb_host(UsbHost host);
 
   void set_label_text(std::string_view text) {
     std::lock_guard<std::recursive_mutex> lk(mutex_);

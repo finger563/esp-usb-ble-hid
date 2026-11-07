@@ -431,6 +431,11 @@ extern "C" void app_main(void) {
   if (!start_usb(personality, usb_controller)) {
     logger.error("USB initialization failed");
   }
+#if HAS_DISPLAY
+  // the screen's USB side shows what the dongle is to the host
+  gui->set_usb_host(personality == device_config::UsbController::Xbox360 ? Gui::UsbHost::Xbox360
+                                                                         : Gui::UsbHost::SwitchPro);
+#endif // HAS_DISPLAY
   // hold L+R for a moment after every USB enumeration so the Switch's Change
   // Grip/Order screen registers the dongle (see usb_registration_tick)
   static espp::Timer usb_registration_timer({.name = "usb-reg",

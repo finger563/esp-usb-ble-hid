@@ -38,6 +38,13 @@ void Gui::set_usb_connected(bool connected) {
   }
 }
 
+void Gui::set_usb_host(UsbHost host) {
+  std::lock_guard<std::recursive_mutex> lk(mutex_);
+  // the USB side of the screen shows what the dongle is to the host
+  // ui_SwitchIcon (the image object keeps its name from the design)
+  lv_image_set_src(ui_SwitchIcon, host == UsbHost::Xbox360 ? &ui_img_xbox_png : &ui_img_switch_png);
+}
+
 void Gui::set_ble_connected(bool connected) {
   std::lock_guard<std::recursive_mutex> lk(mutex_);
   // hide or show the ble image
