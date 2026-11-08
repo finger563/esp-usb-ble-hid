@@ -45,8 +45,9 @@ static std::atomic<uint32_t> hid_reports_sent{0}; // input reports accepted by T
 // (re)mount the state is sent again so the new host starts from the truth.
 // Guarded by hid_tx_mutex, woken through hid_tx_cv like the Switch replies.
 static espp::xinput::GamepadState xinput_state{};
-static uint32_t xinput_generation{0};      // bumped by every push
+static uint32_t xinput_generation{0};      // bumped by every push (and by a mount)
 static uint32_t xinput_sent_generation{0}; // the generation the host has
+static bool xinput_kick{false};            // a push: try at once, then on the 8 ms tick
 static std::atomic<int64_t> xinput_last_sent_us{0};
 // A report in flight for longer than this means nobody is reading the X-Input
 // interface (a host without the driver; a working one polls every 4 ms).
@@ -83,9 +84,11 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
   {
     std::unique_lock<std::mutex> lock(hid_tx_mutex);
     // the real Pro Controller reports every 8 ms (full-speed HID poll rate)
-    hid_tx_cv.wait_for(lock, 8ms, [] {
-      return !hid_tx_queue.empty() || xinput_generation != xinput_sent_generation;
-    });
+    // A pending X-Input state does not bypass the wait: a fresh push wakes the
+    // sender once (kick), after that it retries on the 8 ms tick, so a busy
+    // endpoint (a host that is not reading) never makes this task spin.
+    hid_tx_cv.wait_for(lock, 8ms, [] { return !hid_tx_queue.empty() || xinput_kick; });
+    xinput_kick = false;
     if (!hid_tx_queue.empty()) {
       rep = std::move(hid_tx_queue.front());
       hid_tx_queue.pop_front();
@@ -214,6 +217,7 @@ bool usb_push_xinput(const espp::xinput::GamepadState &state) {
     std::lock_guard<std::mutex> lock(hid_tx_mutex);
     xinput_state = state;
     ++xinput_generation;
+    xinput_kick = true;
   }
   hid_tx_cv.notify_one();
   return true;
@@ -346,9 +350,14 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
         enqueue_hid(std::move(*init));
     if (personality == device_config::UsbController::Xbox360) {
       // the (new) host starts from the current state, not from what the
-      // previous one last took
-      std::lock_guard<std::mutex> lock(hid_tx_mutex);
-      xinput_sent_generation = xinput_generation - 1;
+      // previous one last took: a new generation, so an acknowledgment of a
+      // report submitted before the remount cannot clear it
+      {
+        std::lock_guard<std::mutex> lock(hid_tx_mutex);
+        ++xinput_generation;
+        xinput_kick = true;
+      }
+      hid_tx_cv.notify_one();
     }
 #if CONFIG_DONGLE_USB_VENDOR_INTERFACE
     // a frame half-parsed before the (re)connect belongs to the old link

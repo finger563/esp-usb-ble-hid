@@ -1956,15 +1956,18 @@
         const d = e.device;
         if (transport || !els.autoConnect.checked || !isDongle(d)) return;
         if (reconnect.isActive()) {
-          // the supervisor matches the exact identity it lost; the dongle it is
-          // recovering can arrive under its other identity (a controller-type
-          // change applied by the reboot): same serial, different VID/PID
+          // The supervisor wakes only for the exact identity it lost, and the
+          // dongle it is recovering can arrive under its other identity (a
+          // controller-type change applied by the reboot): same serial,
+          // different VID/PID. Wake it with the lost identity, so the open is
+          // one of its own attempts (its lookup finds either identity, and its
+          // cancellation closes an open that finishes after Auto-connect was
+          // turned off) rather than a connection adopted behind its back.
           const lost = connIdentity;
           if (!(lost && lost.serial && d.serialNumber === lost.serial && (d.vendorId !== lost.vid || d.productId !== lost.pid))) return;
-          await new Promise((r) => setTimeout(r, 600));
-          if (transport || !els.autoConnect.checked || openGate.isBusy()) return;
-          logLine("sys", "Dongle is back under its other USB identity (" + describeIdentity(usbIdentity(d)) + "); reconnecting…");
-          await openPermitted(d, "Reconnected to");
+          await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
+          if (transport || !els.autoConnect.checked || !reconnect.isActive()) return;
+          reconnect.onDeviceAppeared(lost);
           return;
         }
         await new Promise((r) => setTimeout(r, 600)); // let the OS finish enumerating
