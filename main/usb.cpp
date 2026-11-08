@@ -26,6 +26,7 @@ static espp::Logger logger({.tag = "USB", .level = espp::Logger::Verbosity::INFO
 
 static std::unique_ptr<espp::UsbDevice> usb;
 static std::shared_ptr<espp::SwitchPro> controller;
+static device_config::UsbController personality{device_config::UsbController::SwitchPro};
 static std::atomic<bool> mounted{false};
 // The Switch sometimes drops the device without a new bus transaction (e.g.
 // after the Change Grip/Order screen): the pull-up is re-armed after the
@@ -34,6 +35,23 @@ static constexpr int64_t kReenumerateAfterUs = 2500 * 1000;
 static std::atomic<bool> ever_mounted{false};
 static std::atomic<int64_t> unmounted_at_us{0};
 static std::atomic<uint32_t> hid_reports_sent{0}; // input reports accepted by TinyUSB
+
+// --- X-Input TX: the latest state, sent from the sender task ----------------------
+//
+// usb_push_xinput() only records the state; the sender task submits it. A
+// report the endpoint cannot take yet (the previous one still in flight, or a
+// host that is not reading) is retried every tick until it is accepted, so a
+// release, or the neutral state after a BLE disconnect, is never lost; after a
+// (re)mount the state is sent again so the new host starts from the truth.
+// Guarded by hid_tx_mutex, woken through hid_tx_cv like the Switch replies.
+static espp::xinput::GamepadState xinput_state{};
+static uint32_t xinput_generation{0};      // bumped by every push (and by a mount)
+static uint32_t xinput_sent_generation{0}; // the generation the host has
+static bool xinput_kick{false};            // a push: try at once, then on the 8 ms tick
+static std::atomic<int64_t> xinput_last_sent_us{0};
+// A report in flight for longer than this means nobody is reading the X-Input
+// interface (a host without the driver; a working one polls every 4 ms).
+static constexpr int64_t kXinputStallUs = 250 * 1000;
 
 // --- HID TX: handshake replies + the streamed input report ---------------------
 //
@@ -66,7 +84,11 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
   {
     std::unique_lock<std::mutex> lock(hid_tx_mutex);
     // the real Pro Controller reports every 8 ms (full-speed HID poll rate)
-    hid_tx_cv.wait_for(lock, 8ms, [] { return !hid_tx_queue.empty(); });
+    // A pending X-Input state does not bypass the wait: a fresh push wakes the
+    // sender once (kick), after that it retries on the 8 ms tick, so a busy
+    // endpoint (a host that is not reading) never makes this task spin.
+    hid_tx_cv.wait_for(lock, 8ms, [] { return !hid_tx_queue.empty() || xinput_kick; });
+    xinput_kick = false;
     if (!hid_tx_queue.empty()) {
       rep = std::move(hid_tx_queue.front());
       hid_tx_queue.pop_front();
@@ -93,11 +115,31 @@ static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
     // a handshake reply: this is our own task, so retry until the endpoint frees
     for (int i = 0; i < 20 && !usb->write_hid_report(rep.id, rep.data, ec); ++i)
       std::this_thread::sleep_for(1ms);
-  } else if (controller->is_ready()) {
+  } else if (personality == device_config::UsbController::SwitchPro && controller &&
+             controller->is_ready()) {
     const auto report = controller->get_input_report();
     if (!report.empty() &&
         usb->write_hid_report(controller->input_report_id(), report, ec)) // best-effort
       hid_reports_sent.fetch_add(1);
+  } else if (personality == device_config::UsbController::Xbox360) {
+    // the latest state, until the endpoint takes it (see the X-Input TX note)
+    espp::xinput::GamepadState state;
+    uint32_t generation = 0;
+    bool pending = false;
+    {
+      std::lock_guard<std::mutex> lock(hid_tx_mutex);
+      if (xinput_generation != xinput_sent_generation) {
+        state = xinput_state;
+        generation = xinput_generation;
+        pending = true;
+      }
+    }
+    if (pending && usb->update_xinput_state(state)) {
+      std::lock_guard<std::mutex> lock(hid_tx_mutex);
+      xinput_sent_generation = generation; // a newer push keeps it pending
+      hid_reports_sent.fetch_add(1);
+      xinput_last_sent_us.store(esp_timer_get_time());
+    }
   }
   return false; // don't stop the task
 }
@@ -151,7 +193,35 @@ void usb_set_rx_overflow_callback(std::function<void()> callback) {
 
 bool usb_is_mounted() { return mounted.load(); }
 
-bool usb_hid_ready() { return mounted.load() && controller && controller->is_ready(); }
+bool usb_hid_ready() {
+  if (!mounted.load() || !usb)
+    return false;
+  if (personality == device_config::UsbController::Xbox360) {
+    // "ready" = the host takes the reports: the endpoint is free, or the last
+    // report has been in flight for less than a poll interval or two (a
+    // snapshot between a submit and the host's next poll is not a stall)
+    if (usb->is_xinput_ready())
+      return true;
+    return esp_timer_get_time() - xinput_last_sent_us.load() < kXinputStallUs;
+  }
+  return controller && controller->is_ready();
+}
+
+device_config::UsbController usb_personality() { return personality; }
+
+bool usb_push_xinput(const espp::xinput::GamepadState &state) {
+  if (personality != device_config::UsbController::Xbox360 || !usb)
+    return false;
+  // recorded even while unmounted: the sender submits it once the host is there
+  {
+    std::lock_guard<std::mutex> lock(hid_tx_mutex);
+    xinput_state = state;
+    ++xinput_generation;
+    xinput_kick = true;
+  }
+  hid_tx_cv.notify_one();
+  return true;
+}
 
 uint32_t usb_hid_reports_sent() { return hid_reports_sent.load(); }
 
@@ -171,15 +241,31 @@ bool usb_write_vendor(std::span<const uint8_t> frame) {
 #endif
 }
 
-bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
+bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::SwitchPro> &ctrl) {
   controller = ctrl;
+  personality = which;
+  const bool xbox = personality == device_config::UsbController::Xbox360;
 
-  // The USB identity must be Nintendo's Pro Controller for a Switch to bind it.
   espp::UsbDevice::Config cfg;
-  cfg.vid = espp::SwitchPro::vid;
-  cfg.pid = espp::SwitchPro::pid;
-  cfg.manufacturer = espp::SwitchPro::manufacturer_name;
-  cfg.product = espp::SwitchPro::product_name;
+  if (xbox) {
+    // Xbox 360 (X-Input) beside the console interface: a composite device, so
+    // not the retail controller's identity (that hardware-ID match would make
+    // Windows' Xbox driver take the whole device and hide the console).
+    // Microsoft's vendor ID keeps Linux's xpad binding the X-Input interface;
+    // the product ID is ours (CONFIG_DONGLE_USB_XBOX_PID); Windows binds its
+    // Xbox 360 driver to the interface through the XUSB10 compatible ID
+    // espp::UsbDevice advertises in the MS OS 2.0 descriptor.
+    cfg.vid = espp::xinput::kDefaultVid;
+    cfg.pid = CONFIG_DONGLE_USB_XBOX_PID;
+    cfg.manufacturer = "esp-usb-ble-hid";
+    cfg.product = "Xbox 360 Controller";
+  } else {
+    // The USB identity must be Nintendo's Pro Controller for a Switch to bind it.
+    cfg.vid = espp::SwitchPro::vid;
+    cfg.pid = espp::SwitchPro::pid;
+    cfg.manufacturer = espp::SwitchPro::manufacturer_name;
+    cfg.product = espp::SwitchPro::product_name;
+  }
   // a stable, per-device serial (derived from the base MAC) so hosts and the
   // browser console can tell dongles apart
   uint8_t mac[6] = {};
@@ -187,26 +273,38 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
   cfg.serial_number = fmt::format("{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}", mac[0], mac[1], mac[2],
                                   mac[3], mac[4], mac[5]);
   cfg.log_level = espp::Logger::Verbosity::WARN;
-  // Descriptor details a Switch compares against a real Pro Controller: device
-  // release, bus power and remote wakeup as the original reports them (one
-  // source of truth: espp::SwitchPro, espp >= 1.3.6).
-  cfg.bcd_device = espp::SwitchPro::bcd_device;
-  cfg.max_power_ma = espp::SwitchPro::max_power_ma;
-  cfg.remote_wakeup = espp::SwitchPro::remote_wakeup;
+  if (xbox) {
+    cfg.bcd_device = espp::xinput::kDefaultBcdDevice;
+    cfg.max_power_ma = 500;
+    cfg.remote_wakeup = false;
+    espp::UsbDevice::XInputFunction xinput;
+    xinput.interface_name = "Xbox 360 Controller";
+    // rumble / LED reports from the host: nothing to drive them with (the
+    // wireless controller's rumble is not forwarded), so they are ignored
+    xinput.on_rumble = [](std::span<const uint8_t>) {};
+    cfg.xinput = xinput;
+  } else {
+    // Descriptor details a Switch compares against a real Pro Controller: device
+    // release, bus power and remote wakeup as the original reports them (one
+    // source of truth: espp::SwitchPro, espp >= 1.3.6).
+    cfg.bcd_device = espp::SwitchPro::bcd_device;
+    cfg.max_power_ma = espp::SwitchPro::max_power_ma;
+    cfg.remote_wakeup = espp::SwitchPro::remote_wakeup;
 
-  espp::UsbDevice::HidFunction hid;
-  hid.interface_name = "Switch Pro Controller";
-  hid.report_descriptor = controller->get_report_descriptor();
-  hid.has_out_endpoint = true; // receive the host's OUTPUT reports (the handshake)
-  hid.poll_interval_ms = 8;    // the real Pro Controller polls at 8 ms
-  hid.on_receive = [](std::span<const uint8_t> data) {
-    // TinyUSB task context: compute the reply and queue it (don't send here)
-    if (data.empty())
-      return;
-    if (auto reply = controller->on_hid_report(data[0], data.data(), data.size()))
-      enqueue_hid(std::move(*reply));
-  };
-  cfg.hid = hid;
+    espp::UsbDevice::HidFunction hid;
+    hid.interface_name = "Switch Pro Controller";
+    hid.report_descriptor = controller->get_report_descriptor();
+    hid.has_out_endpoint = true; // receive the host's OUTPUT reports (the handshake)
+    hid.poll_interval_ms = 8;    // the real Pro Controller polls at 8 ms
+    hid.on_receive = [](std::span<const uint8_t> data) {
+      // TinyUSB task context: compute the reply and queue it (don't send here)
+      if (data.empty())
+        return;
+      if (auto reply = controller->on_hid_report(data[0], data.data(), data.size()))
+        enqueue_hid(std::move(*reply));
+    };
+    cfg.hid = hid;
+  }
 
 #if CONFIG_DONGLE_USB_VENDOR_INTERFACE
   espp::UsbDevice::VendorFunction vendor;
@@ -218,10 +316,22 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
 #endif
 
 #if CONFIG_DONGLE_USB_CDC_CONSOLE
-  espp::UsbDevice::CdcFunction cdc;
-  cdc.interface_name = "Dongle Log Console";
-  cdc.route_console = true; // logs over the same cable (teed to UART0)
-  cfg.cdc = cdc;
+#if !CONFIG_DONGLE_USB_VENDOR_INTERFACE
+  // Without the vendor interface there is no MS OS 2.0 descriptor, so a
+  // composite Xbox device would carry neither the retail identity nor the
+  // XUSB10 compatible ID and Windows would bind nothing: in that build Xbox
+  // mode is X-Input alone (retail identity, binds everywhere), without the
+  // CDC log console.
+  if (xbox) {
+    logger.warn("Xbox 360 mode without the vendor interface: X-Input alone, no CDC log console");
+  } else
+#endif
+  {
+    espp::UsbDevice::CdcFunction cdc;
+    cdc.interface_name = "Dongle Log Console";
+    cdc.route_console = true; // logs over the same cable (teed to UART0)
+    cfg.cdc = cdc;
+  }
 #endif
 
   usb = std::make_unique<espp::UsbDevice>(cfg);
@@ -233,10 +343,22 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
     logger.info("USB mounted");
     mounted.store(true);
     ever_mounted.store(true);
-    // kick off the handshake: the controller proactively sends its device-init
-    // (0x81) report
-    if (auto init = controller->on_attach())
-      enqueue_hid(std::move(*init));
+    // Switch Pro: kick off the handshake, the controller proactively sends its
+    // device-init (0x81) report (X-Input has no handshake)
+    if (personality == device_config::UsbController::SwitchPro && controller)
+      if (auto init = controller->on_attach())
+        enqueue_hid(std::move(*init));
+    if (personality == device_config::UsbController::Xbox360) {
+      // the (new) host starts from the current state, not from what the
+      // previous one last took: a new generation, so an acknowledgment of a
+      // report submitted before the remount cannot clear it
+      {
+        std::lock_guard<std::mutex> lock(hid_tx_mutex);
+        ++xinput_generation;
+        xinput_kick = true;
+      }
+      hid_tx_cv.notify_one();
+    }
 #if CONFIG_DONGLE_USB_VENDOR_INTERFACE
     // a frame half-parsed before the (re)connect belongs to the old link
     usb_dispatcher().request_reset();
@@ -263,11 +385,15 @@ bool start_usb(const std::shared_ptr<espp::SwitchPro> &ctrl) {
     return false;
   }
 
+  // The sender task streams the Switch Pro report and answers the handshake;
+  // X-Input reports are pushed on change (usb_push_xinput), but the task still
+  // owns the pull-up re-arm, so it runs in both modes.
   hid_sender_task = espp::Task::make_unique(
       {.callback = hid_sender_fn,
        .task_config = {.name = "usb_hid_tx", .stack_size_bytes = 4096, .priority = 10}});
   hid_sender_task->start();
 
-  logger.info("USB initialization DONE (serial {})", cfg.serial_number);
+  logger.info("USB initialization DONE ({}, {:04X}:{:04X}, serial {})",
+              xbox ? "Xbox 360 / X-Input" : "Switch Pro", cfg.vid, cfg.pid, cfg.serial_number);
   return true;
 }

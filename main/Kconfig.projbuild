@@ -26,7 +26,26 @@ menu "USB Configuration"
             firmware update and crash-dump download) used by the browser
             console (web/dongle_console.html). Disable this to present a plain
             single-interface HID gamepad, e.g. if a host refuses the composite
-            device.
+            device. Without it, Xbox 360 mode is X-Input alone (the retail
+            identity; the CDC log console is left out in that mode), since the
+            MS OS 2.0 descriptor that lets Windows bind a composite X-Input
+            device comes with this interface.
+
+    config DONGLE_USB_XBOX_PID
+        hex "USB product ID in Xbox 360 mode (vendor ID 0x045E)"
+        default 0x0E60
+        help
+            The USB identity the dongle presents when the "USB controller"
+            setting is Xbox 360 (X-Input). The vendor ID stays Microsoft's so
+            Linux's xpad driver recognizes the X-Input interface. The product ID
+            must be one Windows' Xbox 360 driver INF does NOT list by hardware
+            ID (the retail controllers' 0x028E, 0x0719, ... are): that match
+            takes the whole device and hides the console interface, whereas
+            with its own product ID Windows splits the composite device and
+            binds the X-Input interface through the XUSB10 compatible ID the
+            firmware advertises. The web console lists this same identity as a
+            permitted dongle (DONGLE_IDS in web/dongle_console.html); keep the
+            two in step. Emulation of your own device only.
 
     config DONGLE_USB_CDC_CONSOLE
         bool "Add a CDC-ACM interface carrying the log console"

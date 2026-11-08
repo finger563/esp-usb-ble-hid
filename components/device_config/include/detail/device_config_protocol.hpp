@@ -83,7 +83,20 @@ enum class Key : uint8_t {
                                  ///< connected, relative to LedBrightness (default 25)
   LedActivityBlink = 0x09,       ///< u8 bool: toggle the LED on every input report instead of
                                  ///< holding it steady (debugging aid; default 0)
+  UsbController = 0x0A,          ///< u8 UsbController: what the dongle is on USB (applies after
+                                 ///< reboot; default SwitchPro)
 };
+
+/// What the dongle presents on USB (Key::UsbController, Info::usb_controller).
+/// USB descriptors are fixed at enumeration, so a change takes effect at the
+/// next boot.
+enum class UsbController : uint8_t {
+  SwitchPro = 0, ///< Nintendo Switch Pro Controller (HID; the Switch and anything
+                 ///< that accepts a Pro Controller)
+  Xbox360 = 1,   ///< Xbox 360 wired controller (X-Input; Windows, Linux, Steam,
+                 ///< Android - not the Switch, not macOS)
+};
+static constexpr uint8_t kMaxUsbController = static_cast<uint8_t>(UsbController::Xbox360);
 
 enum class Action : uint8_t {
   StartPairing = 0x01, ///< enter BLE pairing mode (same as holding the button)
@@ -177,8 +190,11 @@ struct Settings {
   std::string ble_name{"Switch"};
   uint8_t led_connected_brightness{25};
   bool led_activity_blink{false};
+  uint8_t usb_controller{static_cast<uint8_t>(UsbController::SwitchPro)};
 
   bool operator==(const Settings &) const = default;
+
+  UsbController usb_controller_kind() const { return static_cast<UsbController>(usb_controller); }
 
   /// Range-check every field. Returns an empty string when valid, otherwise a
   /// human-readable reason.
@@ -189,6 +205,8 @@ struct Settings {
       return "led brightness must be 0..100 %";
     if (led_connected_brightness > 100)
       return "led connected brightness must be 0..100 %";
+    if (usb_controller > kMaxUsbController)
+      return "usb controller must be 0 (Switch Pro) or 1 (Xbox 360)";
     if (ble_name.empty() || ble_name.size() > kMaxBleNameLength)
       return "ble name must be 1.." + std::to_string(kMaxBleNameLength) + " characters";
     const bool unprintable = std::any_of(ble_name.begin(), ble_name.end(), [](char c) {
@@ -204,7 +222,7 @@ struct Settings {
     std::vector<uint8_t> out;
     out.reserve(32 + ble_name.size());
     put_u8(out, kProtocolVersion);
-    put_u8(out, 9);
+    put_u8(out, 10);
     auto tlv_u8 = [&](Key k, uint8_t v) {
       put_u8(out, static_cast<uint8_t>(k));
       put_u8(out, 1);
@@ -220,6 +238,7 @@ struct Settings {
     put_str(out, ble_name);
     tlv_u8(Key::LedConnectedBrightness, led_connected_brightness);
     tlv_u8(Key::LedActivityBlink, led_activity_blink ? 1 : 0);
+    tlv_u8(Key::UsbController, usb_controller);
     return out;
   }
 
@@ -286,6 +305,9 @@ struct Settings {
       case Key::LedActivityBlink:
         ok = as_bool(s.led_activity_blink);
         break;
+      case Key::UsbController:
+        ok = as_u8(s.usb_controller);
+        break;
       default:
         break; // unknown key: ignore
       }
@@ -319,6 +341,9 @@ struct Info {
   bool usb_hid_ready{false};               ///< the host finished the handshake and takes reports
   uint8_t link_state{0};                   ///< where the controller link is (see LinkState)
   std::string link_detail;                 ///< note on the last link event / problem ("" if none)
+  // (a later addition, optional): what the dongle currently IS on USB, which
+  // differs from the usb_controller setting until the reboot that applies it
+  uint8_t usb_controller{static_cast<uint8_t>(UsbController::SwitchPro)};
 
   /// The controller link's bring-up step (link_state). 0 is reserved for
   /// firmware that does not report it.
@@ -344,7 +369,8 @@ struct Info {
   ///               then, appended (older senders stop before it, parsers treat
   ///               it as optional): [ble_notifications u32][ble_last_notify_age_ms u32]
   ///               [usb_hid_reports u32]  (usb_hid_ready is flags bit4), then
-  ///               (a later addition, also optional): [link_state u8][link_detail str]
+  ///               (a later addition, also optional): [link_state u8][link_detail str],
+  ///               then (later still, optional): [usb_controller u8] (see UsbController)
   std::vector<uint8_t> serialize() const {
     std::vector<uint8_t> out;
     put_u8(out, kProtocolVersion);
@@ -373,6 +399,7 @@ struct Info {
     put_u32(out, usb_hid_reports);
     put_u8(out, link_state);
     put_str(out, link_detail);
+    put_u8(out, usb_controller);
     return out;
   }
 
@@ -416,6 +443,8 @@ struct Info {
       i.link_state = *state;
     if (const auto detail = r.str())
       i.link_detail = *detail;
+    if (const auto usb = r.u8())
+      i.usb_controller = *usb;
     return i;
   }
 };
