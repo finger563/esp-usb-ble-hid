@@ -27,8 +27,16 @@ static espp::Logger logger({.tag = "Services", .level = espp::Logger::Verbosity:
 static constexpr const char *kNvsNamespace = "dongle";
 static std::unique_ptr<espp::Nvs> nvs_storage;
 
+static device_config::Settings default_settings() {
+  device_config::Settings s;
+#if CONFIG_DONGLE_DEFAULT_XBOX360
+  s.usb_controller = static_cast<uint8_t>(device_config::UsbController::Xbox360);
+#endif
+  return s;
+}
+
 static device_config::Settings load_settings() {
-  device_config::Settings s; // defaults
+  device_config::Settings s = default_settings();
   if (!nvs_storage)
     return s;
   std::error_code ec;
@@ -53,7 +61,7 @@ static device_config::Settings load_settings() {
   // something this one rejects)
   if (auto why = s.validate(); !why.empty()) {
     logger.warn("Stored settings invalid ({}); using defaults", why);
-    s = device_config::Settings{};
+    s = default_settings();
   }
   return s;
 }

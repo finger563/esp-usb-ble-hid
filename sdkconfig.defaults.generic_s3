@@ -1,0 +1,6 @@
+# Overlay for a generic ESP32-S3 dev board used as a PC dongle (one controller
+# per dongle). Build with:
+#   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.generic_s3" set-target esp32s3
+CONFIG_TARGET_HARDWARE_GENERIC_S3=y
+CONFIG_TARGET_HARDWARE_T3_DONGLE=n
+CONFIG_DONGLE_DEFAULT_XBOX360=y

@@ -160,8 +160,12 @@ static void on_notify(NimBLERemoteCharacteristic *chr, uint8_t *data, size_t len
 // LED configuration for BLE pairing / reconnecting
 static constexpr float pairing_breathing_period = 1.0f;
 static constexpr float reconnecting_breathing_period = 3.0f;
+// The reconnecting pulse runs for as long as no controller is around, so keep
+// it at the lowest visible level; pairing stays bright because it is transient.
+static constexpr float reconnecting_led_peak = 0.01f;
 
 static float breathing_period = reconnecting_breathing_period;
+static float breathing_peak = reconnecting_led_peak;
 static auto breathing_start = std::chrono::high_resolution_clock::now();
 static espp::Gaussian gaussian({.gamma = 0.1f, .alpha = 1.0f, .beta = 0.5f});
 static auto breathe = []() -> float {
@@ -174,7 +178,7 @@ static auto led_callback = [](auto &m, auto &cv) -> bool {
   using namespace std::chrono_literals;
   static espp::Rgb led_color(0.0f, 0.0f, 1.0f); // blue
   espp::Hsv hsv = led_color.hsv();
-  hsv.v = breathe();
+  hsv.v = breathe() * breathing_peak;
   set_led(hsv);
   std::unique_lock<std::mutex> lk(m);
   cv.wait_for(lk, 10ms);
@@ -481,10 +485,24 @@ private:
 };
 
 static void ensure_scanning(int64_t now) {
+  // NimBLEScan reports "not scanning" as soon as the controller finishes, while
+  // the NimBLE host task is still draining its scan-response waiting list.
+  // Starting the next scan from this task in that window clears the list
+  // underneath it and crashes in NimBLEScan::resetWaitingTimer(). Wait out the
+  // host task before restarting.
+  // shortcut: fixed 500 ms margin, revisit when esp-nimble-cpp makes the scan
+  // lifecycle safe across tasks.
+  static int64_t scan_inactive_since_us = 0;
+  static constexpr int64_t kScanRestartDelayUs = 500 * 1000;
   if (NimBLEDevice::getScan()->isScanning()) {
     link_state = BleLinkState::Scanning;
+    scan_inactive_since_us = 0;
     return;
   }
+  if (scan_inactive_since_us == 0)
+    scan_inactive_since_us = now;
+  if (now - scan_inactive_since_us < kScanRestartDelayUs)
+    return;
   static int64_t last_scan_start_us = 0;
   if (now - last_scan_start_us < kScanRetryUs)
     return;
@@ -653,6 +671,7 @@ static void start_scan(bool pairing) {
   std::lock_guard<std::mutex> lk(scan_mutex); // see ScanHold
   is_pairing = pairing;
   breathing_period = pairing ? pairing_breathing_period : reconnecting_breathing_period;
+  breathing_peak = pairing ? 1.0f : reconnecting_led_peak;
 
   NimBLEScan *pScan = NimBLEDevice::getScan();
 
@@ -664,9 +683,12 @@ static void start_scan(bool pairing) {
   // Set the callbacks to call when scan events occur, no duplicates
   pScan->setScanCallbacks(&scanCallbacks);
 
-  // Set scan interval (how often) and window (how long) in milliseconds
-  pScan->setInterval(100);
-  pScan->setWindow(100);
+  // Set scan interval (how often) and window (how long) in milliseconds. A 10%
+  // duty cycle keeps the radio (the board's largest idle load) off between
+  // windows; a controller advertising every few tens of ms is still found in
+  // well under a second.
+  pScan->setInterval(300);
+  pScan->setWindow(30);
 
   // Active scan will gather scan response data from advertisers
   // but will use more energy from both devices
@@ -711,6 +733,15 @@ void start_ble_pairing_thread(notify_callback_t callback) {
   notify_callback = callback;
   // accept new controllers for a while (the scan itself cycles every 5 s)
   pairing_until_us = esp_timer_get_time() + kPairingWindowUs;
+  // Already scanning: widen what the running scan accepts. Stopping and
+  // restarting it here races with the NimBLE host task's scan completion (see
+  // ensure_scanning) and used to crash the dongle when the button was pressed.
+  if (NimBLEDevice::getScan()->isScanning()) {
+    is_pairing = true;
+    breathing_period = pairing_breathing_period;
+    breathing_peak = 1.0f;
+    return;
+  }
   start_scan(true);
 }
 
