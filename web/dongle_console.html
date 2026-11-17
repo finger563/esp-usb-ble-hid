@@ -507,6 +507,18 @@
             <input type="range" id="s_led_connected_brightness" data-key="led_connected_brightness" min="0" max="100" step="1" value="25" disabled>
             <span class="hint">Steady level once a controller is connected, as a share of the brightness above. 0 turns it off while playing.</span>
           </div>
+          <div class="field slider">
+            <label for="s_led_reconnecting_brightness">LED level while reconnecting</label>
+            <output id="o_led_reconnecting_brightness" for="s_led_reconnecting_brightness">1 %</output>
+            <input type="range" id="s_led_reconnecting_brightness" data-key="led_reconnecting_brightness" min="0" max="100" step="1" value="1" disabled>
+            <span class="hint">Breathing peak while scanning for a paired controller, as a share of the brightness above. Low by default: it runs for as long as no controller is around.</span>
+          </div>
+          <div class="field slider">
+            <label for="s_led_pairing_brightness">LED level while pairing</label>
+            <output id="o_led_pairing_brightness" for="s_led_pairing_brightness">100 %</output>
+            <input type="range" id="s_led_pairing_brightness" data-key="led_pairing_brightness" min="0" max="100" step="1" value="100" disabled>
+            <span class="hint">Breathing peak during a pairing scan, as a share of the brightness above.</span>
+          </div>
           <div class="field">
             <label for="s_led_activity_blink">Blink LED on every input</label>
             <span class="switch"><input type="checkbox" id="s_led_activity_blink" data-key="led_activity_blink" disabled><i></i></span>
@@ -695,7 +707,8 @@
     const DEV_ERROR_CODE = { 1: "malformed", 2: "invalid value", 3: "unknown request", 4: "failed", 5: "not found" };
     const DEV_KEY = { invert_left_y: 1, invert_right_y: 2, swap_ab: 3, swap_xy: 4,
                       deadzone_percent: 5, led_brightness: 6, ble_name: 7,
-                      led_connected_brightness: 8, led_activity_blink: 9, usb_controller: 10 };
+                      led_connected_brightness: 8, led_activity_blink: 9, usb_controller: 10,
+                      led_reconnecting_brightness: 11, led_pairing_brightness: 12 };
     // usb_controller values (device_config::UsbController)
     const USB_CONTROLLER = { 0: "Switch Pro", 1: "Xbox 360" };
     const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
@@ -1081,7 +1094,8 @@
     const SETTING_KEYS = Object.keys(DEV_KEY);
     const SETTING_KIND = { invert_left_y: "bool", invert_right_y: "bool", swap_ab: "bool", swap_xy: "bool",
                            deadzone_percent: "u8", led_brightness: "u8", ble_name: "str",
-                           led_connected_brightness: "u8", led_activity_blink: "bool", usb_controller: "u8" };
+                           led_connected_brightness: "u8", led_activity_blink: "bool", usb_controller: "u8",
+                           led_reconnecting_brightness: "u8", led_pairing_brightness: "u8" };
     function encodeSettings(values) {
       const out = [DEV_PROTOCOL_VERSION, 0];
       let count = 0;
@@ -1138,6 +1152,8 @@
       if (key === "deadzone_percent" && (value < 0 || value > DEV_MAX_DEADZONE)) return "deadzone must be 0.." + DEV_MAX_DEADZONE + " %";
       if (key === "led_brightness" && (value < 0 || value > 100)) return "LED brightness must be 0..100 %";
       if (key === "led_connected_brightness" && (value < 0 || value > 100)) return "LED level while connected must be 0..100 %";
+      if (key === "led_reconnecting_brightness" && (value < 0 || value > 100)) return "LED level while reconnecting must be 0..100 %";
+      if (key === "led_pairing_brightness" && (value < 0 || value > 100)) return "LED level while pairing must be 0..100 %";
       if (key === "usb_controller" && !(value in USB_CONTROLLER)) return "USB controller must be Switch Pro or Xbox 360";
       if (key === "ble_name") {
         if (!value.length || value.length > DEV_MAX_BLE_NAME) return "BLE name must be 1.." + DEV_MAX_BLE_NAME + " characters";
@@ -2631,6 +2647,8 @@
       document.getElementById("o_deadzone_percent").textContent = settingInputs.deadzone_percent.value + " %";
       document.getElementById("o_led_brightness").textContent = settingInputs.led_brightness.value + " %";
       document.getElementById("o_led_connected_brightness").textContent = settingInputs.led_connected_brightness.value + " %";
+      document.getElementById("o_led_reconnecting_brightness").textContent = settingInputs.led_reconnecting_brightness.value + " %";
+      document.getElementById("o_led_pairing_brightness").textContent = settingInputs.led_pairing_brightness.value + " %";
     }
     function settingsDirtyKeys() {
       if (!deviceSettings) return [];

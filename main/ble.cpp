@@ -160,12 +160,8 @@ static void on_notify(NimBLERemoteCharacteristic *chr, uint8_t *data, size_t len
 // LED configuration for BLE pairing / reconnecting
 static constexpr float pairing_breathing_period = 1.0f;
 static constexpr float reconnecting_breathing_period = 3.0f;
-// The reconnecting pulse runs for as long as no controller is around, so keep
-// it at the lowest visible level; pairing stays bright because it is transient.
-static constexpr float reconnecting_led_peak = 0.01f;
 
 static float breathing_period = reconnecting_breathing_period;
-static float breathing_peak = reconnecting_led_peak;
 static auto breathing_start = std::chrono::high_resolution_clock::now();
 static espp::Gaussian gaussian({.gamma = 0.1f, .alpha = 1.0f, .beta = 0.5f});
 static auto breathe = []() -> float {
@@ -178,7 +174,9 @@ static auto led_callback = [](auto &m, auto &cv) -> bool {
   using namespace std::chrono_literals;
   static espp::Rgb led_color(0.0f, 0.0f, 1.0f); // blue
   espp::Hsv hsv = led_color.hsv();
-  hsv.v = breathe() * breathing_peak;
+  // read the configured peak every tick so a settings change applies at once
+  hsv.v = breathe() * (is_pairing.load() ? g_led_pairing_level.load()
+                                        : g_led_reconnecting_level.load());
   set_led(hsv);
   std::unique_lock<std::mutex> lk(m);
   cv.wait_for(lk, 10ms);
@@ -671,7 +669,6 @@ static void start_scan(bool pairing) {
   std::lock_guard<std::mutex> lk(scan_mutex); // see ScanHold
   is_pairing = pairing;
   breathing_period = pairing ? pairing_breathing_period : reconnecting_breathing_period;
-  breathing_peak = pairing ? 1.0f : reconnecting_led_peak;
 
   NimBLEScan *pScan = NimBLEDevice::getScan();
 
@@ -739,7 +736,6 @@ void start_ble_pairing_thread(notify_callback_t callback) {
   if (NimBLEDevice::getScan()->isScanning()) {
     is_pairing = true;
     breathing_period = pairing_breathing_period;
-    breathing_peak = 1.0f;
     return;
   }
   start_scan(true);

@@ -52,6 +52,10 @@ static device_config::Settings load_settings() {
   nvs_storage->get_or_set_var(kNvsNamespace, "ble_name", s.ble_name, s.ble_name, ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "led_conn", s.led_connected_brightness,
                               s.led_connected_brightness, ec);
+  nvs_storage->get_or_set_var(kNvsNamespace, "led_recon", s.led_reconnecting_brightness,
+                              s.led_reconnecting_brightness, ec);
+  nvs_storage->get_or_set_var(kNvsNamespace, "led_pair", s.led_pairing_brightness,
+                              s.led_pairing_brightness, ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "led_blink", s.led_activity_blink,
                               s.led_activity_blink, ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "usb_ctl", s.usb_controller, s.usb_controller, ec);
@@ -87,6 +91,8 @@ static bool save_settings(const device_config::Settings &s, std::string &error) 
   stage("led", s.led_brightness);
   stage("ble_name", s.ble_name);
   stage("led_conn", s.led_connected_brightness);
+  stage("led_recon", s.led_reconnecting_brightness);
+  stage("led_pair", s.led_pairing_brightness);
   stage("led_blink", s.led_activity_blink);
   stage("usb_ctl", s.usb_controller);
   if (!ec)

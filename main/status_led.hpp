@@ -14,6 +14,9 @@
 inline std::atomic<float> g_led_brightness{1.0f};
 /// Steady LED level while a controller is connected, 0..1 of g_led_brightness.
 inline std::atomic<float> g_led_connected_level{0.25f};
+/// Breathing LED peak while reconnecting / pairing, 0..1 of g_led_brightness.
+inline std::atomic<float> g_led_reconnecting_level{0.01f};
+inline std::atomic<float> g_led_pairing_level{1.0f};
 /// Toggle the LED on every input report instead of holding it steady.
 inline std::atomic<bool> g_led_activity_blink{false};
 
@@ -31,6 +34,12 @@ inline void set_led(const espp::Rgb &rgb) { set_led(rgb.hsv()); }
 
 inline void set_led_connected_brightness_percent(uint8_t percent) {
   g_led_connected_level.store(std::clamp(percent, uint8_t{0}, uint8_t{100}) / 100.0f);
+}
+inline void set_led_reconnecting_brightness_percent(uint8_t percent) {
+  g_led_reconnecting_level.store(std::clamp(percent, uint8_t{0}, uint8_t{100}) / 100.0f);
+}
+inline void set_led_pairing_brightness_percent(uint8_t percent) {
+  g_led_pairing_level.store(std::clamp(percent, uint8_t{0}, uint8_t{100}) / 100.0f);
 }
 inline void set_led_activity_blink(bool enabled) { g_led_activity_blink.store(enabled); }
 inline bool led_activity_blink() { return g_led_activity_blink.load(); }

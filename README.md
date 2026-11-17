@@ -138,7 +138,8 @@ dongle on load.
 Stored in flash and kept across updates: the USB controller type (below),
 invert left / right stick Y, swap A/B, swap X/Y, stick deadzone (0–50 %), LED
 brightness, the LED level while a controller is connected (dim and steady by
-default; a blink-on-every-input debugging mode is optional), BLE device name.
+default; a blink-on-every-input debugging mode is optional) and the breathing
+LED levels while reconnecting (very dim by default) and pairing, BLE device name.
 *Apply changes* sends only what you changed; *Reset to defaults* restores the
 firmware defaults.
 
