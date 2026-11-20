@@ -85,6 +85,10 @@ enum class Key : uint8_t {
                                  ///< holding it steady (debugging aid; default 0)
   UsbController = 0x0A,          ///< u8 UsbController: what the dongle is on USB (applies after
                                  ///< reboot; default SwitchPro)
+  LedReconnectingBrightness = 0x0B, ///< u8 percent 0..100: breathing LED peak while scanning for
+                                    ///< a bonded controller, relative to LedBrightness (default 1)
+  LedPairingBrightness = 0x0C,      ///< u8 percent 0..100: breathing LED peak while pairing,
+                                    ///< relative to LedBrightness (default 100)
 };
 
 /// What the dongle presents on USB (Key::UsbController, Info::usb_controller).
@@ -189,6 +193,8 @@ struct Settings {
   uint8_t led_brightness{100};
   std::string ble_name{"Switch"};
   uint8_t led_connected_brightness{25};
+  uint8_t led_reconnecting_brightness{1};
+  uint8_t led_pairing_brightness{100};
   bool led_activity_blink{false};
   uint8_t usb_controller{static_cast<uint8_t>(UsbController::SwitchPro)};
 
@@ -205,6 +211,10 @@ struct Settings {
       return "led brightness must be 0..100 %";
     if (led_connected_brightness > 100)
       return "led connected brightness must be 0..100 %";
+    if (led_reconnecting_brightness > 100)
+      return "led reconnecting brightness must be 0..100 %";
+    if (led_pairing_brightness > 100)
+      return "led pairing brightness must be 0..100 %";
     if (usb_controller > kMaxUsbController)
       return "usb controller must be 0 (Switch Pro) or 1 (Xbox 360)";
     if (ble_name.empty() || ble_name.size() > kMaxBleNameLength)
@@ -222,7 +232,7 @@ struct Settings {
     std::vector<uint8_t> out;
     out.reserve(32 + ble_name.size());
     put_u8(out, kProtocolVersion);
-    put_u8(out, 10);
+    put_u8(out, 12);
     auto tlv_u8 = [&](Key k, uint8_t v) {
       put_u8(out, static_cast<uint8_t>(k));
       put_u8(out, 1);
@@ -237,6 +247,8 @@ struct Settings {
     put_u8(out, static_cast<uint8_t>(Key::BleName));
     put_str(out, ble_name);
     tlv_u8(Key::LedConnectedBrightness, led_connected_brightness);
+    tlv_u8(Key::LedReconnectingBrightness, led_reconnecting_brightness);
+    tlv_u8(Key::LedPairingBrightness, led_pairing_brightness);
     tlv_u8(Key::LedActivityBlink, led_activity_blink ? 1 : 0);
     tlv_u8(Key::UsbController, usb_controller);
     return out;
@@ -301,6 +313,12 @@ struct Settings {
         break;
       case Key::LedConnectedBrightness:
         ok = as_u8(s.led_connected_brightness);
+        break;
+      case Key::LedReconnectingBrightness:
+        ok = as_u8(s.led_reconnecting_brightness);
+        break;
+      case Key::LedPairingBrightness:
+        ok = as_u8(s.led_pairing_brightness);
         break;
       case Key::LedActivityBlink:
         ok = as_bool(s.led_activity_blink);

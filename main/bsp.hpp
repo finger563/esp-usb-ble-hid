@@ -10,6 +10,11 @@ using Bsp = espp::QtPy;
 #define HARDWARE_NAME "LilyGo T-Dongle-S3"
 #include "t-dongle-s3.hpp"
 using Bsp = espp::TDongleS3;
+#elif CONFIG_TARGET_HARDWARE_GENERIC_S3
+#define HAS_DISPLAY 0
+#define HARDWARE_NAME "Generic ESP32-S3"
+#include "generic_s3.hpp"
+using Bsp = GenericS3;
 #else
 #error "No hardware target specified"
 #endif

@@ -322,6 +322,8 @@ static bool device_forget_bond(const std::array<uint8_t, 6> &address, uint8_t ad
 static void apply_settings(const device_config::Settings &s) {
   set_led_brightness_percent(s.led_brightness);
   set_led_connected_brightness_percent(s.led_connected_brightness);
+  set_led_reconnecting_brightness_percent(s.led_reconnecting_brightness);
+  set_led_pairing_brightness_percent(s.led_pairing_brightness);
   set_led_activity_blink(s.led_activity_blink);
   // the other settings are read per input report (push_inputs); the BLE name
   // is read at boot (init_ble)

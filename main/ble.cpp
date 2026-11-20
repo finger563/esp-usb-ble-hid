@@ -174,7 +174,9 @@ static auto led_callback = [](auto &m, auto &cv) -> bool {
   using namespace std::chrono_literals;
   static espp::Rgb led_color(0.0f, 0.0f, 1.0f); // blue
   espp::Hsv hsv = led_color.hsv();
-  hsv.v = breathe();
+  // read the configured peak every tick so a settings change applies at once
+  hsv.v = breathe() * (is_pairing.load() ? g_led_pairing_level.load()
+                                        : g_led_reconnecting_level.load());
   set_led(hsv);
   std::unique_lock<std::mutex> lk(m);
   cv.wait_for(lk, 10ms);
@@ -678,9 +680,12 @@ static void start_scan(bool pairing) {
   // Set the callbacks to call when scan events occur, no duplicates
   pScan->setScanCallbacks(&scanCallbacks);
 
-  // Set scan interval (how often) and window (how long) in milliseconds
-  pScan->setInterval(100);
-  pScan->setWindow(100);
+  // Set scan interval (how often) and window (how long) in milliseconds. A 10%
+  // duty cycle keeps the radio (the board's largest idle load) off between
+  // windows; a controller advertising every few tens of ms is still found in
+  // well under a second.
+  pScan->setInterval(300);
+  pScan->setWindow(30);
 
   // Active scan will gather scan response data from advertisers
   // but will use more energy from both devices

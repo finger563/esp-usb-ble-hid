@@ -13,7 +13,19 @@ menu "Hardware Configuration"
             depends on IDF_TARGET_ESP32S3
             bool "Adafruit QT Py ESP32-S3"
 
+        config TARGET_HARDWARE_GENERIC_S3
+            depends on IDF_TARGET_ESP32S3
+            bool "Generic ESP32-S3 dev board (BOOT button, optional WS2812 LED)"
+
     endchoice
+
+    config GENERIC_S3_LED_GPIO
+        int "Generic ESP32-S3: WS2812 status LED GPIO (-1 = no LED)"
+        depends on TARGET_HARDWARE_GENERIC_S3
+        default 48
+        help
+            ESP32-S3-DevKitC-1 v1.0 uses GPIO48, v1.1 uses GPIO38. Use -1 if
+            the board has no addressable LED.
 endmenu
 
 menu "USB Configuration"
@@ -30,6 +42,15 @@ menu "USB Configuration"
             identity; the CDC log console is left out in that mode), since the
             MS OS 2.0 descriptor that lets Windows bind a composite X-Input
             device comes with this interface.
+
+    config DONGLE_DEFAULT_XBOX360
+        bool "Present as an Xbox 360 (X-Input) controller on first boot"
+        default n
+        help
+            The first-boot value of the "USB controller" setting. Off keeps the
+            Nintendo Switch Pro Controller identity; on makes the dongle an
+            X-Input gamepad, which is what a Windows / Steam PC wants. The
+            setting is stored in NVS, so this only affects a fresh device.
 
     config DONGLE_USB_XBOX_PID
         hex "USB product ID in Xbox 360 mode (vendor ID 0x045E)"

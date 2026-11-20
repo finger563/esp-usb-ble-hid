@@ -27,8 +27,16 @@ static espp::Logger logger({.tag = "Services", .level = espp::Logger::Verbosity:
 static constexpr const char *kNvsNamespace = "dongle";
 static std::unique_ptr<espp::Nvs> nvs_storage;
 
+static device_config::Settings default_settings() {
+  device_config::Settings s;
+#if CONFIG_DONGLE_DEFAULT_XBOX360
+  s.usb_controller = static_cast<uint8_t>(device_config::UsbController::Xbox360);
+#endif
+  return s;
+}
+
 static device_config::Settings load_settings() {
-  device_config::Settings s; // defaults
+  device_config::Settings s = default_settings();
   if (!nvs_storage)
     return s;
   std::error_code ec;
@@ -44,6 +52,10 @@ static device_config::Settings load_settings() {
   nvs_storage->get_or_set_var(kNvsNamespace, "ble_name", s.ble_name, s.ble_name, ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "led_conn", s.led_connected_brightness,
                               s.led_connected_brightness, ec);
+  nvs_storage->get_or_set_var(kNvsNamespace, "led_recon", s.led_reconnecting_brightness,
+                              s.led_reconnecting_brightness, ec);
+  nvs_storage->get_or_set_var(kNvsNamespace, "led_pair", s.led_pairing_brightness,
+                              s.led_pairing_brightness, ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "led_blink", s.led_activity_blink,
                               s.led_activity_blink, ec);
   nvs_storage->get_or_set_var(kNvsNamespace, "usb_ctl", s.usb_controller, s.usb_controller, ec);
@@ -53,7 +65,7 @@ static device_config::Settings load_settings() {
   // something this one rejects)
   if (auto why = s.validate(); !why.empty()) {
     logger.warn("Stored settings invalid ({}); using defaults", why);
-    s = device_config::Settings{};
+    s = default_settings();
   }
   return s;
 }
@@ -79,6 +91,8 @@ static bool save_settings(const device_config::Settings &s, std::string &error) 
   stage("led", s.led_brightness);
   stage("ble_name", s.ble_name);
   stage("led_conn", s.led_connected_brightness);
+  stage("led_recon", s.led_reconnecting_brightness);
+  stage("led_pair", s.led_pairing_brightness);
   stage("led_blink", s.led_activity_blink);
   stage("usb_ctl", s.usb_controller);
   if (!ec)
