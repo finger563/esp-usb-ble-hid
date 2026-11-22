@@ -3850,14 +3850,37 @@
     // System tab and the Full update). Resolves true when acknowledged, false
     // when the dongle dropped the link before answering (it is going anyway);
     // rejects when the request was refused or never sent.
+    // The page must have let go of the dongle before it resets: a WebUSB device
+    // that is still claimed (interface + a pending IN transfer) when the chip
+    // resets can leave the host (macOS) holding a stale record of it, and then
+    // the ROM's USB device does not show up until the dongle is replugged. So
+    // the reset is asked for at least this far in the future and, once it is
+    // acknowledged, the page releases the interface and closes the device.
+    const BOOTLOADER_REBOOT_MIN_DELAY_MS = 1000;
+    async function releaseForBootloader() {
+      if (!transport) return; // already gone
+      if (gm) await gm.beforeDisconnect(); // bounded; stops a button-mapping stream
+      if (!transport) return;
+      const t = transport;
+      transport = null; // onTransportGone() ignores this close: it is ours
+      failPending(new Error("released for the bootloader reboot"));
+      try { await t.close(); } catch (_) {}
+      parser.reset();
+      forgetDeviceState();
+      updateUI();
+      setStatus("", fw && fw.awaitingPort() ? "Download mode" : "Disconnected");
+      logLine("sys", "Released the dongle's USB interface so it can restart into its ROM download mode.");
+    }
     async function rebootIntoBootloader(delayMs) {
       // the ROM enumerates as a different USB device: no automatic reconnect
       const armBootloader = () => { expectBootloader = true; expectRestart = false; reconnect.suppress(); };
+      const delay = Math.min(65535, Math.max(BOOTLOADER_REBOOT_MIN_DELAY_MS, delayMs | 0));
       try {
-        await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(delayMs), { expect: [SYS.OK], noRecover: true, onSend: armBootloader });
+        await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(delay), { expect: [SYS.OK], noRecover: true, onSend: armBootloader });
+        await releaseForBootloader();
         return true;
       } catch (e) {
-        if (e && (e.timeout || e.transportLost) && !e.notSent) return false;
+        if (e && (e.timeout || e.transportLost) && !e.notSent) { await releaseForBootloader(); return false; }
         expectBootloader = false; if (transport) reconnect.connected(); // still connected: lift the suppression (after a loss the recovery armed by onTransportGone must survive)
         throw e;
       }
@@ -5318,8 +5341,9 @@
         if (!ok || !transport) { state = "idle"; render(); note("muted", "Full update cancelled."); return; }
         state = "rebooting"; render();
         try {
-          const acked = await rebootIntoBootloader(250);
+          const acked = await rebootIntoBootloader(BOOTLOADER_REBOOT_MIN_DELAY_MS);
           state = "awaitingPort";
+          setStatus("", "Download mode");
           flog("sys", acked ? "The dongle is restarting into its ROM download mode." : "The dongle went away before acknowledging: it is entering its ROM download mode.");
           note("warn", "Now click “Select the bootloader port and flash” and pick the Espressif port (303a:1001 “USB JTAG/serial debug unit”, or 303a:0009). If it is not listed yet, wait a second and click again.");
         } catch (e) {
