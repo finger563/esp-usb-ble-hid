@@ -4,6 +4,16 @@ name: Publish Dongle Console (GitHub Pages)
 # at https://finger563.github.io/esp-usb-ble-hid/dongle_console.html -- the URL
 # the firmware advertises as its WebUSB landing page.
 #
+# Next to it, firmware/latest/ holds the latest release's flash images and a
+# manifest.json ({version, chip, files: [{offset, path}]}, the offsets from the
+# release's flasher_args.json). The console's Full update fetches them from
+# this same origin (a page cannot download GitHub release assets directly: they
+# are not served with CORS headers) and writes them over Web Serial, which is
+# how a dongle moves to a firmware with a new partition table.
+#
+# Runs when web/ changes, by hand, and after "Build and Package Main" has
+# attached a new release's files (so the published firmware follows releases).
+#
 # One-time setup: repository Settings -> Pages -> Source: "GitHub Actions".
 
 on:
@@ -12,6 +22,9 @@ on:
     paths:
       - 'web/**'
       - '.github/workflows/publish_webapp.yml'
+  workflow_run:
+    workflows: ["Build and Package Main"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -25,15 +38,67 @@ concurrency:
 
 jobs:
   deploy:
+    # after a packaging run, only when it was a successful release build
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'release')
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Assemble the site (console + latest release firmware)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          cp -r web/. site/
+          rm -rf site/test
+          fw=site/firmware/latest
+          mkdir -p "$fw"
+          if ! tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null); then
+            echo "No release yet: publishing the console without firmware"
+            rm -rf site/firmware
+            exit 0
+          fi
+          echo "Latest release: $tag"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$fw" \
+            --pattern flasher_args.json --pattern '*.bin' || true
+          if [ ! -f "$fw/flasher_args.json" ]; then
+            echo "Release $tag has no flasher_args.json: publishing the console without firmware"
+            rm -rf site/firmware
+            exit 0
+          fi
+          # manifest.json: every image flasher_args.json lists, by file name (the
+          # release assets are flat), with its offset; fail if one is missing
+          python3 - "$fw" "$tag" <<'EOF'
+          import json, os, sys
+          fw, tag = sys.argv[1], sys.argv[2]
+          args = json.load(open(os.path.join(fw, "flasher_args.json")))
+          files = []
+          for offset, path in sorted(args["flash_files"].items(), key=lambda kv: int(kv[0], 16)):
+              name = os.path.basename(path)
+              if not os.path.isfile(os.path.join(fw, name)):
+                  sys.exit(f"{name} (flash offset {offset}) is not among the release assets")
+              files.append({"offset": int(offset, 16), "path": name})
+          chip = args.get("extra_esptool_args", {}).get("chip", "esp32s3")
+          manifest = {"version": tag, "chip": chip, "files": files}
+          json.dump(manifest, open(os.path.join(fw, "manifest.json"), "w"), indent=2)
+          print(json.dumps(manifest, indent=2))
+          EOF
+          # publish only the images the manifest names
+          keep=$(python3 -c "import json,sys; print(' '.join(f['path'] for f in json.load(open(sys.argv[1]))['files']))" "$fw/manifest.json")
+          for f in "$fw"/*.bin; do
+            case " $keep " in *" $(basename "$f") "*) ;; *) rm -f "$f" ;; esac
+          done
+          rm -f "$fw/flasher_args.json"
+          ls -la "$fw"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: web
+          path: site
       - id: deployment
         uses: actions/deploy-pages@v4

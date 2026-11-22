@@ -50,7 +50,13 @@ https://github.com/user-attachments/assets/c81b947a-24a1-4a44-b5d0-5d4c274beb93
 
 - **Xbox → Switch, live.** Every button, both sticks and the triggers are
   translated into Pro Controller reports at the Switch's polling rate.
-  Stick inversion, A/B and X/Y swaps and a radial deadzone are configurable.
+- **Other BLE gamepads too.** Each controller is decoded from the HID report
+  map it publishes, so BLE HID gamepads other than the Xbox controller work
+  as well (e.g. the Android modes of 8BitDo / ShanWan pads).
+- **Button mapping per controller.** Remap any button or stick (button to
+  button, stick or trigger to button, button to stick or trigger, swap or
+  invert axes), set stick dead zones, and keep one map per controller type,
+  from the web console.
 - **Set-and-forget pairing.** Up to five bonded controllers; the dongle
   reconnects to whichever one comes back, and drops every input the instant a
   controller goes away so nothing stays "pressed".
@@ -131,12 +137,29 @@ dongle on load.
   (learned when it connects), with its address and a per-row *Forget*.
 - **Actions** — start pairing, forget all controllers, reboot.
 
+### Button mapping
+
+The maps the dongle applies to the controller's input, edited live: the
+controller's input before and after mapping, side by side; a default map plus
+one profile per controller type (by its Bluetooth vendor / product ID); rules
+of four kinds (button → button, stick / trigger → button past a threshold,
+button → stick / trigger, stick / trigger → stick / trigger scaled or
+inverted); per-stick dead zones; presets (Nintendo A/B layout, swap X/Y,
+invert a stick, stick ↔ d-pad, triggers ↔ ZL/ZR); and *learn*: press the
+control on the controller to pick it. The maps live in a file on the dongle's
+`littlefs` partition. The protocol is espp's `espp.gamepad_map` (module 11,
+`espp::GamepadMapService`), so the espp
+[Gamepad Map Console](https://esp-cpp.github.io/espp/apps/gamepad_map_console.html)
+works with the dongle too.
+
+Firmware before v4 had *invert Y*, *swap A/B*, *swap X/Y* and *deadzone*
+settings instead; the first v4 boot turns those into the default map.
+
 ### Settings
 
 ![Web console, Settings tab](docs/screenshots/console-settings.jpg)
 
-Stored in flash and kept across updates: the USB controller type (below),
-invert left / right stick Y, swap A/B, swap X/Y, stick deadzone (0–50 %), LED
+Stored in flash and kept across updates: the USB controller type (below), LED
 brightness, the LED level while a controller is connected (dim and steady by
 default; a blink-on-every-input debugging mode is optional) and the breathing
 LED levels while reconnecting (very dim by default) and pairing, BLE device name.
@@ -205,9 +228,20 @@ The dongle has two app slots: a fresh image boots in *pending-verify* state
 and the web console asks you to confirm it after the reboot; an unconfirmed image
 is rolled back by the bootloader on the next reset.
 
+**Full update** writes the complete latest release (bootloader, partition
+table, both OTA data and the app) over Web Serial from the browser, with
+esptool-js: the console reboots the dongle into its ROM bootloader, you pick
+the port it shows up as, and the images (published next to the console on
+GitHub Pages) are written. Paired controllers and settings are kept (NVS is
+not touched). It is needed once to move to v4: v4 added the `littlefs`
+partition for the button maps, and a partition table cannot change through an
+OTA update. The console offers it when the dongle runs firmware older than v4,
+or a v4 image installed over USB onto the old partition table (the maps then
+work but are not saved across reboots).
+
 > Dongles running v2.1.0 or older have the previous (single-app) partition
-> layout and need the programmer one more time; after that every update goes
-> over USB.
+> layout: use the Full update (or the programmer) once; after that every update
+> goes over USB.
 
 ### Crash dump
 
@@ -226,7 +260,7 @@ web console.)*
 | | Supported | Notes |
 |---|---|---|
 | **Boards** | LilyGo T-Dongle-S3, Adafruit QT Py ESP32-S3 | The release programmer and binaries are built for the T-Dongle-S3 only; for the QT Py (or any other board) build from source with the board selected under *Hardware Configuration* in `menuconfig` |
-| **Controllers** | Xbox Wireless Controller (Bluetooth LE models: Xbox Series X\|S controller, Xbox One controllers with the BLE firmware update) | Any BLE gamepad can pair, but its reports are decoded with the Xbox layout — other layouts are a small parser away (`components/xbox`) |
+| **Controllers** | Xbox Wireless Controller (Bluetooth LE models: Xbox Series X\|S controller, Xbox One controllers with the BLE firmware update), and BLE HID gamepads in general (e.g. the Android modes of 8BitDo / ShanWan pads) | Each controller is decoded from its HID report map (espp's runtime `hid_rp::GamepadDecoder`); its buttons can be remapped per controller type. Controllers in Bluetooth Classic modes are not supported (the ESP32-S3 is BLE only) |
 | **Hosts** | Switch Pro mode: Nintendo Switch (docked or via a USB-C adapter), plus anything that accepts a USB Pro Controller: Windows, macOS, Linux, Android, iOS. Xbox 360 mode: Windows, Linux, Steam / Steam Deck, Android (X-Input hosts; not the Switch, not macOS) | The Switch needs *Pro Controller Wired Communication* enabled |
 
 ## Building from source
@@ -257,25 +291,25 @@ ESPP_OTA_VID=0x057E ESPP_OTA_PID=0x2009 idf.py ota-usb   # after idf.py build
 ## Under the hood
 
 ```
-BLE gamepad ──notify──▶ Xbox report parser ──▶ GamepadInputs ──settings──▶ espp::SwitchPro (Switch Pro mode)
-                                                                       └────▶ espp::xinput::GamepadState (Xbox 360 mode)
+BLE gamepad ──notify──▶ hid_rp::GamepadDecoder ──▶ GamepadState ──GamepadMap──▶ espp::SwitchPro (Switch Pro mode)
+            (its report map, read at connect)        (raw)          (per controller) └─▶ espp::xinput::GamepadState (Xbox 360 mode)
                                                                                 │ input report
                                                             espp::UsbDevice ◀───┘
                                                         ┌────────┴──────────────────┐
                                            HID iface (Pro Controller)     vendor iface (WebUSB)
                                                    │                              │
                                             Nintendo Switch              espp::Dispatcher
-                                                        ┌───────┬──────┼───────┬──────────┐
-                                                      OTA  Core Dump  System  Monitor  Device Config
+                                                   ┌───────┬──────┬────┼────┬────────────┬──────────┐
+                                                 OTA  Core Dump  System  Monitor  Gamepad Map  Device Config
 ```
 
 | Piece | Where | What it does |
 |---|---|---|
 | BLE central | `main/ble.cpp` | Scanning, pairing, bonding, HID subscription, and a 100 ms supervisor that owns the LED, encryption retries and reconnects |
 | USB device | `main/usb.cpp` | Composite device (HID + vendor + optional CDC), Pro Controller handshake and report sender, the vendor stream's `espp::DispatcherWorker` |
-| Services | `main/services.cpp` | Settings in NVS, and the OTA / core-dump / system / monitor / device-config services registered on the worker (one call each) |
+| Services | `main/services.cpp` | Settings in NVS, the button maps (`espp::GamepadProfiles` on LittleFS), and the OTA / core-dump / system / monitor / gamepad-map / device-config services registered on the worker (one call each) |
 | Device config | `components/device_config` | The web console's protocol (module `0x10`) and module class, with host-side tests |
-| Controller parsing | `components/xbox`, `components/gamepad_inputs` | Xbox report layout → generic gamepad inputs |
+| Controller decoding + mapping | `main/main.cpp`, espp `hid-rp` + `gamepad_map` | The controller's report map → `hid_rp::GamepadDecoder` → `espp::GamepadState` → its `espp::GamepadMap` → `components/gamepad_inputs` for the USB side |
 | Display | `components/gui` | The T-Dongle-S3 status screen (SquareLine / LVGL) |
 | Web console | `web/dongle_console.html` | The browser UI, published to GitHub Pages by `publish_webapp.yml` |
 
@@ -288,6 +322,7 @@ dongle is also a ready-made example of a device with a browser-based web console
 | Core dump | `0x04` | `espp::CoreDumpService` (`espp/coredump`) |
 | System | `0x07` | `espp::SystemService` (`espp/system`): info, reboot, reboot into the ROM bootloader |
 | Monitor | `0x08` | `espp::MonitorService` (`espp/monitor`): heap regions and the task table |
+| Gamepad map | `0x0B` | `espp::GamepadMapService` (`espp/gamepad_map`): button maps per controller type |
 | Device config | `0x10` | this repo |
 
 Adding a module of your own means one protocol header, one class and one

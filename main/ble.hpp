@@ -79,3 +79,18 @@ bool ble_forget_bond(const std::array<uint8_t, 6> &address, uint8_t address_type
 /// not be cleared (bonds may remain).
 bool ble_clear_bonds(std::string &error);
 std::string get_connected_client_serial_number();
+
+/// What the dongle reads from a controller when it connects, before it
+/// subscribes to the input reports: enough to decode them and to pick the
+/// controller's button map.
+struct BleControllerInfo {
+  std::vector<uint8_t> report_map; ///< HID Report Map (0x2A4B); empty if it could not be read
+  uint16_t vid{0};                 ///< Device Information PnP ID vendor (0 = absent)
+  uint16_t pid{0};                 ///< Device Information PnP ID product (0 = absent)
+  std::string name;                ///< device name (0x2A00), else the advertised name
+};
+/// Called (from the BLE scan-timer task) with the controller's info right
+/// before each attempt to subscribe to its input reports, so the reports that
+/// follow can be decoded. Set once at startup, before scanning.
+using controller_info_callback_t = std::function<void(const BleControllerInfo &info)>;
+void ble_set_controller_info_callback(controller_info_callback_t callback);

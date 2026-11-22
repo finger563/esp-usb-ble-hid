@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dongle Console</title>
-  <meta name="description" content="Browser console for the ESP USB BLE HID gamepad dongle: device status and settings, firmware update (OTA) and crash-dump retrieval over WebUSB.">
+  <meta name="description" content="Browser console for the ESP USB BLE HID gamepad dongle: device status and settings, per-controller button / axis mapping with live input, firmware update (OTA, or a full flash over Web Serial) and crash-dump retrieval over WebUSB.">
   <meta name="color-scheme" content="light dark">
   <style>
     /* ------------------------------------------------------------------
@@ -333,6 +333,97 @@
     #log .tx { color: var(--tx); }
     #log .rx { color: var(--rx); }
 
+
+    /* ---- call-outs (Full update prompt, firmware notes) ---- */
+    .callout { border-color: var(--warn); background: var(--warn-soft); }
+    .callout .card-head { margin-bottom: 6px; }
+    .callout .card-head h2 { color: var(--ink); }
+    .callout p { margin: 0; }
+    .callout .actions { margin-top: 8px; }
+    .badge.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+    .badge.ok::before { background: var(--ok); }
+    .badge.info { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+    .badge.info::before { background: var(--accent); }
+    .badge.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+    .badge.warn::before { background: var(--warn); }
+    .field-note { padding: 8px 0; border-bottom: 1px dashed var(--line); color: var(--muted); font-size: 13px; }
+
+    /* ---- Full update (Web Serial flasher) ---- */
+    .steps { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 4px; }
+    .steps li.current { font-weight: 600; color: var(--ink); }
+    .steps li.done { color: var(--ok); }
+    .steps li { color: var(--muted); }
+    .flashrows { display: grid; gap: 6px; margin-top: 8px; }
+    .flashrow { display: grid; grid-template-columns: 92px auto minmax(0, 1fr); gap: 8px; align-items: center; }
+    .flashrow input[type="text"] { width: 92px; font-family: var(--font-mono); font-size: 12.5px; }
+    .flashrow .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .flashlog { margin-top: 10px; max-height: 220px; }
+
+    /* ---- Button mapping tab ---- */
+    #tab-mapping { grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); }
+    @media (max-width: 980px) { #tab-mapping { grid-template-columns: minmax(0, 1fr); } }
+    #tab-mapping input[type="number"] { font: inherit; font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); background: var(--panel);
+      border: 1px solid var(--line-strong); border-radius: 8px; padding: 5px 7px; width: 72px; }
+    #tab-mapping .statusline { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    #tab-mapping .statusline b { color: var(--ink); font-weight: 600; }
+    #tab-mapping .live { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+    @media (max-width: 700px) { #tab-mapping .live { grid-template-columns: minmax(0, 1fr); } }
+    #tab-mapping .side { position: relative; border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0; }
+    #tab-mapping .side.learning { outline: 2px solid var(--warn); outline-offset: 1px; }
+    #tab-mapping .side h3 { font-size: 13px; margin: 0 0 8px; }
+    #tab-mapping .side .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 12px;
+      background: color-mix(in srgb, var(--panel) 80%, transparent); color: var(--muted); font-size: 13px; border-radius: 8px; }
+    #tab-mapping .btn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 4px; }
+    #tab-mapping .ind { font-size: 11.5px; text-align: center; padding: 4px 2px; border-radius: 5px; background: var(--panel-2); color: var(--muted);
+      border: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none; }
+    #tab-mapping .ind.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+    #tab-mapping .sticks { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
+    #tab-mapping .stick { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    #tab-mapping .stick .xy { font-family: var(--font-mono); }
+    #tab-mapping .pad { position: relative; width: 104px; height: 104px; border-radius: 8px; background-color: var(--panel-2); border: 1px solid var(--line);
+      background-image: linear-gradient(var(--line-strong), var(--line-strong)), linear-gradient(var(--line-strong), var(--line-strong));
+      background-size: 1px 100%, 100% 1px; background-position: center; background-repeat: no-repeat; overflow: hidden; }
+    #tab-mapping .pad .dz { position: absolute; left: 50%; top: 50%; border-radius: 50%; border: 1px dashed var(--muted); transform: translate(-50%, -50%); width: 0; height: 0; pointer-events: none; }
+    #tab-mapping .pad .dot { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: var(--accent); left: 50%; top: 50%; box-shadow: 0 0 0 2px var(--panel); }
+    #tab-mapping .bars { display: grid; grid-template-columns: auto minmax(0, 1fr) 54px; gap: 4px 8px; align-items: center; margin-top: 10px; font-size: 11.5px; }
+    #tab-mapping .bars .k { color: var(--muted); white-space: nowrap; }
+    #tab-mapping .bars .v { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+    #tab-mapping .track { position: relative; height: 10px; border-radius: 4px; background: var(--panel-2); overflow: hidden; border: 1px solid var(--line); }
+    #tab-mapping .track .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .5; }
+    #tab-mapping .track .fill { position: absolute; top: 0; bottom: 0; left: 50%; width: 0; background: var(--accent); }
+    #tab-mapping .learn-banner { margin-top: 10px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--warn); background: var(--warn-soft); display: flex; gap: 10px; align-items: center; font-size: 13px; }
+    #tab-mapping .learn-banner span { flex: 1 1 auto; }
+    #tab-mapping .dzrow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 20px; margin-top: 10px; }
+    @media (max-width: 700px) { #tab-mapping .dzrow { grid-template-columns: minmax(0, 1fr); } }
+    #tab-mapping .dzrow label { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 13px; }
+    #tab-mapping .dzrow input[type="range"] { flex: 1; min-width: 80px; }
+    #tab-mapping .dzrow output { font-family: var(--font-mono); font-size: 12.5px; min-width: 42px; text-align: right; }
+    #tab-mapping .table-wrap { overflow-x: auto; margin-top: 12px; }
+    #tab-mapping table.rules { width: 100%; border-collapse: collapse; font-size: 13px; }
+    #tab-mapping table.rules th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    #tab-mapping table.rules td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    #tab-mapping table.rules tr:nth-child(even) td { background: var(--panel-2); }
+    #tab-mapping table.rules tr.invalid td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+    #tab-mapping table.rules select { max-width: 230px; padding: 5px 7px; }
+    #tab-mapping table.rules td.num { color: var(--muted); font-variant-numeric: tabular-nums; }
+    #tab-mapping table.rules td.desc { color: var(--muted); min-width: 180px; }
+    #tab-mapping table.rules td.acts { white-space: nowrap; }
+    #tab-mapping table.rules label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12.5px; }
+    #tab-mapping .src, #tab-mapping .param { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+    #tab-mapping button.icon { padding: 3px 8px; font-size: 12px; }
+    #tab-mapping button.learning { background: var(--warn); border-color: var(--warn); color: #fff; }
+    #tab-mapping .presets { margin-top: 10px; }
+    #tab-mapping .validation { margin-top: 10px; border: 1px solid var(--danger); background: var(--danger-soft); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+    #tab-mapping .validation ul { margin: 4px 0 0; padding-left: 18px; }
+    #tab-mapping #gmTargetSel { width: 100%; }
+    #tab-mapping .newprof { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 8px; align-items: center; margin-top: 8px; font-size: 12.5px; }
+    #tab-mapping .newprof input[type="text"] { width: 100%; font-family: var(--font-mono); }
+    #tab-mapping .plist { display: flex; flex-direction: column; gap: 6px; }
+    #tab-mapping .plist .p { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; font-size: 12.5px; }
+    #tab-mapping .plist .p .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tab-mapping .plist .p.current { border-color: var(--accent); }
+    #tab-mapping .plist .badge { padding: 1px 8px; font-size: 11px; }
+
     @media (max-width: 640px) {
       .top { padding: 8px 10px; gap: 8px; }
       .brand .sub { display: none; }
@@ -383,6 +474,7 @@
   <nav class="tabs" role="tablist" aria-label="Console sections">
     <button role="tab" id="tabbtn-device" data-tab="device" aria-selected="true" aria-controls="tab-device" type="button">Device<span class="dot"></span></button>
     <button role="tab" id="tabbtn-settings" data-tab="settings" aria-selected="false" aria-controls="tab-settings" tabindex="-1" type="button">Settings<span class="dot"></span></button>
+    <button role="tab" id="tabbtn-mapping" data-tab="mapping" aria-selected="false" aria-controls="tab-mapping" tabindex="-1" type="button">Button mapping<span class="dot"></span></button>
     <button role="tab" id="tabbtn-system" data-tab="system" aria-selected="false" aria-controls="tab-system" tabindex="-1" type="button">System<span class="dot"></span></button>
     <button role="tab" id="tabbtn-firmware" data-tab="firmware" aria-selected="false" aria-controls="tab-firmware" tabindex="-1" type="button">Firmware<span class="dot"></span></button>
     <button role="tab" id="tabbtn-coredump" data-tab="coredump" aria-selected="false" aria-controls="tab-coredump" tabindex="-1" type="button">Crash dump<span class="dot"></span></button>
@@ -391,6 +483,14 @@
   <main>
     <!-- ============================ Device ============================ -->
     <section id="tab-device" role="tabpanel" aria-labelledby="tabbtn-device">
+      <div id="fullUpdateBanner" class="card wide callout" role="status" hidden>
+        <div class="card-head"><h2>One-time Full update needed</h2></div>
+        <p id="fullUpdateBannerText"></p>
+        <div class="actions">
+          <button id="fullUpdateBannerBtn" class="primary" type="button">Open Full update</button>
+          <span id="fullUpdateBannerOffer" class="muted small-text"></span>
+        </div>
+      </div>
       <div class="card">
         <div class="card-head">
           <h2>Status</h2>
@@ -472,24 +572,25 @@
             </select>
             <span class="hint">What the dongle is to the USB host. Switch Pro for the Switch and anything that takes a Pro Controller; Xbox 360 for Windows, Linux, Steam and Android (not the Switch, not macOS). Applies after reboot; the console reconnects to either.</span>
           </div>
-          <div class="field">
+          <div id="legacyMapNote" class="field-note">Stick / button options moved to <a href="#" data-goto-tab="mapping">Button mapping</a>.</div>
+          <div class="field legacy-map">
             <label for="s_invert_left_y">Invert left stick Y</label>
             <span class="switch"><input type="checkbox" id="s_invert_left_y" data-key="invert_left_y" disabled><i></i></span>
           </div>
-          <div class="field">
+          <div class="field legacy-map">
             <label for="s_invert_right_y">Invert right stick Y</label>
             <span class="switch"><input type="checkbox" id="s_invert_right_y" data-key="invert_right_y" disabled><i></i></span>
           </div>
-          <div class="field">
+          <div class="field legacy-map">
             <label for="s_swap_ab">Swap A / B</label>
             <span class="switch"><input type="checkbox" id="s_swap_ab" data-key="swap_ab" disabled><i></i></span>
             <span class="hint">Xbox-style physical layout on the Switch.</span>
           </div>
-          <div class="field">
+          <div class="field legacy-map">
             <label for="s_swap_xy">Swap X / Y</label>
             <span class="switch"><input type="checkbox" id="s_swap_xy" data-key="swap_xy" disabled><i></i></span>
           </div>
-          <div class="field slider">
+          <div class="field slider legacy-map">
             <label for="s_deadzone_percent">Stick deadzone</label>
             <output id="o_deadzone_percent" for="s_deadzone_percent">0 %</output>
             <input type="range" id="s_deadzone_percent" data-key="deadzone_percent" min="0" max="50" step="1" value="0" disabled>
@@ -539,7 +640,130 @@
       </div>
     </section>
 
-    <!-- ============================ Firmware ============================ -->
+    <!-- ============================ Button mapping ============================ -->
+    <section id="tab-mapping" role="tabpanel" aria-labelledby="tabbtn-mapping" hidden>
+      <div id="gmMissing" class="card wide callout" hidden>
+        <div class="card-head"><h2>Button mapping needs firmware v4</h2></div>
+        <p>This dongle's firmware does not offer button mapping (it advertises no <code>espp.gamepad_map</code> module): it is older than v4, and applies the fixed stick / button options on the Settings tab instead.
+          v4 decodes any BLE gamepad and remaps its buttons and axes per controller type. It also changes the dongle's flash layout, so moving to it takes one <b>Full update</b> over Web Serial (an OTA update cannot change the partition table); paired controllers and settings are kept.</p>
+        <div class="actions"><button id="gmGotoFull" class="primary" type="button">Open Full update</button></div>
+      </div>
+      <div id="gmNeedsFlash" class="card wide callout" hidden>
+        <div class="card-head"><h2>Maps are not saved yet</h2></div>
+        <p>This dongle runs v4+ firmware on the old flash layout (it was updated over USB, which cannot change the partition table), so it has nowhere to store button maps: edits apply until the next reboot at most. One <b>Full update</b> adds the storage; paired controllers and settings are kept.</p>
+        <div class="actions"><button id="gmGotoFull2" class="primary" type="button">Open Full update</button></div>
+      </div>
+
+      <div id="gmMain" class="stack">
+        <div class="card">
+          <div class="card-head">
+            <h2>Live input</h2>
+            <span class="muted small-text">received <b id="gmRxRate">-</b></span>
+            <span id="gmLiveState" class="badge">-</span>
+          </div>
+          <div class="row">
+            <label class="small-text muted" title="Stream the controller's input from the dongle while this tab is open (renewed every few seconds; stops when you leave the tab)"><input type="checkbox" id="gmLive" checked> Live input</label>
+            <label class="small-text muted">every <select id="gmPeriod"><option value="20">20 ms</option><option value="50" selected>50 ms</option><option value="100">100 ms</option><option value="250">250 ms</option></select></label>
+          </div>
+          <div id="gmLearnBanner" class="learn-banner" hidden>
+            <span id="gmLearnText">Press a button, or push a stick / trigger past 50 %, on the controller…</span>
+            <button id="gmLearnCancel" class="small" type="button">Cancel</button>
+          </div>
+          <div class="live">
+            <div class="side" id="gmSideRaw">
+              <h3>Raw <span class="muted small-text">(from the controller)</span></h3>
+              <div class="sidebody"></div>
+              <div class="overlay" id="gmRawOverlay">Connect the dongle to see the controller's input.</div>
+            </div>
+            <div class="side" id="gmSideMapped">
+              <h3>Mapped <span class="muted small-text">(sent to the USB host)</span></h3>
+              <div class="sidebody"></div>
+              <div class="overlay" id="gmMappedOverlay">No input yet.</div>
+            </div>
+          </div>
+          <p class="muted small-text" style="margin: 8px 0 0;">Buttons are named by position (South = Xbox A / Nintendo B). Sticks are -100..100 % with Y growing <b>down</b>; triggers 0..100 %. The dashed circle on the raw sticks is the dead zone of the map in the editor.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Map editor</h2>
+            <span id="gmDirty" class="dirty" hidden>unsaved changes</span>
+          </div>
+          <div class="row">
+            <span>Editing: <b id="gmEditTitle">nothing loaded</b></span>
+            <span id="gmEditBadge" class="badge" hidden>-</span>
+          </div>
+          <p id="gmEditNote" class="muted small-text" style="margin: 6px 0 0;">Pick a map and load it.</p>
+          <div class="dzrow">
+            <label title="Radial dead zone of the left stick (0..90 % of full deflection); what is left is rescaled so full deflection still reads full">Left stick dead zone <input type="range" id="gmDzLeft" min="0" max="90" step="1" value="0" disabled> <output id="gmDzLeftOut">0 %</output></label>
+            <label title="Radial dead zone of the right stick (0..90 % of full deflection)">Right stick dead zone <input type="range" id="gmDzRight" min="0" max="90" step="1" value="0" disabled> <output id="gmDzRightOut">0 %</output></label>
+          </div>
+          <div class="table-wrap">
+            <table class="rules">
+              <thead><tr><th>#</th><th>Kind</th><th>Source</th><th>Target</th><th title="Keep the source at its own position too (otherwise the source is moved to the target)">Keep</th><th>Parameter</th><th>Does</th><th></th></tr></thead>
+              <tbody id="gmRulesBody"></tbody>
+            </table>
+          </div>
+          <p id="gmNoRules" class="muted small-text" style="margin: 8px 0 0;" hidden>No rules: every control passes through unchanged (after the dead zones).</p>
+          <p class="muted small-text" style="margin: 8px 0 0;">A rule <b>moves</b> its source to the target (the source no longer reaches its own position) unless "keep" is ticked; a target of "none" just removes the source. Controls no rule takes as a source pass through. Several rules may feed one target: buttons are OR-ed, axis contributions summed and clamped.</p>
+          <div class="row" style="margin-top: 10px;">
+            <button id="gmAddRule" class="small" type="button" disabled>+ Add rule</button>
+            <span class="muted small-text"><b id="gmRuleCount">0</b> rules (the dongle takes at most <span id="gmRuleMax">64</span>)</span>
+          </div>
+          <div id="gmPresets" class="row presets"><span class="muted small-text">Presets (append rules):</span></div>
+          <div id="gmValidation" class="validation" hidden></div>
+          <div class="actions">
+            <button id="gmSave" class="primary" type="button" disabled title="Validate the map and store it on the dongle">Save to dongle</button>
+            <button id="gmRevert" type="button" disabled title="Load the map stored on the dongle again, dropping the edits">Revert</button>
+            <button id="gmErase" class="danger" type="button" disabled title="Delete this profile from the dongle (the controller then uses the default map)">Erase this profile</button>
+          </div>
+          <div id="gmEditConfirm" class="confirm-slot"></div>
+          <div id="gmEditStatus" class="note muted small-text"></div>
+        </div>
+      </div>
+
+      <div id="gmSide" class="stack">
+        <div class="card">
+          <div class="card-head">
+            <h2>Map to edit</h2>
+            <button id="gmRefresh" class="small" type="button" disabled title="Ask the dongle again for its controller and its profile list">Refresh</button>
+          </div>
+          <div class="statusline" style="margin-bottom: 10px;">
+            <span>Controller: <b id="gmCtlName">-</b></span>
+            <span>Uses: <span id="gmCtlProfile" class="badge">-</span></span>
+          </div>
+          <select id="gmTargetSel" aria-label="Map to edit"></select>
+          <div id="gmNewFields" class="newprof" hidden>
+            <span>VID</span><input type="text" id="gmNewVid" placeholder="hex, e.g. 045e" spellcheck="false">
+            <span>PID</span><input type="text" id="gmNewPid" placeholder="hex, e.g. 0b13" spellcheck="false">
+            <span>Name</span><input type="text" id="gmNewName" placeholder="the key when VID and PID are 0" spellcheck="false">
+          </div>
+          <div class="actions"><button id="gmLoad" class="primary small" type="button" disabled>Load</button></div>
+          <div id="gmLoadConfirm" class="confirm-slot"></div>
+          <p class="muted small-text" style="margin: 10px 0 0;">The <b>default map</b> applies to every controller without a profile. A <b>profile</b> belongs to one controller type (its Bluetooth VID:PID; by name when both are 0). Loading a controller that has no profile yet starts from the default map; saving creates the profile.</p>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Profiles</h2>
+            <span id="gmProfCount" class="muted small-text"></span>
+          </div>
+          <div id="gmProfileList" class="plist"><span class="muted small-text">Connect the dongle to list its profiles.</span></div>
+          <div class="statusline" style="margin-top: 10px;">
+            <span>Stored: <b id="gmDevProfiles">-</b></span>
+            <span>Rules per map: <b id="gmDevMaxRules">-</b></span>
+            <span>Controls: <b id="gmDevControls">-</b></span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Reset maps</h2></div>
+          <p class="muted small-text" style="margin: 0;">Erase every profile and set the default map back to the identity (no rules, no dead zones). Settings and paired controllers are not touched.</p>
+          <div class="actions"><button id="gmResetAll" class="danger" type="button" disabled>Reset all maps</button></div>
+          <div id="gmResetConfirm" class="confirm-slot"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ System ============================ -->
     <section id="tab-system" role="tabpanel" aria-labelledby="tabbtn-system" hidden>
       <div class="card wide">
         <div class="card-head">
@@ -626,6 +850,37 @@
         <div class="stats"><span id="otaBytes">0 / 0 bytes</span><span id="otaPercent">0%</span><span id="otaRate">-</span></div>
         <div id="otaNote" class="note muted small-text">The dongle erases its update partition on BEGIN (a few seconds), then writes each chunk before acknowledging the next. After FINISH it reboots into the new image and the USB link drops.</div>
       </div>
+
+      <div id="fullCard" class="card wide">
+        <div class="card-head">
+          <h2>Full update (Web Serial)</h2>
+          <span id="fullChecked" class="muted small-text"></span>
+          <button id="fullCheckBtn" class="small" type="button" title="Read firmware/latest/manifest.json next to this page again">Check published firmware</button>
+        </div>
+        <p class="muted small-text" style="margin: 0 0 10px;">Writes the latest release's bootloader, partition table, OTA data and app at their flash offsets through the ESP32-S3's ROM download mode, with esptool-js over Web Serial. A dongle needs it once to move to firmware with a new flash layout (v3 → v4 adds the button-map storage): an OTA update can only replace the app. The chip is not erased: NVS keeps the paired controllers and the settings. Chrome / Edge only (Web Serial).</p>
+        <dl class="kv">
+          <dt>Needed</dt><dd id="fullNeeded">connect the dongle to check</dd>
+          <dt>Published</dt><dd id="fullOffered">not checked yet</dd>
+          <dt>Images</dt><dd id="fullFiles" class="mono">—</dd>
+        </dl>
+        <div id="fullLocal" hidden>
+          <p class="small-text muted" style="margin: 10px 0 0;">No published firmware here (the page was opened from a file, or nothing is published next to it). Pick the images of a release or a local build instead: <code>build/bootloader/bootloader.bin</code>, <code>build/partition_table/partition-table.bin</code>, <code>build/ota_data_initial.bin</code>, <code>build/esp-usb-ble-hid.bin</code>.</p>
+          <div id="fullLocalRows" class="flashrows"></div>
+        </div>
+        <ol class="steps">
+          <li id="fullStep1">Reboot the dongle into its ROM download mode: the console asks it to (the USB link drops). A dongle that does not answer: hold its BOOT button while plugging it in.</li>
+          <li id="fullStep2">Pick the ROM's serial port (Espressif, 303a:1001 “USB JTAG/serial debug unit” or 303a:0009) and flash; the dongle restarts into the new firmware and the console reconnects to it.</li>
+        </ol>
+        <div class="actions">
+          <button id="fullStartBtn" class="primary" type="button" disabled>Full update</button>
+          <button id="fullPortBtn" type="button" disabled>Select the bootloader port and flash</button>
+        </div>
+        <div id="fullConfirm" class="confirm-slot"></div>
+        <div class="progress"><div id="fullFill" class="progress-fill"></div></div>
+        <div class="stats"><span id="fullBytes">—</span><span id="fullPercent">0%</span><span id="fullRate">-</span></div>
+        <div id="fullNote" class="note muted small-text"></div>
+        <pre id="fullLog" class="report flashlog" hidden></pre>
+      </div>
     </section>
 
     <!-- ============================ Crash dump ============================ -->
@@ -693,12 +948,12 @@
     const FLAG_CORRELATION = 0x02;                     // bit1: optional u16 correlation id after `type`
 
     // ---- dispatcher modules on this device --------------------------------
-    const MODULE = { OTA: 0x00, COREDUMP: 0x04, SYSTEM: 0x07, MONITOR: 0x08, DEVICE: 0x10, DISCOVERY: 0xFF };
+    const MODULE = { OTA: 0x00, COREDUMP: 0x04, SYSTEM: 0x07, MONITOR: 0x08, GAMEPAD_MAP: 0x0B, DEVICE: 0x10, DISCOVERY: 0xFF };
     const T_LIST_MODULES = 0x00;
     // discovery v2 protocol identifiers (DispatcherModuleInfo.protocol); a module
     // advertising one of these is used whatever id the firmware gave it
     const PROTOCOL = { OTA: "espp.ota", COREDUMP: "espp.coredump", DEVICE: "esp-usb-ble-hid.device-config",
-                       SYSTEM: "espp.system", MONITOR: "espp.monitor" };
+                       SYSTEM: "espp.system", MONITOR: "espp.monitor", GAMEPAD_MAP: "espp.gamepad_map" };
 
     // device_config_protocol.hpp
     const DEV = { GET_INFO: 0x01, GET_SETTINGS: 0x02, SET_SETTINGS: 0x03, RESET_SETTINGS: 0x04, ACTION: 0x05,
@@ -709,12 +964,19 @@
                       deadzone_percent: 5, led_brightness: 6, ble_name: 7,
                       led_connected_brightness: 8, led_activity_blink: 9, usb_controller: 10,
                       led_reconnecting_brightness: 11, led_pairing_brightness: 12 };
+    // The stick / button options v3 firmware applies itself. v4 replaced them with
+    // the button maps (module 11) and ignores these keys (it migrated them into
+    // the default map once), so the Settings tab only shows them to v3 firmware.
+    const LEGACY_MAP_KEYS = ["invert_left_y", "invert_right_y", "swap_ab", "swap_xy", "deadzone_percent"];
     // usb_controller values (device_config::UsbController)
     const USB_CONTROLLER = { 0: "Switch Pro", 1: "Xbox 360" };
     const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
     const DEV_PROTOCOL_VERSION = 1;
     const DEV_MAX_DEADZONE = 50, DEV_MAX_BLE_NAME = 31;
-    const INFO_FLAG = { USB_MOUNTED: 0x01, BLE_CONNECTED: 0x02, BLE_SCANNING: 0x04, PAIRING: 0x08, USB_HID_READY: 0x10 };
+    // NEEDS_FULL_FLASH (v4+): a v4 image running on a v3 partition table (an OTA
+    // cannot change it), so the button maps are not saved until a full flash
+    const INFO_FLAG = { USB_MOUNTED: 0x01, BLE_CONNECTED: 0x02, BLE_SCANNING: 0x04, PAIRING: 0x08, USB_HID_READY: 0x10,
+                        NEEDS_FULL_FLASH: 0x20 };
     const INFO_NEVER = 0xFFFFFFFF;   // ble_last_notify_age_ms: no notification received yet
 
     // ota_stream_protocol.hpp
@@ -774,6 +1036,13 @@
       [MODULE.MONITOR]: {
         label: "Monitor", protocol: PROTOCOL.MONITOR, version: 1, correlates: true, errorType: MON.ERROR, parseError: parseRequestCodeMessageError,
         names: { 0x01: "GET_HEAP", 0x02: "GET_TASKS", 0x03: "SET_STREAM", 0x81: "HEAP", 0x82: "TASKS", 0x83: "OK", 0x84: "ERROR" },
+      },
+      // espp GamepadMapService (espp.gamepad_map v1, firmware v4+): ERROR is
+      // [request_type u8][code u32][utf8 message]; replies echo the correlation id
+      [MODULE.GAMEPAD_MAP]: {
+        label: "GamepadMap", protocol: PROTOCOL.GAMEPAD_MAP, version: 1, correlates: true, errorType: 0x84, parseError: parseRequestCodeMessageError,
+        names: { 0x01: "GET_INFO", 0x02: "GET_MAP", 0x03: "SET_MAP", 0x04: "ERASE_PROFILE", 0x05: "LIST_PROFILES", 0x06: "SET_STREAM",
+                 0x07: "RESET_ALL", 0x81: "INFO", 0x82: "MAP", 0x83: "OK", 0x84: "ERROR", 0x85: "PROFILES", 0x86: "INPUT" },
       },
       [MODULE.DISCOVERY]: { label: "Discovery", errorType: -1, parseError: null, names: { 0x00: "LIST_MODULES" } },
     };
@@ -1057,7 +1326,7 @@
     // [hardware str][idf str][controller str] then an OPTIONAL link-diagnostics trailer
     // (older firmware stops before it): [ble_notifications u32][ble_last_notify_age_ms u32]
     // [usb_hid_reports u32], then (a later addition, also optional) [link_state u8]
-    // [link_detail str]. usb_hid_ready is flags bit4.
+    // [link_detail str]. usb_hid_ready is flags bit4, needs_full_flash bit5.
     const LINK_STATE = { 0: null, 1: "idle", 2: "scanning", 3: "connecting", 4: "encrypting",
                          5: "subscribing", 6: "subscribed" };
     function parseInfo(payload) {
@@ -1079,6 +1348,8 @@
         bleScanning: !!(flags & INFO_FLAG.BLE_SCANNING),
         pairing: !!(flags & INFO_FLAG.PAIRING),
         usbHidReady: !!(flags & INFO_FLAG.USB_HID_READY),
+        // v4+: running on a partition table without the button-map storage
+        needsFullFlash: !!(flags & INFO_FLAG.NEEDS_FULL_FLASH),
         battery, bonds, uptime, project, firmware, hardware, idf, controller,
         // link diagnostics: null when this firmware does not send the trailer
         hasLinkStats: bleNotifications !== null && bleLastNotifyAgeMs !== null && usbHidReports !== null,
@@ -1335,6 +1606,616 @@
       };
     }
 
+    // ---- espp.gamepad_map v1 (module 11, firmware v4+): the button / axis maps ----
+    // The block between the markers is a verbatim copy of the codec block of
+    // espp's components/gamepad_map/web/gamepad_map_console.html (re-sync by
+    // replacing everything between the markers); web/test/dongle_console_test.js
+    // checks it against byte vectors derived from gamepad_map_protocol.hpp.
+    // --- begin gamepad map codec (pure: no DOM; see components/gamepad_map/web/test/gamepad_map_codec_test.js) ---
+    // Mirrors components/gamepad_map/include/detail/gamepad_map_protocol.hpp
+    // (the wire format), gamepad_state.hpp (control order) and gamepad_map.hpp
+    // (rule kinds, GamepadMap::valid()). All multi-byte fields little-endian;
+    // a `str` is [len u8][utf8 bytes]. Compatibility rule: device -> host
+    // messages are decoded leniently -- bytes after the known fields are
+    // ignored (a later version may append fields); a truncated message fails.
+    // requests (host -> device)
+    const T_GET_INFO = 0x01, T_GET_MAP = 0x02, T_SET_MAP = 0x03, T_ERASE_PROFILE = 0x04,
+          T_LIST_PROFILES = 0x05, T_SET_STREAM = 0x06, T_RESET_ALL = 0x07;
+    // replies / events (device -> host, reply flag set)
+    const T_INFO = 0x81, T_MAP = 0x82, T_OK = 0x83, T_ERROR = 0x84, T_PROFILES = 0x85, T_INPUT = 0x86;
+    const REQ_NAME = { 0x01: "get info", 0x02: "get map", 0x03: "save map", 0x04: "erase profile",
+                       0x05: "list profiles", 0x06: "set input stream", 0x07: "reset all" };
+    const FLAG_CONNECTED = 0x01, FLAG_CHANGED = 0x02;   // INFO / INPUT flags
+    const FLAG_EXISTS = 0x01;                           // MAP flag: the requested map exists
+    const STATE_SIZE = 16, RULE_SIZE = 6;
+    // GamepadState: Button order = bit index, Axis order = axes[] index
+    const BUTTON_NAMES = ["south", "east", "west", "north", "l1", "r1", "l2", "r2", "l3", "r3", "select", "start",
+                          "home", "capture", "up", "down", "left", "right", "paddle1", "paddle2", "paddle3", "paddle4"];
+    const AXIS_NAMES = ["left_x", "left_y", "right_x", "right_y", "left_trigger", "right_trigger"];
+    const BUTTON_COUNT = BUTTON_NAMES.length, AXIS_COUNT = AXIS_NAMES.length;
+    const B = Object.freeze(Object.fromEntries(BUTTON_NAMES.map((n, i) => [n.toUpperCase(), i])));
+    const A = Object.freeze(Object.fromEntries(AXIS_NAMES.map((n, i) => [n.toUpperCase(), i])));
+    // positional names + the labels the controller families print on them
+    const BUTTON_TEXT = ["South", "East", "West", "North", "L1", "R1", "L2", "R2", "L3", "R3", "Select", "Start",
+                         "Home", "Capture", "D-pad Up", "D-pad Down", "D-pad Left", "D-pad Right",
+                         "Paddle 1", "Paddle 2", "Paddle 3", "Paddle 4"];
+    const BUTTON_SHORT = ["South", "East", "West", "North", "L1", "R1", "L2", "R2", "L3", "R3", "Select", "Start",
+                          "Home", "Capture", "Up", "Down", "Left", "Right", "P1", "P2", "P3", "P4"];
+    const BUTTON_HINT = ["Xbox A / Nintendo B / PS Cross", "Xbox B / Nintendo A / PS Circle",
+                         "Xbox X / Nintendo Y / PS Square", "Xbox Y / Nintendo X / PS Triangle",
+                         "LB / L", "RB / R", "LT / ZL as a button", "RT / ZR as a button", "left stick click", "right stick click",
+                         "View / Back / Minus / Share", "Menu / Plus / Options", "Guide / PS", "Xbox Share / Nintendo Capture",
+                         "", "", "", "", "back paddle / SL / SR", "back paddle / SL / SR", "back paddle", "back paddle"];
+    const AXIS_TEXT = ["Left stick X", "Left stick Y", "Right stick X", "Right stick Y", "Left trigger", "Right trigger"];
+    const AXIS_HINT = ["- left / + right", "- up / + down", "- left / + right", "- up / + down", "LT / ZL, analog", "RT / ZR, analog"];
+    // GamepadMapRule
+    const K = Object.freeze({ BUTTON_TO_BUTTON: 0, AXIS_TO_BUTTON: 1, BUTTON_TO_AXIS: 2, AXIS_TO_AXIS: 3 });
+    const KIND_TEXT = ["button → button", "axis → button", "button → axis", "axis → axis"];
+    const RULE_NONE = 0xFF, KEEP_SOURCE = 0x01;
+    const AXIS_MAX = 32767, MAX_SCALE_PERCENT = 400, MAX_DEADZONE_PERCENT = 90, MAX_RULES = 64;
+    const HALF_THRESHOLD = 16384;   // GamepadMap::left_stick_to_dpad's default (50 %)
+    const TRIGGER_THRESHOLD = 13107; // GamepadMap::triggers_to_buttons' default (40 %)
+    const LEARN_THRESHOLD = 16384;  // a Learn takes an axis past 50 %
+
+    const isTrigger = (a) => a === A.LEFT_TRIGGER || a === A.RIGHT_TRIGGER;
+    const sourceIsAxis = (kind) => kind === K.AXIS_TO_BUTTON || kind === K.AXIS_TO_AXIS;
+    const targetIsAxis = (kind) => kind === K.BUTTON_TO_AXIS || kind === K.AXIS_TO_AXIS;
+    const hex4 = (v) => (v & 0xFFFF).toString(16).padStart(4, "0");
+    function buttonLabel(i) { const t = BUTTON_TEXT[i]; if (!t) return "button " + i; return BUTTON_HINT[i] ? t + " (" + BUTTON_HINT[i] + ")" : t; }
+    function axisLabel(i) { const t = AXIS_TEXT[i]; if (!t) return "axis " + i; return t + " (" + AXIS_HINT[i] + ")"; }
+    function controlText(isAxis, i) { return isAxis ? (AXIS_TEXT[i] || "axis " + i) : (BUTTON_TEXT[i] || "button " + i); }
+    // param <-> percent of full scale (a threshold or a button -> axis value)
+    // (rounded away from 0 symmetrically: +/-50 % -> +/-16384, the C++ helpers' half-way threshold)
+    function percentToParam(pct) {
+      const x = Number(pct); if (!Number.isFinite(x)) return 0;
+      const v = Math.sign(x) * Math.round(Math.abs(x) * AXIS_MAX / 100);
+      return Math.max(-AXIS_MAX, Math.min(AXIS_MAX, v)) || 0;
+    }
+    function paramToPercent(p) { return Math.round(p * 1000 / AXIS_MAX) / 10; }
+
+    // ---- byte helpers ----
+    // Reads little-endian fields; every read fails (and keeps failing) once the
+    // payload is exhausted (like gamepad_map_protocol::Reader).
+    class GmReader {
+      constructor(bytes) { this.b = bytes; this.pos = 0; this.ok = true; }
+      have(n) { if (!this.ok || this.b.length - this.pos < n) { this.ok = false; return false; } return true; }
+      u8() { if (!this.have(1)) return 0; return this.b[this.pos++]; }
+      u16() { if (!this.have(2)) return 0; const v = this.b[this.pos] | (this.b[this.pos + 1] << 8); this.pos += 2; return v; }
+      i16() { const v = this.u16(); return v >= 0x8000 ? v - 0x10000 : v; }
+      u32() {
+        if (!this.have(4)) return 0;
+        const p = this.pos; this.pos += 4;
+        return (this.b[p] | (this.b[p + 1] << 8) | (this.b[p + 2] << 16) | (this.b[p + 3] << 24)) >>> 0;
+      }
+      str() {
+        const n = this.u8(); if (!this.have(n)) return "";
+        const s = new TextDecoder().decode(this.b.subarray(this.pos, this.pos + n)); this.pos += n; return s;
+      }
+      done() { return this.ok && this.pos === this.b.length; }
+      // every known field was read (trailing bytes are allowed: see the compatibility rule)
+      knownFieldsRead() { return this.ok; }
+    }
+    class GmWriter {
+      constructor() { this.out = []; }
+      u8(v) { this.out.push(v & 0xFF); return this; }
+      u16(v) { this.out.push(v & 0xFF, (v >> 8) & 0xFF); return this; }
+      i16(v) { return this.u16(v & 0xFFFF); }
+      u32(v) { for (let i = 0; i < 4; i++) this.out.push((v >>> (8 * i)) & 0xFF); return this; }
+      // [len u8][utf8 bytes], truncated to 255 bytes like put_str()
+      str(s) { const b = new TextEncoder().encode(String(s == null ? "" : s)).subarray(0, 255); this.out.push(b.length, ...b); return this; }
+      bytes() { return new Uint8Array(this.out); }
+    }
+
+    // ---- shared encodings ----
+    // target: { profile: false } = the default map, or { profile: true, vid, pid, name }
+    function putTarget(w, t) {
+      w.u8(t && t.profile ? 1 : 0);
+      if (t && t.profile) w.u16(t.vid).u16(t.pid).str(t.name);
+    }
+    function readTarget(r) {
+      const kind = r.u8();
+      if (!r.ok || kind > 1) return null;
+      if (kind === 0) return { profile: false };
+      const t = { profile: true, vid: r.u16(), pid: r.u16(), name: r.str() };
+      return r.ok ? t : null;
+    }
+    // map: { leftDeadzone, rightDeadzone, rules: [{ kind, source, target, flags, param }] }
+    function putMap(w, m) {
+      const n = Math.min(255, m.rules.length);
+      w.u8(m.leftDeadzone).u8(m.rightDeadzone).u8(n);
+      for (let i = 0; i < n; i++) { const r = m.rules[i]; w.u8(r.kind).u8(r.source).u8(r.target).u8(r.flags).i16(r.param); }
+    }
+    function readMap(r) {
+      const m = { leftDeadzone: r.u8(), rightDeadzone: r.u8(), rules: [] };
+      const count = r.u8();
+      if (!r.ok) return null;
+      for (let i = 0; i < count; i++) {
+        const rule = { kind: r.u8(), source: r.u8(), target: r.u8(), flags: r.u8(), param: r.i16() };
+        if (!r.ok) return null;
+        m.rules.push(rule);
+      }
+      return m;
+    }
+    // state: { buttons (u32, bit n = button n), axes: [6 x i16] }
+    function readState(r) {
+      const s = { buttons: r.u32(), axes: [] };
+      for (let a = 0; a < AXIS_COUNT; a++) s.axes.push(r.i16());
+      return r.ok ? s : null;
+    }
+    function encodeState(s) { const w = new GmWriter(); w.u32(s.buttons); for (const a of s.axes) w.i16(a); return w.bytes(); }
+
+    // ---- requests ----
+    function encodeGetMap(t) { const w = new GmWriter(); putTarget(w, t); return w.bytes(); }
+    function encodeSetMap(t, m) { const w = new GmWriter(); putTarget(w, t); putMap(w, m); return w.bytes(); }
+    function encodeEraseProfile(t) { return new GmWriter().u16(t.vid).u16(t.pid).str(t.name).bytes(); }
+    function encodeSetStream(enable, periodMs) { return new GmWriter().u8(enable ? 1 : 0).u16(periodMs).bytes(); }
+
+    // ---- replies / events (null = truncated / malformed, like the C++ decoders;
+    //      trailing bytes after the known fields are ignored) ----
+    function decodeInfo(p) {
+      const r = new GmReader(p);
+      const info = { buttonCount: r.u8(), axisCount: r.u8(), maxRules: r.u8(), maxProfiles: r.u8(), profileCount: r.u8(), controller: null };
+      const flags = r.u8();
+      if (!r.ok) return null;
+      if (flags & FLAG_CONNECTED) {
+        const c = { vid: r.u16(), pid: r.u16(), name: r.str(), hasProfile: r.u8() !== 0 };
+        if (!r.ok) return null;
+        info.controller = c;
+      }
+      return r.knownFieldsRead() ? info : null;
+    }
+    // MAP: [target][flags u8][map]; the target as requested (the stored name if
+    // the profile exists), exists = false: a missing profile, answered with the
+    // default map (what that controller uses today)
+    function decodeMapReply(p) {
+      const r = new GmReader(p);
+      const target = readTarget(r); if (!target) return null;
+      const flags = r.u8(); if (!r.ok) return null;
+      const map = readMap(r); if (!map || !r.knownFieldsRead()) return null;
+      return { target, exists: !!(flags & FLAG_EXISTS), map };
+    }
+    function decodeProfiles(p) {
+      const r = new GmReader(p);
+      const count = r.u8(); if (!r.ok) return null;
+      const out = [];
+      for (let i = 0; i < count; i++) {
+        const s = { vid: r.u16(), pid: r.u16(), name: r.str(), ruleCount: r.u8() };
+        if (!r.ok) return null;
+        out.push(s);
+      }
+      return r.knownFieldsRead() ? out : null;
+    }
+    function decodeInput(p) {
+      const r = new GmReader(p);
+      const flags = r.u8();
+      const raw = readState(r), mapped = readState(r);
+      if (!raw || !mapped || !r.knownFieldsRead()) return null;
+      return { connected: !!(flags & FLAG_CONNECTED), changed: !!(flags & FLAG_CHANGED), raw, mapped };
+    }
+    function decodeOk(p) { return p.length >= 1 ? { requestType: p[0] } : null; } // (later bytes ignored)
+    // (the message runs to the end of the payload, so nothing can follow it)
+    function decodeError(p) {
+      if (p.length < 5) return null;
+      const r = new GmReader(p);
+      const requestType = r.u8(), code = r.u32();
+      return { requestType, code, message: new TextDecoder().decode(p.subarray(5)) };
+    }
+
+    // ---- targets ----
+    function describeTarget(t) {
+      if (!t) return "-";
+      if (!t.profile) return "default map";
+      const name = t.name ? "“" + t.name + "”" : "(no name)";
+      return t.vid === 0 && t.pid === 0 ? "profile " + name + " (matched by name)" : "profile " + hex4(t.vid) + ":" + hex4(t.pid) + " " + name;
+    }
+    // GamepadProfile::matches(): by VID:PID, or by (non-empty) name when both are 0
+    function sameTarget(a, b) {
+      if (!a || !b || a.profile !== b.profile) return false;
+      if (!a.profile) return true;
+      if (a.vid === 0 && a.pid === 0) return b.vid === 0 && b.pid === 0 && !!a.name && a.name === b.name;
+      return a.vid === b.vid && a.pid === b.pid;
+    }
+    function validateTarget(t) {
+      if (!t || !t.profile) return null;
+      if (!Number.isInteger(t.vid) || !Number.isInteger(t.pid) || t.vid < 0 || t.vid > 0xFFFF || t.pid < 0 || t.pid > 0xFFFF) return "VID / PID must be 0000..ffff";
+      if (t.vid === 0 && t.pid === 0 && !t.name) return "a profile with VID and PID 0 needs a name (it is the key)";
+      if (new TextEncoder().encode(t.name || "").length > 255) return "the name is longer than 255 bytes";
+      return null;
+    }
+
+    // ---- validation: GamepadMapRule::valid() / GamepadMap::valid() ----
+    // limits: { maxRules, buttonCount, axisCount } (from INFO; defaults = the C++ constants)
+    function gmLimits(info) {
+      return info ? { maxRules: info.maxRules, buttonCount: info.buttonCount, axisCount: info.axisCount }
+                  : { maxRules: MAX_RULES, buttonCount: BUTTON_COUNT, axisCount: AXIS_COUNT };
+    }
+    function validateRule(r, lim) {
+      lim = lim || gmLimits(null);
+      if (!Number.isInteger(r.kind) || r.kind < 0 || r.kind > K.AXIS_TO_AXIS) return "unknown rule kind";
+      if (r.flags & ~KEEP_SOURCE) return "unknown flags";
+      const sources = sourceIsAxis(r.kind) ? lim.axisCount : lim.buttonCount;
+      const targets = targetIsAxis(r.kind) ? lim.axisCount : lim.buttonCount;
+      if (!Number.isInteger(r.source) || r.source < 0 || r.source >= sources) return "source out of range";
+      if (r.target !== RULE_NONE && (!Number.isInteger(r.target) || r.target < 0 || r.target >= targets)) return "target out of range";
+      if (!Number.isInteger(r.param) || r.param < -32768 || r.param > 32767) return "parameter out of range";
+      if (r.kind === K.AXIS_TO_BUTTON && r.param === 0) return "axis -> button needs a non-zero threshold";
+      if (r.kind === K.AXIS_TO_BUTTON && r.param < 0 && isTrigger(r.source)) return "a trigger never goes below 0: its threshold must be positive";
+      if (r.target === RULE_NONE && (r.flags & KEEP_SOURCE)) return "a rule that keeps its source needs a target";
+      if (r.kind === K.AXIS_TO_AXIS && (r.param < -MAX_SCALE_PERCENT || r.param > MAX_SCALE_PERCENT)) return "axis -> axis scale out of range";
+      return null;
+    }
+    // Every problem (the firmware stops at the first): [{ rule: index | -1, why }]
+    function validateMap(m, lim) {
+      lim = lim || gmLimits(null);
+      const errors = [];
+      const dzOk = (v) => Number.isInteger(v) && v >= 0 && v <= MAX_DEADZONE_PERCENT;
+      if (!dzOk(m.leftDeadzone) || !dzOk(m.rightDeadzone)) errors.push({ rule: -1, why: "dead zone out of range" });
+      if (m.rules.length > lim.maxRules) errors.push({ rule: -1, why: "too many rules (" + m.rules.length + "; the device takes at most " + lim.maxRules + ")" });
+      m.rules.forEach((r, i) => { const why = validateRule(r, lim); if (why) errors.push({ rule: i, why }); });
+      return errors;
+    }
+
+    // ---- rules: builders (GamepadMapRule's static helpers), kinds, descriptions ----
+    const keepFlag = (keep) => keep ? KEEP_SOURCE : 0;
+    function ruleButton(from, to, keep) { return { kind: K.BUTTON_TO_BUTTON, source: from, target: to, flags: keepFlag(keep), param: 0 }; }
+    function ruleAxisToButton(from, threshold, to, keep) { return { kind: K.AXIS_TO_BUTTON, source: from, target: to, flags: keepFlag(keep), param: threshold }; }
+    function ruleButtonToAxis(from, to, value, keep) { return { kind: K.BUTTON_TO_AXIS, source: from, target: to, flags: keepFlag(keep), param: value }; }
+    function ruleAxis(from, to, scalePercent = 100, keep = false) { return { kind: K.AXIS_TO_AXIS, source: from, target: to, flags: keepFlag(keep), param: scalePercent }; }
+    function defaultParam(kind) { return kind === K.AXIS_TO_BUTTON ? HALF_THRESHOLD : kind === K.BUTTON_TO_AXIS ? AXIS_MAX : kind === K.AXIS_TO_AXIS ? 100 : 0; }
+    // Change a rule's kind: a source / target whose type (button / axis) changes
+    // starts over at the first control (a "none" target stays none), and the
+    // parameter takes the new kind's default.
+    function changeRuleKind(rule, kind) {
+      const r = { ...rule, kind };
+      if (sourceIsAxis(kind) !== sourceIsAxis(rule.kind)) r.source = 0;
+      if (targetIsAxis(kind) !== targetIsAxis(rule.kind) && r.target !== RULE_NONE) r.target = 0;
+      r.param = defaultParam(kind);
+      return r;
+    }
+    function signedPercent(p) { const v = paramToPercent(p); return (v > 0 ? "+" : "") + v + "%"; }
+    // One line saying what a rule does.
+    function describeRule(r) {
+      if (!Number.isInteger(r.kind) || r.kind < 0 || r.kind > K.AXIS_TO_AXIS) return "unknown rule kind " + r.kind;
+      const sa = sourceIsAxis(r.kind), ta = targetIsAxis(r.kind);
+      const src = controlText(sa, r.source);
+      const keep = !!(r.flags & KEEP_SOURCE);
+      if (r.target === RULE_NONE)
+        return keep ? src + ": invalid (keeps the source but has no target)" :
+               src + " is removed (" + (sa ? (isTrigger(r.source) ? "reads released" : "reads 0") : "never pressed") + ")";
+      const dst = controlText(ta, r.target);
+      let s;
+      switch (r.kind) {
+        case K.BUTTON_TO_BUTTON:
+          s = r.source === r.target ? src + " stays " + src : src + " presses " + dst;
+          break;
+        case K.AXIS_TO_BUTTON:
+          s = r.param === 0 ? src + " never presses " + dst + " (a threshold of 0 is invalid)" :
+              r.param < 0 && isTrigger(r.source) ? src + " never presses " + dst + " (a trigger never goes below 0)" :
+              src + (r.param > 0 ? " above " : " below ") + signedPercent(r.param) + " presses " + dst;
+          break;
+        case K.BUTTON_TO_AXIS:
+          s = src + " adds " + signedPercent(r.param) + " to " + dst;
+          break;
+        default: // axis -> axis
+          if (r.source === r.target) s = r.param === -100 ? src + " is inverted" : r.param === 100 ? src + " is unchanged" : src + " is scaled to " + r.param + "%";
+          else if (r.param === 100) s = src + " drives " + dst;
+          else if (r.param === -100) s = src + " drives " + dst + ", inverted";
+          else s = src + " × " + r.param + "% drives " + dst;
+      }
+      if (keep && !(r.kind === K.BUTTON_TO_BUTTON && r.source === r.target)) s += " (" + src + " also stays)";
+      return s;
+    }
+
+    // ---- presets: the GamepadMap builder helpers, rule for rule ----
+    const PRESETS = [
+      { id: "swapSouthEast", label: "Swap South / East (Nintendo A/B)", rules: () => [ruleButton(B.SOUTH, B.EAST), ruleButton(B.EAST, B.SOUTH)] },
+      { id: "swapWestNorth", label: "Swap West / North", rules: () => [ruleButton(B.WEST, B.NORTH), ruleButton(B.NORTH, B.WEST)] },
+      { id: "invertLeftY", label: "Invert left Y", rules: () => [ruleAxis(A.LEFT_Y, A.LEFT_Y, -100)] },
+      { id: "invertRightY", label: "Invert right Y", rules: () => [ruleAxis(A.RIGHT_Y, A.RIGHT_Y, -100)] },
+      { id: "swapSticks", label: "Swap sticks", rules: () => [ruleAxis(A.LEFT_X, A.RIGHT_X), ruleAxis(A.RIGHT_X, A.LEFT_X), ruleAxis(A.LEFT_Y, A.RIGHT_Y), ruleAxis(A.RIGHT_Y, A.LEFT_Y)] },
+      { id: "leftStickToDpad", label: "Left stick → D-pad", rules: () => [
+        ruleAxisToButton(A.LEFT_X, -HALF_THRESHOLD, B.LEFT, true), ruleAxisToButton(A.LEFT_X, HALF_THRESHOLD, B.RIGHT, true),
+        ruleAxisToButton(A.LEFT_Y, -HALF_THRESHOLD, B.UP, true), ruleAxisToButton(A.LEFT_Y, HALF_THRESHOLD, B.DOWN, true)] },
+      { id: "dpadToLeftStick", label: "D-pad → left stick", rules: () => [
+        ruleButtonToAxis(B.LEFT, A.LEFT_X, -AXIS_MAX, true), ruleButtonToAxis(B.RIGHT, A.LEFT_X, AXIS_MAX, true),
+        ruleButtonToAxis(B.UP, A.LEFT_Y, -AXIS_MAX, true), ruleButtonToAxis(B.DOWN, A.LEFT_Y, AXIS_MAX, true)] },
+      { id: "triggersToButtons", label: "Triggers → L2 / R2", rules: () => [
+        ruleAxisToButton(A.LEFT_TRIGGER, TRIGGER_THRESHOLD, B.L2, true), ruleAxisToButton(A.RIGHT_TRIGGER, TRIGGER_THRESHOLD, B.R2, true)] },
+      { id: "buttonsToTriggers", label: "L2 / R2 → triggers", rules: () => [
+        ruleButtonToAxis(B.L2, A.LEFT_TRIGGER, AXIS_MAX, true), ruleButtonToAxis(B.R2, A.RIGHT_TRIGGER, AXIS_MAX, true)] },
+    ];
+
+    // ---- learn: the next control that changes on the raw input ----
+    // An axis counts once it is past LEARN_THRESHOLD (a trigger only upwards);
+    // a control already held / deflected when the learn starts counts once it
+    // was released and is pressed again.
+    function axisPastSign(a, v) {
+      if (isTrigger(a)) return v >= LEARN_THRESHOLD ? 1 : 0;
+      return v >= LEARN_THRESHOLD ? 1 : v <= -LEARN_THRESHOLD ? -1 : 0;
+    }
+    function learnBaseline(s) { return { buttons: s.buttons >>> 0, past: s.axes.map((v, a) => axisPastSign(a, v)) }; }
+    // -> { hit: null | { type: "button", index } | { type: "axis", index, sign }, base }
+    function learnStep(base, s, buttonCount = BUTTON_COUNT) {
+      const mask = buttonCount >= 32 ? 0xFFFFFFFF : ((1 << buttonCount) >>> 0) - 1;
+      const fresh = (s.buttons & ~base.buttons & mask) >>> 0;
+      if (fresh) return { hit: { type: "button", index: 31 - Math.clz32((fresh & -fresh) >>> 0) }, base };
+      for (let a = 0; a < s.axes.length; a++) {
+        const p = axisPastSign(a, s.axes[a]);
+        if (p !== 0 && p !== base.past[a]) return { hit: { type: "axis", index: a, sign: p }, base };
+      }
+      return { hit: null, base: { buttons: (base.buttons & s.buttons) >>> 0, past: base.past.map((p, a) => axisPastSign(a, s.axes[a]) === 0 ? 0 : p) } };
+    }
+    // Fill a learned control in as the rule's source. A control of the other
+    // type switches the kind (button -> button <-> axis -> button, button ->
+    // axis <-> axis -> axis: the target keeps its type); an axis -> button
+    // threshold takes the direction the axis moved.
+    function applyLearnHit(rule, hit) {
+      const r = { ...rule };
+      if (hit.type === "button") {
+        if (sourceIsAxis(r.kind)) { r.kind = r.kind === K.AXIS_TO_BUTTON ? K.BUTTON_TO_BUTTON : K.BUTTON_TO_AXIS; r.param = defaultParam(r.kind); }
+      } else if (!sourceIsAxis(r.kind)) {
+        r.kind = r.kind === K.BUTTON_TO_AXIS ? K.AXIS_TO_AXIS : K.AXIS_TO_BUTTON; r.param = defaultParam(r.kind);
+      }
+      r.source = hit.index;
+      if (r.kind === K.AXIS_TO_BUTTON) r.param = (hit.sign < 0 ? -1 : 1) * (Math.min(AXIS_MAX, Math.abs(r.param)) || HALF_THRESHOLD);
+      return r;
+    }
+    // --- end gamepad map codec ---
+
+    // --- begin full update plan (pure: no DOM; see web/test/dongle_console_test.js) ---
+    // The Full update writes the published release images over Web Serial with
+    // esptool-js: the one way to change the partition table, which an OTA update
+    // cannot (v3 -> v4 adds the button-map storage). The images are published
+    // next to this page (same origin) under firmware/latest/:
+    //   manifest.json = {"version": "<release tag>", "chip": "esp32s3",
+    //                    "files": [{"offset": <number>, "path": "<file name>"}...]}
+    // plus the .bin files beside it. The chip is never erased as a whole: only
+    // the regions the images cover are rewritten, so NVS (paired controllers +
+    // settings) keeps its contents; checkFlashImages() refuses an image that
+    // would overlap an NVS partition.
+    const FULL_FLASH_CHIP = "esp32s3";
+    const FLASH_SECTOR = 0x1000;            // esptool erases whole 4 KiB sectors: offsets must be aligned
+    const FLASH_LIMIT = 0x4000000;          // 64 MiB (the largest flash an ESP32-S3 maps)
+    const BOOTLOADER_OFFSET = 0x0, PARTITION_TABLE_OFFSET = 0x8000;
+    const ROM_USB_VID = 0x303A;             // Espressif: what the ESP32-S3 ROM enumerates as in download mode
+    const ROM_USB_PIDS = { 0x1001: "USB-Serial-JTAG", 0x0009: "USB-OTG CDC (ROM)" };
+    const IMAGE_MAGIC = 0xE9;               // first byte of a bootloader / app image
+    // partition table (esp_partition.h / gen_esp32part.py): 32-byte entries
+    // [magic u16 0x50AA][type u8][subtype u8][offset u32][size u32][label 16][flags u32],
+    // closed by an MD5 entry (magic 0xEBEB) or erased flash (0xFF)
+    const PART_MAGIC = 0x50AA, PART_MD5_MAGIC = 0xEBEB, PART_ENTRY_SIZE = 32;
+    const PART_TYPE_APP = 0x00, PART_TYPE_DATA = 0x01, PART_SUBTYPE_NVS = 0x02;
+    const GM_PROTOCOL_ID = "espp.gamepad_map", GM_DEFAULT_MODULE_ID = 0x0B;
+
+    const normalizeChip = (s) => String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]/g, "");
+    const hexAddr = (n) => "0x" + (n >>> 0).toString(16);
+    // a number, or a "0x.." / decimal string -> integer (NaN otherwise)
+    function parseOffset(v) {
+      if (typeof v === "number") return Number.isInteger(v) ? v : NaN;
+      if (typeof v !== "string") return NaN;
+      const t = v.trim();
+      if (/^0x[0-9a-f]+$/i.test(t)) return parseInt(t.slice(2), 16);
+      if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
+      return NaN;
+    }
+    function checkPlanOffset(offset, what) {
+      if (!Number.isInteger(offset) || offset < 0 || offset >= FLASH_LIMIT) throw new Error(what + " has no valid flash offset");
+      if (offset % FLASH_SECTOR) throw new Error(what + " (" + hexAddr(offset) + ") does not start on a 4 KiB flash sector");
+    }
+    // Images a full update should carry; missing ones are warnings, not errors.
+    function planWarnings(files) {
+      const w = [];
+      if (!files.some((f) => f.offset === BOOTLOADER_OFFSET)) w.push("no bootloader image at 0x0");
+      if (!files.some((f) => f.offset === PARTITION_TABLE_OFFSET)) w.push("no partition table at 0x8000 (that is what a full update is for)");
+      return w;
+    }
+    // manifest.json (its text or the parsed object) -> { version, chip, files:
+    // [{ offset, path }] sorted by offset, warnings }. Throws an Error saying
+    // what is wrong (bad JSON, another chip, no / bad files).
+    function parseFlashManifest(input) {
+      let m = input;
+      if (typeof input === "string") {
+        try { m = JSON.parse(input); } catch (e) { throw new Error("manifest.json is not valid JSON (" + e.message + ")"); }
+      }
+      if (!m || typeof m !== "object" || Array.isArray(m)) throw new Error("manifest.json is not a JSON object");
+      if (typeof m.version !== "string" || !m.version.trim()) throw new Error("manifest.json names no version");
+      const chip = normalizeChip(m.chip);
+      if (!chip) throw new Error("manifest.json names no chip");
+      if (chip !== FULL_FLASH_CHIP) throw new Error("manifest.json is for " + m.chip + ", but the dongle is an ESP32-S3");
+      if (!Array.isArray(m.files) || !m.files.length) throw new Error("manifest.json lists no files");
+      const files = [];
+      m.files.forEach((f, i) => {
+        const what = "manifest.json file #" + (i + 1);
+        if (!f || typeof f !== "object") throw new Error(what + " is not an object");
+        // a plain file name in the manifest's folder: no directories, no URL
+        if (typeof f.path !== "string" || !/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(f.path) || f.path.includes(".."))
+          throw new Error(what + " has no plain file name (path " + JSON.stringify(f.path) + ")");
+        const offset = parseOffset(f.offset);
+        checkPlanOffset(offset, what + " (" + f.path + ")");
+        if (files.some((x) => x.offset === offset)) throw new Error("manifest.json lists offset " + hexAddr(offset) + " twice");
+        files.push({ offset, path: f.path });
+      });
+      files.sort((a, b) => a.offset - b.offset);
+      return { version: m.version.trim(), chip, files, warnings: planWarnings(files) };
+    }
+    // The download URL of every file of a parsed manifest (next to manifest.json).
+    function flashFileUrls(plan, manifestUrl) {
+      return plan.files.map((f) => ({ offset: f.offset, path: f.path, url: new URL(f.path, manifestUrl).href }));
+    }
+    // The local-file fallback (one file input per offset, like the espp board
+    // console). rows: [{ offset: "0x8000" (text), name, data: Uint8Array | null }];
+    // rows without a file are skipped. -> { files: [{ offset, name, data }], warnings }.
+    function buildLocalFlashPlan(rows) {
+      const files = [];
+      for (const r of rows || []) {
+        if (!r || !r.data) continue;
+        const t = String(r.offset == null ? "" : r.offset).trim();
+        // the WHOLE string must be hex (parseInt alone would take "0x8000oops" as 0x8000)
+        if (!/^(0x)?[0-9a-f]+$/i.test(t)) throw new Error("invalid offset \"" + r.offset + "\" for " + r.name + " (expected hex, e.g. 0x8000)");
+        const offset = parseInt(t.replace(/^0x/i, ""), 16);
+        checkPlanOffset(offset, r.name);
+        if (files.some((x) => x.offset === offset)) throw new Error("two files are set to flash at " + hexAddr(offset));
+        files.push({ offset, name: r.name, data: r.data });
+      }
+      if (!files.length) throw new Error("pick at least one image file");
+      files.sort((a, b) => a.offset - b.offset);
+      return { files, warnings: planWarnings(files) };
+    }
+    function parsePartitionTable(bytes) {
+      const out = [];
+      for (let o = 0; o + PART_ENTRY_SIZE <= bytes.length; o += PART_ENTRY_SIZE) {
+        const magic = bytes[o] | (bytes[o + 1] << 8);
+        if (magic === 0xFFFF || magic === PART_MD5_MAGIC) break;
+        if (magic !== PART_MAGIC) throw new Error("entry " + (out.length + 1) + " has a bad magic (0x" + magic.toString(16) + ")");
+        const dv = new DataView(bytes.buffer, bytes.byteOffset + o, PART_ENTRY_SIZE);
+        let label = "";
+        for (let i = 12; i < 28 && bytes[o + i]; i++) label += String.fromCharCode(bytes[o + i]);
+        out.push({ type: bytes[o + 2], subtype: bytes[o + 3], offset: dv.getUint32(4, true), size: dv.getUint32(8, true), label, flags: dv.getUint32(28, true) });
+      }
+      if (!out.length) throw new Error("it holds no partitions");
+      return out;
+    }
+    // Sanity checks on the images about to be written: files [{ offset, name,
+    // data }] -> { errors, warnings, partitions (from the image at 0x8000, or
+    // null), nvs: [partitions kept] }. Any error means: do not flash.
+    function checkFlashImages(files) {
+      const errors = [], warnings = [];
+      const sorted = [...files].sort((a, b) => a.offset - b.offset);
+      const end = (f) => f.offset + (f.data ? f.data.length : 0);
+      for (const f of sorted) {
+        if (!f.data || !f.data.length) errors.push(f.name + " is empty");
+        else if (end(f) > FLASH_LIMIT) errors.push(f.name + " runs past the end of any ESP32-S3 flash");
+      }
+      for (let i = 1; i < sorted.length; i++)
+        if (end(sorted[i - 1]) > sorted[i].offset) errors.push(sorted[i - 1].name + " (" + hexAddr(sorted[i - 1].offset) + ") and " + sorted[i].name + " (" + hexAddr(sorted[i].offset) + ") overlap in flash");
+      const boot = sorted.find((f) => f.offset === BOOTLOADER_OFFSET);
+      if (boot && boot.data && boot.data.length && boot.data[0] !== IMAGE_MAGIC) errors.push(boot.name + " at 0x0 is not a bootloader image (no 0xE9 magic)");
+      let partitions = null;
+      const pt = sorted.find((f) => f.offset === PARTITION_TABLE_OFFSET);
+      if (pt && pt.data && pt.data.length) {
+        try { partitions = parsePartitionTable(pt.data); }
+        catch (e) { errors.push(pt.name + " at 0x8000 is not a partition table: " + e.message); }
+      }
+      const nvs = partitions ? partitions.filter((p) => p.type === PART_TYPE_DATA && p.subtype === PART_SUBTYPE_NVS) : [];
+      if (partitions) {
+        for (const p of nvs)
+          for (const f of sorted)
+            if (f.offset < p.offset + p.size && end(f) > p.offset)
+              errors.push(f.name + " (" + hexAddr(f.offset) + ") would overwrite the " + (p.label || "nvs") + " partition, which holds the paired controllers and the settings");
+        for (const f of sorted) {
+          if (f === pt || f === boot) continue;
+          const p = partitions.find((x) => f.offset >= x.offset && f.offset < x.offset + x.size);
+          if (!p) { warnings.push(f.name + " (" + hexAddr(f.offset) + ") is outside every partition of the new table"); continue; }
+          if (end(f) > p.offset + p.size) errors.push(f.name + " is larger than the " + (p.label || "?") + " partition it is written to");
+          if (p.type === PART_TYPE_APP && f.offset === p.offset && f.data && f.data.length && f.data[0] !== IMAGE_MAGIC)
+            errors.push(f.name + " is written to the app partition " + (p.label || "?") + " but is not an app image (no 0xE9 magic)");
+        }
+      }
+      return { errors, warnings, partitions, nvs };
+    }
+
+    // MD5 (RFC 1321) of a byte array, as lowercase hex: esptool-js verifies each
+    // written region against the flash's own MD5 (writeFlash calculateMD5Hash).
+    const MD5_S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+    const MD5_T = (() => { const t = new Int32Array(64); for (let i = 0; i < 64; i++) t[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296) | 0; return t; })();
+    function md5Hex(bytes) {
+      const n = bytes.length, padded = new Uint8Array((((n + 8) >>> 6) + 1) * 64);
+      padded.set(bytes); padded[n] = 0x80;
+      const view = new DataView(padded.buffer);
+      view.setUint32(padded.length - 8, (n * 8) >>> 0, true);
+      view.setUint32(padded.length - 4, Math.floor(n / 0x20000000), true);
+      let a0 = 0x67452301, b0 = 0xEFCDAB89 | 0, c0 = 0x98BADCFE | 0, d0 = 0x10325476;
+      const m = new Int32Array(16);
+      for (let off = 0; off < padded.length; off += 64) {
+        for (let i = 0; i < 16; i++) m[i] = view.getInt32(off + 4 * i, true);
+        let a = a0, b = b0, c = c0, d = d0;
+        for (let i = 0; i < 64; i++) {
+          let f, g;
+          if (i < 16) { f = (b & c) | (~b & d); g = i; }
+          else if (i < 32) { f = (d & b) | (~d & c); g = (5 * i + 1) & 15; }
+          else if (i < 48) { f = b ^ c ^ d; g = (3 * i + 5) & 15; }
+          else { f = c ^ (b | ~d); g = (7 * i) & 15; }
+          const s = MD5_S[(i >> 4) * 4 + (i & 3)];
+          f = (f + a + MD5_T[i] + m[g]) | 0;
+          a = d; d = c; c = b;
+          b = (b + ((f << s) | (f >>> (32 - s)))) | 0;
+        }
+        a0 = (a0 + a) | 0; b0 = (b0 + b) | 0; c0 = (c0 + c) | 0; d0 = (d0 + d) | 0;
+      }
+      let hexOut = "";
+      for (const w of [a0, b0, c0, d0]) for (let i = 0; i < 4; i++) hexOut += ((w >>> (8 * i)) & 0xFF).toString(16).padStart(2, "0");
+      return hexOut;
+    }
+    // esptool-js 0.5 takes and hands back images as "binary strings" (one char per byte)
+    function bytesToBinaryString(bytes) {
+      let s = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return s;
+    }
+    function binaryStringToBytes(s) {
+      const out = new Uint8Array(s.length);
+      for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xFF;
+      return out;
+    }
+    // The ROM's USB serial port, from SerialPort.getInfo(): "USB-Serial-JTAG (303a:1001)".
+    function describeRomPort(info) {
+      const vid = info && info.usbVendorId != null ? info.usbVendorId : null, pid = info && info.usbProductId != null ? info.usbProductId : null;
+      const h = (v) => v == null ? "?" : v.toString(16).padStart(4, "0");
+      const kind = vid === ROM_USB_VID ? (ROM_USB_PIDS[pid] || "Espressif USB device") : "not an Espressif ROM port";
+      return kind + " (" + h(vid) + ":" + h(pid) + ")";
+    }
+
+    // Does the firmware serve the button maps (espp.gamepad_map, firmware v4+)?
+    // true / false from a discovery reply; null when unknown (no discovery
+    // reply). A discovery v1 reply (or a legacy v2 record without a protocol id)
+    // can only be matched by the published module id.
+    function hasGamepadMapModule(discovery) {
+      if (!discovery || !Array.isArray(discovery.modules)) return null;
+      return discovery.modules.some((m) => m.protocol === GM_PROTOCOL_ID || (!m.protocol && m.id === GM_DEFAULT_MODULE_ID));
+    }
+    // Should the console prompt for the Full update, and why? discovery =
+    // parseDiscovery() output (or null), info = the device-config INFO
+    // (parseInfo(), or null). -> null (no / cannot tell) or { code, text }.
+    function fullUpdateReason(discovery, info) {
+      if (info && info.needsFullFlash)
+        return { code: "needs_full_flash", text: "This dongle runs v4+ firmware on its old flash layout (it was updated over USB, which cannot change the partition table), so its button maps are not saved. One Full update adds their storage." };
+      if (hasGamepadMapModule(discovery) === false)
+        return { code: "no_gamepad_map", text: "This dongle runs firmware older than v4 (no button mapping). v4 changes the flash layout, so moving to it takes one Full update over Web Serial; an OTA update cannot do it." };
+      return null;
+    }
+    // esptool-js 0.5.7's Transport.readLoop races reader.read() against a
+    // timer and drops the read on a timeout, but the read stays queued on the
+    // stream and later swallows the next chunk the chip sends. Talking to a
+    // ROM that already waits in download mode (no reset, so the first read
+    // for a boot message times out) then loses part of every SYNC answer and
+    // never connects. This keeps the pending read and hands it to the next
+    // readLoop instead (same behaviour otherwise); applied once per page.
+    function fixEsptoolReadTimeout(Transport) {
+      if (!Transport || !Transport.prototype || Transport.prototype.dongleReadFix) return;
+      Transport.prototype.dongleReadFix = true;
+      Transport.prototype.readLoop = async function* (timeout) {
+        if (!this.reader) return;
+        const reader = this.reader;
+        try {
+          for (;;) {
+            if (!this.pendingRead || this.pendingReader !== reader) { this.pendingRead = reader.read(); this.pendingReader = reader; }
+            let timer = null;
+            const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Read timeout exceeded")), timeout); });
+            let r;
+            try { r = await Promise.race([this.pendingRead, expired]); } finally { clearTimeout(timer); }
+            this.pendingRead = null;
+            if (r === null) break;
+            const { value, done } = r;
+            if (done || !value) break;
+            yield value;
+          }
+        } catch (_) {
+          // a timeout: the caller sees no data, exactly as before
+        } finally { this.buffer = new Uint8Array(0); }
+      };
+    }
+    // --- end full update plan ---
+
     // Exported for node-side unit checks (harmless in the browser).
     const DongleProto = { crc32, buildFrame, StreamParser, encodeSettings, decodeSettings, parseInfo,
                           parseBonds, encodeForgetBond, bondAddressString,
@@ -1343,7 +2224,12 @@
                           parseSystemInfo, parseHeap, heapRegionName, fmtBytes, u16,
                           parseVersion, compareVersionCore, compareFirmware, pickFirmwareAsset, normalizeRelease,
                           MODULE, MODULE_SPEC, PROTOCOL, DEV, OTA, CD, SYS, SYS_TAG, SYS_CAP_REBOOT, SYS_CAP_BOOTLOADER, MON,
-                          DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE };
+                          DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE, INFO_FLAG, LEGACY_MAP_KEYS,
+                          // button maps (espp.gamepad_map) + the Full update plan
+                          encodeGetMap, encodeSetMap, encodeEraseProfile, encodeSetStream, decodeInfo, decodeMapReply,
+                          decodeProfiles, decodeInput, validateMap, parseFlashManifest, flashFileUrls, buildLocalFlashPlan,
+                          parsePartitionTable, checkFlashImages, md5Hex, bytesToBinaryString, binaryStringToBytes,
+                          describeRomPort, hasGamepadMapModule, fullUpdateReason, fixEsptoolReadTimeout };
     if (typeof module !== "undefined" && module.exports) module.exports = DongleProto;
   </script>
 
@@ -1385,16 +2271,25 @@
     const tabButtons = Array.from(document.querySelectorAll('[role="tab"]'));
     const tabPanels = {};
     for (const b of tabButtons) tabPanels[b.dataset.tab] = document.getElementById(b.getAttribute("aria-controls"));
-    const TAB_MODULE = { device: MODULE.DEVICE, settings: MODULE.DEVICE, system: MODULE.SYSTEM, firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
+    const TAB_MODULE = { device: MODULE.DEVICE, settings: MODULE.DEVICE, mapping: MODULE.GAMEPAD_MAP, system: MODULE.SYSTEM,
+                         firmware: MODULE.OTA, coredump: MODULE.COREDUMP };
     // tabs whose module is found by its discovery v2 protocol id first
-    const TAB_PROTOCOL = { device: PROTOCOL.DEVICE, settings: PROTOCOL.DEVICE, system: PROTOCOL.SYSTEM,
+    const TAB_PROTOCOL = { device: PROTOCOL.DEVICE, settings: PROTOCOL.DEVICE, mapping: PROTOCOL.GAMEPAD_MAP, system: PROTOCOL.SYSTEM,
                            firmware: PROTOCOL.OTA, coredump: PROTOCOL.COREDUMP };
+    // tabs that stay open without their module: Button mapping explains that the
+    // firmware predates v4 and points to the Full update, which lives on the
+    // Firmware tab and needs no module at all (it flashes over Web Serial)
+    const ALWAYS_OPEN_TABS = new Set(["mapping", "firmware"]);
     function tabModuleId(tab) { return resolveModuleId(discovered, TAB_PROTOCOL[tab], TAB_MODULE[tab]); }
     function deviceModuleId() { return resolveModuleId(discovered, PROTOCOL.DEVICE, MODULE.DEVICE); }
     function systemModuleId() { return resolveModuleId(discovered, PROTOCOL.SYSTEM, MODULE.SYSTEM); }
     function monitorModuleId() { return resolveModuleId(discovered, PROTOCOL.MONITOR, MODULE.MONITOR); }
     function otaModuleId() { return resolveModuleId(discovered, PROTOCOL.OTA, MODULE.OTA); }
     function coredumpModuleId() { return resolveModuleId(discovered, PROTOCOL.COREDUMP, MODULE.COREDUMP); }
+    function gamepadMapModuleId() { return resolveModuleId(discovered, PROTOCOL.GAMEPAD_MAP, MODULE.GAMEPAD_MAP); }
+    // The Button mapping tab and the Full update (defined further down; null
+    // until then, so the early UI code can check for them).
+    let gm = null, fw = null;
 
     // ---- logging ---------------------------------------------------------------
     function logLine(cls, text) {
@@ -1479,8 +2374,9 @@
     function selectTab(name) {
       const btn = tabButtons.find((b) => b.dataset.tab === name);
       if (!btn || btn.disabled) return;
+      const prev = activeTab;
       activeTab = name;
-      if (onTabSelected) onTabSelected(name);
+      if (onTabSelected) onTabSelected(name, prev);
       for (const b of tabButtons) {
         const on = b.dataset.tab === name;
         b.setAttribute("aria-selected", on ? "true" : "false");
@@ -1504,9 +2400,18 @@
       });
     }
     try { const saved = localStorage.getItem("dongle_console.tab"); if (saved && tabPanels[saved]) selectTab(saved); } catch (_) {}
-
+    // in-page links to a tab (<a data-goto-tab="mapping">)
+    document.addEventListener("click", (e) => {
+      const a = e.target && e.target.closest ? e.target.closest("[data-goto-tab]") : null;
+      if (!a) return;
+      e.preventDefault();
+      selectTab(a.dataset.gotoTab);
+      const b = tabButtons.find((t) => t.dataset.tab === a.dataset.gotoTab);
+      if (b) b.focus();
+    });
     // Mark each tab with the discovery result; a missing module disables its tab.
     let discovered = null; // { device, fw, modules } or null (unknown)
+    let discoveryDone = false; // the discovery probe of this connection has finished (answered or not)
     let moduleSpecs = buildModuleSpecs(null); // id -> spec for this connection (rebuilt from discovery)
     function moduleAvailable(id) {
       if (id === null) return false;
@@ -1519,8 +2424,10 @@
         if (!transport || !discovered) { b.disabled = false; b.title = ""; continue; }
         const present = moduleAvailable(id);
         b.classList.add(present ? "present" : "missing");
-        b.disabled = !present;
-        b.title = present ? "" : "This firmware does not advertise this tab's service (" + moduleLabel(id, b.dataset.tab) + ")";
+        b.disabled = !present && !ALWAYS_OPEN_TABS.has(b.dataset.tab);
+        b.title = present ? "" : b.dataset.tab === "mapping" ? "This firmware has no button mapping (older than v4): see the Full update on the Firmware tab"
+                : b.dataset.tab === "firmware" ? "This firmware does not advertise OTA updates; the Full update (Web Serial) still works"
+                : "This firmware does not advertise this tab's service (" + moduleLabel(id, b.dataset.tab) + ")";
       }
       const active = tabButtons.find((b) => b.dataset.tab === activeTab);
       if (active && active.disabled) {
@@ -2098,15 +3005,19 @@
     // dongle (or the same one after an update) must not inherit it, or the
     // update check could compare the release against the previous firmware.
     function forgetDeviceState() {
-      discovered = null;
+      discovered = null; discoveryDone = false;
       moduleSpecs = buildModuleSpecs(null);
       correlationSeen = false; // learned per device
       lastInfo = null;
       lastOtaStatus = null;
       clearLink();
       clearSystem();
+      if (gm) gm.onDisconnected();
     }
     async function disconnect() {
+      if (!transport) return;
+      // stop the button-mapping input stream first (bounded: a dead link must not stall the close)
+      if (gm) await gm.beforeDisconnect();
       if (!transport) return;
       const t = transport;
       transport = null;
@@ -2129,7 +3040,10 @@
       parser.reset();
       forgetDeviceState();
       updateUI();
-      if (expectBootloader) {
+      if (expectBootloader && fw && fw.awaitingPort()) {
+        setStatus("", "Download mode");
+        logLine("sys", "USB link dropped as expected — the dongle is in its ROM download mode. Click “Select the bootloader port and flash” on the Firmware tab and pick the Espressif serial port (303a:…).");
+      } else if (expectBootloader) {
         setStatus("", "Disconnected");
         logLine("sys", "USB link dropped as expected — the dongle is in the ROM bootloader (download mode). Flash it with idf.py flash / esptool on the port it re-enumerated as, then reset or replug it" + (els.autoConnect.checked ? " — Auto-connect opens it again once it is back as a dongle." : " and use “Connect dongle”."));
       } else if (expectRestart) {
@@ -2181,6 +3095,10 @@
     }
 
     function dispatchFrame(f) {
+      // the button-mapping live input: streamed INPUT events (no correlation id),
+      // up to 50 per second, so they skip the frame log
+      const gmId = gamepadMapModuleId();
+      if (gm && f.reply && f.module === gmId && f.type === T_INPUT) { gm.onInputFrame(f.payload); return; }
       const quiet = pendingTxn && pendingTxn.quiet;
       if (els.logFrames.checked && !quiet)
         logLine("rx", moduleName(f.module, moduleSpecs) + " " + typeName(f.module, f.type, moduleSpecs) +
@@ -2209,6 +3127,9 @@
           return;
         }
       }
+      // the gamepad map service sends INFO unsolicited (no correlation id) when
+      // the controller changes while the input stream is on
+      if (gm && f.reply && f.module === gmId && f.type === T_INFO && f.correlation === null) { gm.onInfoEvent(f.payload); return; }
       if (!els.logFrames.checked || quiet)
         logLine("warn", "Unsolicited " + moduleName(f.module, moduleSpecs) + " " + typeName(f.module, f.type, moduleSpecs) + " (" + f.payload.length + " B) ignored.");
     }
@@ -2296,6 +3217,8 @@
       if (moduleAvailable(systemModuleId())) await refreshSystemInfo(true);
       if (activeTab === "system") await ensureHeapLoaded();
       if (moduleAvailable(coredumpModuleId()) && activeTab === "coredump") await refreshCoreDump();
+      if (fw) fw.onConnected();
+      if (gm && transport) await gm.onConnected();
       if (transport) setStatus("connected", "Connected");
       // Firmware version is known now (INFO / OTA STATUS): compare it with the
       // latest GitHub release in the background (cached for 10 min).
@@ -2303,7 +3226,7 @@
     }
 
     async function runDiscovery() {
-      discovered = null;
+      discovered = null; discoveryDone = false;
       try {
         const [reply] = await transact(MODULE.DISCOVERY, T_LIST_MODULES, null, { expect: [T_LIST_MODULES], timeoutMs: DISCOVERY_TIMEOUT_MS, noRecover: true });
         discovered = parseDiscovery(reply.payload);
@@ -2312,11 +3235,15 @@
         logLine("sys", "Discovery: " + (discovered.device || "(unnamed device)") + (discovered.fw ? " fw " + discovered.fw : "") + " — modules: " + names + ".");
         for (const tab of Object.keys(TAB_MODULE)) {
           const id = tabModuleId(tab);
-          if (!moduleAvailable(id)) logLine("warn", "The " + tab + " tab's service is not advertised by this firmware (" + moduleLabel(id, tab) + "); that tab is disabled.");
+          if (moduleAvailable(id)) continue;
+          if (tab === "mapping") logLine("warn", "No button mapping on this firmware (" + moduleLabel(id, tab) + "): it is older than v4. Moving to v4 takes one Full update (Firmware tab).");
+          else if (tab === "firmware") logLine("warn", "This firmware does not advertise OTA updates (" + moduleLabel(id, tab) + "); the Firmware tab's Full update (Web Serial) still works.");
+          else logLine("warn", "The " + tab + " tab's service is not advertised by this firmware (" + moduleLabel(id, tab) + "); that tab is disabled.");
         }
       } catch (e) {
         logLine("warn", "No discovery reply (" + e.message + "). Assuming all modules are present.");
       }
+      discoveryDone = true;
       updateUI();
     }
 
@@ -2341,6 +3268,10 @@
       applyDiscoveryToTabs();
 
       const dev = connected && moduleAvailable(deviceModuleId()) && !busy;
+      // v3 applies the stick / button options itself; v4 (button maps) ignores them
+      const legacy = legacyMapSettingsShown();
+      for (const f of els.settingsForm.querySelectorAll(".legacy-map")) f.hidden = !legacy;
+      document.getElementById("legacyMapNote").hidden = legacy;
       els.infoBtn.disabled = !dev;
       els.bondsRefresh.disabled = !dev;
       for (const b of els.bondsList.querySelectorAll("button")) b.disabled = !dev;
@@ -2379,6 +3310,15 @@
       els.cdElfBtn.disabled = !cd || busy || !dumpSize;
       els.cdRawBtn.disabled = !cd || busy || !dumpSize;
       els.cdEraseBtn.disabled = !cd || busy || !dumpSize;
+
+      if (gm) gm.updateControls();
+      if (fw) fw.updateControls();
+    }
+    // The v3 stick / button settings are shown only to firmware known to lack
+    // the button maps (or that answers no discovery: older still); v4 ignores
+    // them, so they are hidden there (and while disconnected) and never sent.
+    function legacyMapSettingsShown() {
+      return !!transport && hasGamepadMapModule(discovered) !== true;
     }
 
     // =====================================================================
@@ -2427,6 +3367,7 @@
       // The 2 s poll re-renders INFO constantly; only redo the release comparison
       // when the firmware string actually changed (first INFO, or after an update).
       if (info.firmware !== updateComparedWith) renderUpdateStatus();
+      if (fw) fw.renderPrompt();
     }
 
     // ---- link diagnostics: BLE input (controller -> dongle) / USB output (dongle -> host) ----
@@ -2650,13 +3591,16 @@
       document.getElementById("o_led_reconnecting_brightness").textContent = settingInputs.led_reconnecting_brightness.value + " %";
       document.getElementById("o_led_pairing_brightness").textContent = settingInputs.led_pairing_brightness.value + " %";
     }
+    // SET_SETTINGS is partial (device_config_protocol.hpp): only the keys sent
+    // change, so leaving the hidden v3 stick / button keys out keeps them as they are
+    function settingShown(k) { return legacyMapSettingsShown() || !LEGACY_MAP_KEYS.includes(k); }
     function settingsDirtyKeys() {
       if (!deviceSettings) return [];
-      return SETTING_KEYS.filter((k) => (k in deviceSettings) && formValue(k) !== deviceSettings[k]);
+      return SETTING_KEYS.filter((k) => (k in deviceSettings) && settingShown(k) && formValue(k) !== deviceSettings[k]);
     }
     function settingsInvalid() {
       for (const key of SETTING_KEYS) {
-        if (!(key in settingInputs)) continue;
+        if (!(key in settingInputs) || !settingShown(key)) continue;
         const why = validateSetting(key, formValue(key));
         if (why) return why;
       }
@@ -2893,22 +3837,31 @@
         "Reboot into the ROM bootloader (download mode)? The dongle stops acting as a controller and re-enumerates as the ESP32-S3 ROM USB device until it is flashed and reset / replugged.",
         "Reboot into bootloader");
       if (!ok || !transport) return;
+      try {
+        const acked = await rebootIntoBootloader(rebootDelayMs());
+        logLine(acked ? "ok" : "sys", acked ? "Reboot into bootloader acknowledged." : "Dongle went away before acknowledging — it is entering the bootloader.");
+        if (acked) setNote(els.sysNote, "warn", "Entering download mode… flash with idf.py flash / esptool (or the Firmware tab's Full update) on the ROM's USB port, then reset or replug the dongle" + (els.autoConnect.checked ? "; Auto-connect opens it again once it is back as a dongle." : " and connect again."));
+      } catch (e) {
+        logLine("err", "Reboot into bootloader failed: " + e.message);
+        setNote(els.sysNote, "err", "Reboot into bootloader failed: " + e.message);
+      }
+    });
+    // Ask the System module to restart into the ROM download mode (shared by the
+    // System tab and the Full update). Resolves true when acknowledged, false
+    // when the dongle dropped the link before answering (it is going anyway);
+    // rejects when the request was refused or never sent.
+    async function rebootIntoBootloader(delayMs) {
       // the ROM enumerates as a different USB device: no automatic reconnect
       const armBootloader = () => { expectBootloader = true; expectRestart = false; reconnect.suppress(); };
       try {
-        await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(rebootDelayMs()), { expect: [SYS.OK], noRecover: true, onSend: armBootloader });
-        logLine("ok", "Reboot into bootloader acknowledged.");
-        setNote(els.sysNote, "warn", "Entering download mode… flash with idf.py flash / esptool on the ROM's USB port, then reset or replug the dongle" + (els.autoConnect.checked ? "; Auto-connect opens it again once it is back as a dongle." : " and connect again."));
+        await transact(systemModuleId(), SYS.REBOOT_TO_BOOTLOADER, u16(delayMs), { expect: [SYS.OK], noRecover: true, onSend: armBootloader });
+        return true;
       } catch (e) {
-        if (e && (e.timeout || e.transportLost) && !e.notSent) {
-          logLine("sys", "Dongle went away before acknowledging — it is entering the bootloader.");
-        } else {
-          expectBootloader = false; if (transport) reconnect.connected(); // still connected: lift the suppression (after a loss the recovery armed by onTransportGone must survive)
-          logLine("err", "Reboot into bootloader failed: " + e.message);
-          setNote(els.sysNote, "err", "Reboot into bootloader failed: " + e.message);
-        }
+        if (e && (e.timeout || e.transportLost) && !e.notSent) return false;
+        expectBootloader = false; if (transport) reconnect.connected(); // still connected: lift the suppression (after a loss the recovery armed by onTransportGone must survive)
+        throw e;
       }
-    });
+    }
 
     function renderHeap(allRegions) {
       // a region the chip does not have (no PSRAM on the T-Dongle-S3) comes back all-zero
@@ -2963,7 +3916,12 @@
       if (heapLoaded || heapInFlight || !transport || busy || !moduleAvailable(monitorModuleId())) return;
       await refreshHeap(true);
     }
-    onTabSelected = (name) => { if (name === "system") ensureHeapLoaded(); };
+    onTabSelected = (name, prev) => {
+      if (name === "system") ensureHeapLoaded();
+      if (gm && prev === "mapping" && name !== "mapping") gm.onTabHidden();
+      if (gm && name === "mapping") gm.onTabShown();
+      if (fw && name === "firmware") fw.onTabShown();
+    };
 
     // =====================================================================
     // Firmware tab (module 0 = espp OTA)
@@ -3327,10 +4285,29 @@
     }
     els.checkUpdatesBtn.addEventListener("click", () => checkForUpdates(true));
 
-    // Fetch the release asset (browser_download_url 302s to objects.githubusercontent.com,
-    // which allows CORS), showing progress on the OTA bar, and return its bytes.
+    // The same image from this page's own origin: the publish workflow copies the
+    // latest release's images next to the console (firmware/latest/, see
+    // manifest.json). GitHub's release download URL answers without CORS
+    // headers, so a hosted page cannot fetch it; the same-origin copy is used
+    // when the manifest says it is that release.
+    async function sameOriginAssetUrl(asset, tag) {
+      if (!/^https?:$/.test(location.protocol)) return null;
+      try {
+        const res = await fetch(new URL("firmware/latest/manifest.json", location.href), { cache: "no-store" });
+        if (!res.ok) return null;
+        const m = parseFlashManifest(await res.text());
+        if (m.version !== tag || !m.files.some((f) => f.path === asset.name)) return null;
+        return new URL("firmware/latest/" + asset.name, location.href).href;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    // Fetch the release asset (the same-origin copy when published, else the
+    // GitHub download URL), showing progress on the OTA bar, and return its bytes.
     async function downloadAsset(asset) {
-      const res = await fetch(asset.url, { cache: "no-store" });
+      const local = await sameOriginAssetUrl(asset, latestRelease && latestRelease.tag);
+      const res = await fetch(local || asset.url, { cache: "no-store" });
       if (!res.ok) throw new Error("HTTP " + res.status + " while fetching " + asset.name);
       const total = asset.size || Number(res.headers.get("content-length")) || 0;
       if (!res.body || typeof res.body.getReader !== "function") return new Uint8Array(await res.arrayBuffer());
@@ -3524,8 +4501,1043 @@
       await refreshCoreDump();
     });
 
+    // =====================================================================
+    // Button mapping tab (module 11 = espp GamepadMapService, firmware v4+)
+    // =====================================================================
+    // Ported from espp's gamepad_map_console.html onto this console's
+    // transport: requests go through transact() (serialized, correlation ids);
+    // the streamed INPUT events and the unsolicited INFO are routed here by
+    // dispatchFrame(). The input stream is a lease: it is renewed every
+    // GM_STREAM_RENEW_MS while this tab is open, visible and "Live input" is on,
+    // and switched off when the tab is left, the page is hidden or the dongle is
+    // disconnected (a closed page stops renewing and the dongle stops by itself).
+    gm = (() => {
+      const GM_STREAM_RENEW_MS = 3000;   // the dongle's lease is longer
+      const GM_INFO_POLL_MS = 10000;     // GET_INFO while the stream is off (it sends INFO itself while on)
+      const GM_LEARN_TIMEOUT_MS = 15000;
+      const E = {};
+      for (const id of ["gmMissing", "gmNeedsFlash", "gmGotoFull", "gmGotoFull2", "gmMain", "gmSide", "gmRxRate", "gmLiveState", "gmLive", "gmPeriod",
+                        "gmLearnBanner", "gmLearnText", "gmLearnCancel", "gmSideRaw", "gmSideMapped", "gmRawOverlay", "gmMappedOverlay",
+                        "gmDirty", "gmEditTitle", "gmEditBadge", "gmEditNote", "gmDzLeft", "gmDzRight", "gmDzLeftOut", "gmDzRightOut",
+                        "gmRulesBody", "gmNoRules", "gmAddRule", "gmRuleCount", "gmRuleMax", "gmPresets", "gmValidation",
+                        "gmSave", "gmRevert", "gmErase", "gmEditConfirm", "gmEditStatus", "gmRefresh", "gmCtlName", "gmCtlProfile",
+                        "gmTargetSel", "gmNewFields", "gmNewVid", "gmNewPid", "gmNewName", "gmLoad", "gmLoadConfirm",
+                        "gmProfCount", "gmProfileList", "gmDevProfiles", "gmDevMaxRules", "gmDevControls", "gmResetAll", "gmResetConfirm"])
+        E[id] = document.getElementById(id);
+
+      let devInfo = null;          // last gamepad-map INFO (decodeInfo)
+      let profiles = [];           // last PROFILES
+      let infoKey = "";            // what of INFO the picker / profile list show (rebuilt only when it changes)
+      let started = false;         // INFO + PROFILES were read on this connection
+      let editTarget = null;       // the map being edited (a target), null = nothing loaded
+      let editMap = null;          // the edited map
+      let savedMap = null;         // the map as loaded / last saved
+      let editExists = false;      // a profile target exists on the dongle
+      let loading = false, saving = false, erasing = false;
+      let streamOn = false;        // the dongle was asked to stream (renewed while on)
+      let lastInputConnected = null;
+      let rxTimes = [];
+      let learn = null;            // { row, base, timer }
+
+      const limits = () => gmLimits(devInfo);
+      const moduleId = () => gamepadMapModuleId();
+      // the firmware advertises the module. Firmware that answers no discovery
+      // predates it (v4 always advertises it), so it is not probed: a request
+      // that times out would make the console reset the USB link.
+      const available = () => !!transport && hasGamepadMapModule(discovered) === true && moduleAvailable(moduleId());
+      const online = () => available() && !busy;
+      // the connected firmware is known to lack the maps (v3, or no discovery reply)
+      const lacking = () => !!transport && discoveryDone && hasGamepadMapModule(discovered) !== true;
+      const ctlKey = (c) => c ? c.vid + ":" + c.pid + ":" + c.name : "";
+      const cloneMap = (m) => ({ leftDeadzone: m.leftDeadzone, rightDeadzone: m.rightDeadzone, rules: m.rules.map((r) => ({ ...r })) });
+      const isDirty = () => !!editMap && JSON.stringify(editMap) !== JSON.stringify(savedMap);
+      const errText = (e) => (e && e.message) ? e.message : String(e);
+      function setEditStatus(text, cls) { setNote(E.gmEditStatus, cls || "muted", text || ""); }
+      const period = () => Number(E.gmPeriod.value) || 50;
+      function request(type, payload, replyType, opts) {
+        return transact(moduleId(), type, payload || null, Object.assign({ expect: [replyType] }, opts || {}));
+      }
+
+      // ---- device state (INFO / PROFILES) ----
+      async function refreshInfo(quiet) {
+        if (!online()) return;
+        try {
+          const [r] = await request(T_GET_INFO, null, T_INFO, { quiet: !!quiet });
+          const d = decodeInfo(r.payload);
+          if (!d) throw new Error("malformed INFO (" + r.payload.length + " B)");
+          applyInfo(d);
+        } catch (e) { if (!(e && e.transportLost)) logLine("err", "Button mapping: reading the controller failed: " + errText(e)); }
+      }
+      async function refreshProfiles(quiet) {
+        if (!online()) return;
+        try {
+          const [r] = await request(T_LIST_PROFILES, null, T_PROFILES, { quiet: !!quiet });
+          const d = decodeProfiles(r.payload);
+          if (!d) throw new Error("malformed PROFILES (" + r.payload.length + " B)");
+          profiles = d; rebuildTargets(); renderProfiles();
+        } catch (e) { if (!(e && e.transportLost)) logLine("err", "Button mapping: listing the profiles failed: " + errText(e)); }
+      }
+      async function refreshDevice(quiet) { await refreshInfo(quiet); await refreshProfiles(quiet); }
+      function applyInfo(info) {
+        const prev = devInfo;
+        devInfo = info;
+        const c = info.controller;
+        if (ctlKey(prev && prev.controller) !== ctlKey(c) || !prev) {
+          if (c) logLine("sys", "Button mapping: controller " + (c.name || "(no name)") + " (" + hex4(c.vid) + ":" + hex4(c.pid) + ")" + (c.hasProfile ? ", has a profile." : ", no profile (uses the default map)."));
+          else if (prev) logLine("sys", "Button mapping: no controller connected.");
+        }
+        E.gmCtlName.textContent = c ? (c.name || "(no name)") + " (" + hex4(c.vid) + ":" + hex4(c.pid) + ")" : "none connected";
+        E.gmCtlProfile.textContent = c ? (c.hasProfile ? "its own profile" : "the default map") : "-";
+        E.gmCtlProfile.className = "badge" + (c ? (c.hasProfile ? " ok" : " info") : "");
+        E.gmDevProfiles.textContent = info.profileCount + " / " + info.maxProfiles;
+        E.gmDevMaxRules.textContent = String(info.maxRules);
+        E.gmDevControls.textContent = info.buttonCount + " buttons, " + info.axisCount + " axes";
+        E.gmRuleMax.textContent = String(info.maxRules);
+        // INFO is polled: rebuild the picker (which would close an open drop-down)
+        // only when what it shows changed; a changed profile count re-lists them
+        const key = JSON.stringify([c, info.profileCount, info.maxProfiles]);
+        if (key !== infoKey) {
+          infoKey = key;
+          rebuildTargets();
+          renderProfiles();
+          if (prev && prev.profileCount !== info.profileCount) refreshProfiles(true);
+        }
+        updateValidation();
+        // first INFO of a session: open the map the connected controller uses
+        if (!editTarget && !loading) {
+          E.gmTargetSel.value = c ? "controller" : "default";
+          onTargetSelChange();
+          requestLoad(targetFromSelection());
+        }
+      }
+      function renderProfiles() {
+        const box = E.gmProfileList;
+        box.textContent = "";
+        E.gmProfCount.textContent = devInfo ? profiles.length + " / " + devInfo.maxProfiles : "";
+        const msg = (t) => { const s = document.createElement("span"); s.className = "muted small-text"; s.textContent = t; box.append(s); };
+        if (!transport && !profiles.length) { msg("Connect the dongle to list its profiles."); return; }
+        if (!profiles.length) { msg("No profiles stored: every controller uses the default map."); return; }
+        const c = devInfo && devInfo.controller;
+        profiles.forEach((p, i) => {
+          const t = { profile: true, vid: p.vid, pid: p.pid, name: p.name };
+          const row = document.createElement("div"); row.className = "p" + (sameTarget(t, editTarget) ? " current" : "");
+          const nm = document.createElement("span"); nm.className = "nm";
+          nm.textContent = (p.vid || p.pid ? hex4(p.vid) + ":" + hex4(p.pid) + " " : "") + (p.name || "(no name)");
+          nm.title = describeTarget(t);
+          const meta = document.createElement("span"); meta.className = "muted small-text";
+          meta.textContent = p.ruleCount + " rule" + (p.ruleCount === 1 ? "" : "s");
+          row.append(nm);
+          if (c && sameTarget(t, { profile: true, vid: c.vid, pid: c.pid, name: c.name })) { const b = document.createElement("span"); b.className = "badge ok"; b.textContent = "connected"; row.append(b); }
+          row.append(meta);
+          const edit = document.createElement("button"); edit.type = "button"; edit.className = "small"; edit.textContent = "Edit";
+          edit.disabled = !online();
+          edit.addEventListener("click", () => { E.gmTargetSel.value = "p" + i; onTargetSelChange(); loadSelected(edit); });
+          row.append(edit);
+          box.append(row);
+        });
+      }
+
+      // ---- the map picker ----
+      function rebuildTargets() {
+        const sel = E.gmTargetSel, keep = sel.value;
+        sel.textContent = "";
+        const add = (value, text, disabled) => { const o = document.createElement("option"); o.value = value; o.textContent = text; o.disabled = !!disabled; sel.append(o); };
+        add("default", "Default map (controllers without a profile)");
+        const c = devInfo && devInfo.controller;
+        add("controller", c ? "Connected: " + (c.name || "(no name)") + " (" + hex4(c.vid) + ":" + hex4(c.pid) + ")" + (c.hasProfile ? " — its profile" : " — new profile") : "Connected controller (none connected)", !c);
+        profiles.forEach((p, i) => add("p" + i, "Profile: " + (p.vid || p.pid ? hex4(p.vid) + ":" + hex4(p.pid) + " " : "") + (p.name || "(no name)") + " — " + p.ruleCount + " rule" + (p.ruleCount === 1 ? "" : "s")));
+        add("new", "New profile (enter VID / PID / name)…");
+        const still = [...sel.options].find((o) => o.value === keep && !o.disabled);
+        sel.value = still ? keep : "default";
+        onTargetSelChange();
+      }
+      function onTargetSelChange() { E.gmNewFields.hidden = E.gmTargetSel.value !== "new"; }
+      E.gmTargetSel.addEventListener("change", onTargetSelChange);
+      // The target the picker names, or { error }.
+      function targetFromSelection() {
+        const v = E.gmTargetSel.value;
+        if (v === "default") return { profile: false };
+        if (v === "controller") {
+          const c = devInfo && devInfo.controller;
+          return c ? { profile: true, vid: c.vid, pid: c.pid, name: c.name } : { error: "no controller is connected" };
+        }
+        if (v.startsWith("p")) { const p = profiles[Number(v.slice(1))]; return p ? { profile: true, vid: p.vid, pid: p.pid, name: p.name } : { error: "that profile is gone; Refresh" }; }
+        const id = (el, what) => { const t = el.value.trim().replace(/^0x/i, ""); return /^[0-9a-f]{1,4}$/i.test(t) ? parseInt(t, 16) : (t === "" ? 0 : { error: what + " must be 1-4 hex digits" }); };
+        const vid = id(E.gmNewVid, "VID"), pid = id(E.gmNewPid, "PID");
+        if (typeof vid === "object") return vid;
+        if (typeof pid === "object") return pid;
+        const t = { profile: true, vid, pid, name: E.gmNewName.value.trim() };
+        const why = validateTarget(t);
+        return why ? { error: why } : t;
+      }
+      async function loadSelected(trigger) {
+        if (isDirty() && !(await askConfirm(E.gmLoadConfirm, trigger || E.gmLoad, "Discard the unsaved edits to the " + describeTarget(editTarget) + " and load another map?", "Discard and load"))) return;
+        requestLoad(targetFromSelection());
+      }
+      E.gmLoad.addEventListener("click", () => loadSelected(E.gmLoad));
+
+      // ---- map editor ----
+      async function requestLoad(t) {
+        if (!t || t.error) { setEditStatus("Cannot load: " + (t ? t.error : "nothing selected") + ".", "err"); return; }
+        if (!online()) { setEditStatus("Connect the dongle first.", "err"); return; }
+        loading = true; updateValidation();
+        setEditStatus("Loading the " + describeTarget(t) + "…");
+        try {
+          const [r] = await request(T_GET_MAP, encodeGetMap(t), T_MAP);
+          const d = decodeMapReply(r.payload);
+          if (!d) throw new Error("the dongle sent a malformed map (" + r.payload.length + " B)");
+          onMapReply(t, d);
+        } catch (e) {
+          if (!(e && e.transportLost)) {
+            logLine("err", "Button mapping: loading the " + describeTarget(t) + " failed: " + errText(e));
+            setEditStatus((e && e.deviceError ? "The dongle refused to load it: " : "Loading failed: ") + errText(e), "err");
+          }
+        } finally { loading = false; updateValidation(); }
+      }
+      // MAP echoes the target as requested (with the stored name when the profile
+      // exists); exists = false: no such profile yet, answered with the default
+      // map, which then is the starting point of a new profile.
+      function onMapReply(want, d) {
+        const echoed = want.profile === d.target.profile && (!want.profile || (want.vid === d.target.vid && want.pid === d.target.pid && want.name === d.target.name));
+        if (!sameTarget(want, d.target) && !echoed) {
+          logLine("warn", "Button mapping: MAP reply for the " + describeTarget(d.target) + " while loading the " + describeTarget(want) + "; ignored.");
+          setEditStatus("The dongle answered with another map; try again.", "err");
+          return;
+        }
+        cancelLearn();
+        editTarget = d.target; editExists = d.exists;
+        editMap = cloneMap(d.map); savedMap = cloneMap(d.map);
+        logLine("rx", "Button mapping: loaded the " + describeTarget(editTarget) + (d.exists ? "" : " (no such profile yet: starting from the default map)") + ": " + d.map.rules.length + " rule(s), dead zones " + d.map.leftDeadzone + " / " + d.map.rightDeadzone + " %.");
+        setEditStatus(d.exists ? "Loaded." : "", d.exists ? "ok" : "muted");
+        renderEditor();
+      }
+      function renderEditor() {
+        const loaded = !!editMap;
+        E.gmEditTitle.textContent = loaded ? describeTarget(editTarget) : "nothing loaded";
+        E.gmEditBadge.hidden = !loaded;
+        if (loaded) {
+          E.gmEditBadge.textContent = !editTarget.profile ? "default" : editExists ? "stored" : "new profile";
+          E.gmEditBadge.className = "badge " + (!editTarget.profile ? "info" : editExists ? "ok" : "warn");
+        }
+        E.gmEditNote.textContent = !loaded ? (transport ? "Pick a map and load it." : "Connect the dongle to load its maps.") :
+          !editTarget.profile ? "Used by every controller that has no profile of its own." :
+          editExists ? "Used by every controller of this type (VID:PID" + (editTarget.vid === 0 && editTarget.pid === 0 ? ", here: by name" : "") + ")." :
+          "This controller type has no profile yet: the rules below are the default map's, as a starting point. Save creates the profile.";
+        E.gmDzLeft.disabled = E.gmDzRight.disabled = !loaded;
+        E.gmAddRule.disabled = !loaded;
+        for (const b of E.gmPresets.querySelectorAll("button")) b.disabled = !loaded;
+        if (loaded) { E.gmDzLeft.value = String(editMap.leftDeadzone); E.gmDzRight.value = String(editMap.rightDeadzone); }
+        updateDeadzoneText();
+        renderRules();
+        renderProfiles();
+      }
+      function updateDeadzoneText() {
+        E.gmDzLeftOut.textContent = (editMap ? editMap.leftDeadzone : 0) + " %";
+        E.gmDzRightOut.textContent = (editMap ? editMap.rightDeadzone : 0) + " %";
+        updateDeadzoneRings();
+      }
+      for (const [el, key] of [[E.gmDzLeft, "leftDeadzone"], [E.gmDzRight, "rightDeadzone"]])
+        el.addEventListener("input", () => { if (!editMap) return; editMap[key] = Math.round(Number(el.value)) || 0; updateDeadzoneText(); updateValidation(); });
+
+      // ---- the rule table ----
+      function fillSelect(sel, isAxis, value, withNone) {
+        sel.textContent = "";
+        const n = isAxis ? AXIS_COUNT : BUTTON_COUNT;
+        const add = (v, text) => { const o = document.createElement("option"); o.value = String(v); o.textContent = text; sel.append(o); };
+        for (let i = 0; i < n; i++) add(i, isAxis ? axisLabel(i) : buttonLabel(i));
+        if (withNone) add(RULE_NONE, "none (remove the source)");
+        if (![...sel.options].some((o) => Number(o.value) === value)) add(value, "? (" + value + ")"); // out of range (shown, flagged by validation)
+        sel.value = String(value);
+      }
+      function ruleRow(r, i) {
+        const tr = document.createElement("tr");
+        const td = (cls) => { const c = document.createElement("td"); if (cls) c.className = cls; tr.append(c); return c; };
+        const changed = (rerender) => { if (rerender) renderRules(); else { desc.textContent = describeRule(editMap.rules[i]); updateValidation(); } };
+        td("num").textContent = String(i + 1);
+        // kind
+        const kind = document.createElement("select"); kind.setAttribute("aria-label", "rule " + (i + 1) + " kind");
+        KIND_TEXT.forEach((t, k) => { const o = document.createElement("option"); o.value = String(k); o.textContent = t; kind.append(o); });
+        if (!(r.kind >= 0 && r.kind <= K.AXIS_TO_AXIS)) { const o = document.createElement("option"); o.value = String(r.kind); o.textContent = "unknown (" + r.kind + ")"; kind.append(o); }
+        kind.value = String(r.kind);
+        kind.addEventListener("change", () => { editMap.rules[i] = changeRuleKind(editMap.rules[i], Number(kind.value)); changed(true); });
+        td().append(kind);
+        // source + learn
+        const srcWrap = document.createElement("span"); srcWrap.className = "src";
+        const src = document.createElement("select"); src.setAttribute("aria-label", "rule " + (i + 1) + " source");
+        fillSelect(src, sourceIsAxis(r.kind), r.source, false);
+        // (axis -> button: the direction labels depend on the source axis, so re-render;
+        //  a trigger's threshold must be positive: flip it when the source becomes a trigger)
+        src.addEventListener("change", () => {
+          const rule = editMap.rules[i]; rule.source = Number(src.value);
+          if (rule.kind === K.AXIS_TO_BUTTON && isTrigger(rule.source) && rule.param < 0) rule.param = -rule.param;
+          changed(rule.kind === K.AXIS_TO_BUTTON);
+        });
+        const learnBtn = document.createElement("button"); learnBtn.type = "button"; learnBtn.className = "icon" + (learn && learn.row === i ? " learning" : "");
+        learnBtn.textContent = learn && learn.row === i ? "Cancel" : "Learn";
+        learnBtn.title = "Fill the source in from the controller: press a button or push a stick / trigger past 50 %";
+        learnBtn.addEventListener("click", () => { if (learn && learn.row === i) cancelLearn(); else startLearn(i); });
+        srcWrap.append(src, learnBtn);
+        td().append(srcWrap);
+        // target (keep source + no target is invalid: picking "none" clears keep)
+        const tgt = document.createElement("select"); tgt.setAttribute("aria-label", "rule " + (i + 1) + " target");
+        fillSelect(tgt, targetIsAxis(r.kind), r.target, true);
+        tgt.addEventListener("change", () => {
+          const rule = editMap.rules[i]; rule.target = Number(tgt.value);
+          if (rule.target === RULE_NONE) rule.flags &= ~KEEP_SOURCE;
+          changed(true);
+        });
+        td().append(tgt);
+        // keep source
+        const keepLabel = document.createElement("label"); keepLabel.title = "The source also stays at its own position";
+        const keep = document.createElement("input"); keep.type = "checkbox"; keep.checked = !!(r.flags & KEEP_SOURCE);
+        keep.disabled = r.target === RULE_NONE && !keep.checked; // (a loaded rule with both stays editable, flagged invalid)
+        keep.setAttribute("aria-label", "rule " + (i + 1) + " keeps its source");
+        keep.addEventListener("change", () => { const rule = editMap.rules[i]; rule.flags = keep.checked ? (rule.flags | KEEP_SOURCE) : (rule.flags & ~KEEP_SOURCE); changed(false); });
+        keepLabel.append(keep, document.createTextNode("keep"));
+        td().append(keepLabel);
+        // parameter
+        td().append(paramEditor(r, i, () => changed(false)));
+        const desc = td("desc"); desc.textContent = describeRule(r);
+        // actions
+        const acts = td("acts");
+        const mk = (text, title, fn, disabled) => { const b = document.createElement("button"); b.type = "button"; b.className = "icon"; b.textContent = text; b.title = title; b.setAttribute("aria-label", title + " (rule " + (i + 1) + ")"); b.disabled = !!disabled; b.addEventListener("click", fn); acts.append(b); };
+        mk("↑", "Move up", () => moveRule(i, -1), i === 0);
+        mk("↓", "Move down", () => moveRule(i, 1), i === editMap.rules.length - 1);
+        mk("✕", "Delete this rule", () => { cancelLearn(); editMap.rules.splice(i, 1); renderRules(); });
+        return tr;
+      }
+      function numberInput(value, min, max, step, label) {
+        const n = document.createElement("input"); n.type = "number"; n.min = String(min); n.max = String(max); n.step = String(step); n.value = String(value);
+        n.setAttribute("aria-label", label); return n;
+      }
+      function paramEditor(r, i, changed) {
+        const wrap = document.createElement("span"); wrap.className = "param";
+        const rule = () => editMap.rules[i];
+        if (r.kind === K.AXIS_TO_BUTTON) {
+          // direction + threshold in percent of full scale
+          const dir = document.createElement("select"); dir.setAttribute("aria-label", "rule " + (i + 1) + " direction");
+          const stickY = r.source === A.LEFT_Y || r.source === A.RIGHT_Y;
+          const opts = isTrigger(r.source) ? [[1, "pressed past"]] :
+                       stickY ? [[-1, "up past (-)"], [1, "down past (+)"]] : [[-1, "left past (-)"], [1, "right past (+)"]];
+          for (const [v, t] of opts) { const o = document.createElement("option"); o.value = String(v); o.textContent = t; dir.append(o); }
+          dir.value = r.param < 0 ? "-1" : "1";
+          const pct = numberInput(Math.abs(paramToPercent(r.param)), 1, 100, 1, "rule " + (i + 1) + " threshold percent");
+          const update = () => { const v = Math.min(100, Math.max(0, Number(pct.value) || 0)); rule().param = Number(dir.value) * percentToParam(v); changed(); };
+          dir.addEventListener("change", update); pct.addEventListener("input", update);
+          wrap.append(dir, pct, document.createTextNode("%"));
+        } else if (r.kind === K.BUTTON_TO_AXIS) {
+          const pct = numberInput(paramToPercent(r.param), -100, 100, 1, "rule " + (i + 1) + " value percent");
+          pct.title = "Added to the target axis while the button is held (percent of full scale; -100 = stick fully left / up)";
+          pct.addEventListener("input", () => { rule().param = percentToParam(Math.min(100, Math.max(-100, Number(pct.value) || 0))); changed(); });
+          wrap.append(pct, document.createTextNode("% of full scale"));
+        } else if (r.kind === K.AXIS_TO_AXIS) {
+          const sc = numberInput(r.param, -MAX_SCALE_PERCENT, MAX_SCALE_PERCENT, 1, "rule " + (i + 1) + " scale percent");
+          sc.title = "Scale applied to the source before it is added to the target (-100 inverts)";
+          sc.addEventListener("input", () => { const v = Math.round(Number(sc.value)); rule().param = Number.isFinite(v) ? v : 0; changed(); });
+          wrap.append(document.createTextNode("×"), sc, document.createTextNode("%"));
+        } else {
+          const t = document.createElement("span"); t.className = "muted"; t.textContent = "—"; wrap.append(t);
+        }
+        return wrap;
+      }
+      function moveRule(i, d) {
+        const j = i + d; if (!editMap || j < 0 || j >= editMap.rules.length) return;
+        cancelLearn();
+        const rs = editMap.rules; [rs[i], rs[j]] = [rs[j], rs[i]];
+        renderRules();
+      }
+      function renderRules() {
+        const body = E.gmRulesBody; body.textContent = "";
+        const rules = editMap ? editMap.rules : [];
+        rules.forEach((r, i) => body.append(ruleRow(r, i)));
+        E.gmNoRules.hidden = !editMap || rules.length > 0;
+        E.gmRuleCount.textContent = String(rules.length);
+        updateValidation();
+      }
+      E.gmAddRule.addEventListener("click", () => { if (!editMap) return; editMap.rules.push(ruleButton(B.SOUTH, B.SOUTH)); renderRules(); });
+      for (const p of PRESETS) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "small"; b.textContent = p.label; b.disabled = true;
+        b.addEventListener("click", () => { if (!editMap) return; editMap.rules.push(...p.rules()); logLine("sys", "Preset “" + p.label + "”: " + p.rules().length + " rule(s) added (not saved yet)."); renderRules(); });
+        E.gmPresets.append(b);
+      }
+      {
+        const b = document.createElement("button"); b.type = "button"; b.className = "small"; b.textContent = "Clear rules"; b.disabled = true;
+        b.title = "Remove every rule from the editor (Revert brings the stored ones back until you save)";
+        b.addEventListener("click", () => { if (!editMap) return; cancelLearn(); editMap.rules = []; renderRules(); });
+        E.gmPresets.append(b);
+      }
+
+      // ---- validation + the action buttons ----
+      function updateValidation() {
+        const loaded = !!editMap;
+        const errors = loaded ? validateMap(editMap, limits()) : [];
+        const tErr = loaded ? validateTarget(editTarget) : null;
+        if (tErr) errors.unshift({ rule: -1, why: tErr });
+        const bad = new Set(errors.filter((e) => e.rule >= 0).map((e) => e.rule));
+        [...E.gmRulesBody.children].forEach((tr, i) => tr.classList.toggle("invalid", bad.has(i)));
+        E.gmValidation.hidden = errors.length === 0;
+        if (errors.length) {
+          E.gmValidation.textContent = "";
+          const head = document.createElement("div"); head.textContent = "The dongle would refuse this map:"; E.gmValidation.append(head);
+          const ul = document.createElement("ul");
+          for (const e of errors) { const li = document.createElement("li"); li.textContent = (e.rule >= 0 ? "Rule " + (e.rule + 1) + ": " : "") + e.why; ul.append(li); }
+          E.gmValidation.append(ul);
+        }
+        E.gmDirty.hidden = !isDirty();
+        const on = online(), idle = !loading && !saving && !erasing;
+        E.gmSave.disabled = !on || !loaded || errors.length > 0 || !idle;
+        E.gmRevert.disabled = !loaded || !idle;
+        E.gmErase.disabled = !on || !loaded || !editTarget.profile || !editExists || !idle;
+        E.gmLoad.disabled = !on || !idle;
+        E.gmResetAll.disabled = !on || !idle;
+        E.gmRefresh.disabled = !on;
+        E.gmTargetSel.disabled = !transport;
+        return errors;
+      }
+      E.gmRefresh.addEventListener("click", () => refreshDevice(false));
+      E.gmSave.addEventListener("click", saveMap);
+      E.gmRevert.addEventListener("click", async () => {
+        if (!editMap) return;
+        if (isDirty() && !(await askConfirm(E.gmEditConfirm, E.gmRevert, "Drop the unsaved edits to the " + describeTarget(editTarget) + "?", "Discard edits"))) return;
+        if (online() && editTarget) { requestLoad(editTarget); return; }
+        if (savedMap) { editMap = cloneMap(savedMap); renderEditor(); setEditStatus("Reverted to the last loaded map."); }
+      });
+      E.gmErase.addEventListener("click", async () => {
+        if (!editTarget || !editTarget.profile || !online()) return;
+        const t = editTarget;
+        if (!(await askConfirm(E.gmEditConfirm, E.gmErase, "Erase the " + describeTarget(t) + " from the dongle? That controller type then uses the default map.", "Erase profile"))) return;
+        if (!online()) return;
+        erasing = true; updateValidation(); setEditStatus("Erasing…");
+        try {
+          await request(T_ERASE_PROFILE, encodeEraseProfile(t), T_OK);
+          logLine("ok", "Button mapping: erased the " + describeTarget(t) + ".");
+          setEditStatus("Erased. The controller type now uses the default map.", "ok");
+          erasing = false;
+          await refreshDevice(true);
+          await requestLoad(t);
+        } catch (e) {
+          if (!(e && e.transportLost)) { logLine("err", "Button mapping: erase failed: " + errText(e)); setEditStatus((e && e.deviceError ? "The dongle refused to erase it: " : "Erase failed: ") + errText(e), "err"); }
+        } finally { erasing = false; updateValidation(); }
+      });
+      E.gmResetAll.addEventListener("click", async () => {
+        if (!online()) return;
+        if (!(await askConfirm(E.gmResetConfirm, E.gmResetAll, "Erase EVERY profile and reset the default map to the identity? Settings and paired controllers are kept.", "Reset all maps"))) return;
+        if (!online()) return;
+        erasing = true; updateValidation(); setEditStatus("Resetting…");
+        try {
+          await request(T_RESET_ALL, null, T_OK);
+          logLine("ok", "Button mapping: everything reset (no profiles, default map = identity).");
+          setEditStatus("Everything reset: no profiles, default map = identity.", "ok");
+          erasing = false;
+          await refreshDevice(true);
+          if (editTarget) await requestLoad(editTarget);
+        } catch (e) {
+          if (!(e && e.transportLost)) { logLine("err", "Button mapping: reset failed: " + errText(e)); setEditStatus((e && e.deviceError ? "The dongle refused to reset: " : "Reset failed: ") + errText(e), "err"); }
+        } finally { erasing = false; updateValidation(); }
+      });
+      async function saveMap() {
+        if (!editMap || !editTarget || !online()) return;
+        const errors = updateValidation();
+        if (errors.length) { setEditStatus("Not saved: fix the problems listed above first.", "err"); return; }
+        if (editTarget.profile && !editExists && devInfo && devInfo.profileCount >= devInfo.maxProfiles)
+          logLine("warn", "The dongle already holds " + devInfo.profileCount + " of " + devInfo.maxProfiles + " profiles; it will likely refuse a new one (erase one first).");
+        const t = editTarget, m = cloneMap(editMap);
+        saving = true; updateValidation();
+        logLine("tx", "Button mapping: saving the " + describeTarget(t) + ": " + m.rules.length + " rule(s), dead zones " + m.leftDeadzone + " / " + m.rightDeadzone + " %.");
+        setEditStatus("Saving…");
+        try {
+          await request(T_SET_MAP, encodeSetMap(t, m), T_OK);
+          if (sameTarget(t, editTarget)) { savedMap = m; editExists = true; }
+          const unsaved = lastInfo && lastInfo.needsFullFlash;
+          setEditStatus("Saved the " + describeTarget(t) + "." + (unsaved ? " This dongle cannot store it until a Full update (it applies until the next reboot)." : ""), unsaved ? "warn" : "ok");
+          logLine("ok", "Button mapping: saved the " + describeTarget(t) + ".");
+          saving = false;
+          renderEditor();
+          await refreshDevice(true);
+        } catch (e) {
+          if (!(e && e.transportLost)) { logLine("err", "Button mapping: save failed: " + errText(e)); setEditStatus((e && e.deviceError ? "The dongle refused the map: " : "Save failed: ") + errText(e), "err"); }
+        } finally { saving = false; updateValidation(); }
+      }
+
+      // ---- live input ----
+      function buildSide(side) {
+        const body = side.querySelector(".sidebody");
+        const refs = { buttons: [], pads: [], bars: [] };
+        const grid = document.createElement("div"); grid.className = "btn-grid";
+        for (let i = 0; i < BUTTON_COUNT; i++) { const d = document.createElement("div"); d.className = "ind"; d.textContent = BUTTON_SHORT[i]; d.title = buttonLabel(i); grid.append(d); refs.buttons.push(d); }
+        body.append(grid);
+        const sticks = document.createElement("div"); sticks.className = "sticks";
+        for (const [label, ax, ay] of [["Left stick", A.LEFT_X, A.LEFT_Y], ["Right stick", A.RIGHT_X, A.RIGHT_Y]]) {
+          const st = document.createElement("div"); st.className = "stick";
+          const pad = document.createElement("div"); pad.className = "pad";
+          const dz = document.createElement("div"); dz.className = "dz";
+          const dot = document.createElement("div"); dot.className = "dot";
+          pad.append(dz, dot);
+          const cap = document.createElement("span"); cap.textContent = label;
+          const xy = document.createElement("span"); xy.className = "xy"; xy.textContent = "-";
+          st.append(pad, cap, xy); sticks.append(st);
+          refs.pads.push({ dz, dot, xy, ax, ay });
+        }
+        body.append(sticks);
+        const bars = document.createElement("div"); bars.className = "bars";
+        for (let a = 0; a < AXIS_COUNT; a++) {
+          const k = document.createElement("span"); k.className = "k"; k.textContent = AXIS_TEXT[a];
+          const track = document.createElement("div"); track.className = "track";
+          if (!isTrigger(a)) { const mid = document.createElement("div"); mid.className = "mid"; track.append(mid); }
+          const fill = document.createElement("div"); fill.className = "fill"; track.append(fill);
+          const v = document.createElement("span"); v.className = "v"; v.textContent = "-";
+          bars.append(k, track, v);
+          refs.bars.push({ fill, v });
+        }
+        body.append(bars);
+        return refs;
+      }
+      const rawRefs = buildSide(E.gmSideRaw), mappedRefs = buildSide(E.gmSideMapped);
+      const pctOf = (v) => (v * 100 / AXIS_MAX);
+      function updateSide(refs, st) {
+        for (let i = 0; i < BUTTON_COUNT; i++) refs.buttons[i].classList.toggle("on", ((st.buttons >>> i) & 1) === 1);
+        for (const p of refs.pads) {
+          const x = st.axes[p.ax], y = st.axes[p.ay];
+          p.dot.style.left = ((x + AXIS_MAX) * 50 / AXIS_MAX) + "%";
+          p.dot.style.top = ((y + AXIS_MAX) * 50 / AXIS_MAX) + "%"; // Y grows down, like the screen
+          p.xy.textContent = "X " + pctOf(x).toFixed(0).padStart(4) + "  Y " + pctOf(y).toFixed(0).padStart(4);
+        }
+        for (let a = 0; a < AXIS_COUNT; a++) {
+          const v = st.axes[a], b = refs.bars[a], pc = Math.max(-100, Math.min(100, pctOf(v)));
+          if (isTrigger(a)) { b.fill.style.left = "0"; b.fill.style.width = Math.max(0, pc) + "%"; }
+          else if (pc >= 0) { b.fill.style.left = "50%"; b.fill.style.width = (pc / 2) + "%"; }
+          else { b.fill.style.left = (50 + pc / 2) + "%"; b.fill.style.width = (-pc / 2) + "%"; }
+          b.v.textContent = pc.toFixed(0) + " %";
+        }
+      }
+      function updateDeadzoneRings() {
+        const dz = editMap ? [editMap.leftDeadzone, editMap.rightDeadzone] : [0, 0];
+        rawRefs.pads.forEach((p, i) => { const d = Math.min(100, dz[i]) + "%"; p.dz.style.width = d; p.dz.style.height = d; p.dz.hidden = !dz[i]; });
+      }
+      function setLiveIdle(text) {
+        E.gmRawOverlay.hidden = E.gmMappedOverlay.hidden = false;
+        E.gmRawOverlay.textContent = text; E.gmMappedOverlay.textContent = text;
+        E.gmLiveState.textContent = "-"; E.gmLiveState.className = "badge";
+        E.gmRxRate.textContent = "-"; rxTimes = []; lastInputConnected = null;
+      }
+      // the stream is wanted while the tab is open and visible with Live input on
+      const wantStream = () => activeTab === "mapping" && !document.hidden && E.gmLive.checked && online();
+      const sendStream = (enable) => request(T_SET_STREAM, encodeSetStream(enable, period()), T_OK, { quiet: true, noRecover: true });
+      async function startStream() {
+        if (!wantStream()) return;
+        const first = !streamOn;
+        streamOn = true;
+        if (first) setLiveIdle("Waiting for input…");
+        try {
+          await sendStream(true);
+          if (first) logLine("sys", "Button mapping: live input on (every " + period() + " ms; renewed while this tab is open).");
+        } catch (e) {
+          if (!(e && e.transportLost)) { logLine("err", "Button mapping: starting the input stream failed: " + errText(e)); streamOn = false; setLiveIdle("The dongle did not start the input stream: " + errText(e)); }
+        }
+      }
+      // Ask the dongle to stop streaming (bounded: a dead link must not stall a tab switch or a disconnect).
+      async function stopStream(idleText) {
+        cancelLearn();
+        if (!streamOn) return;
+        streamOn = false;
+        setLiveIdle(idleText || "Live input is off.");
+        if (!transport) return;
+        await Promise.race([sendStream(false).catch(() => {}), new Promise((r) => setTimeout(r, 400))]);
+      }
+      setInterval(() => {
+        if (!streamOn) return;
+        if (wantStream()) sendStream(true).catch(() => {});
+        else stopStream(activeTab === "mapping" ? "" : "Live input pauses while this tab is not shown.");
+      }, GM_STREAM_RENEW_MS);
+      setInterval(() => {
+        if (activeTab === "mapping" && !streamOn && online() && !pendingTxn && !document.hidden) refreshInfo(true);
+      }, GM_INFO_POLL_MS);
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) stopStream("Live input pauses while the page is hidden.");
+        else if (activeTab === "mapping") startStream();
+      });
+      E.gmLive.addEventListener("change", () => {
+        if (!transport) return;
+        if (E.gmLive.checked) startStream(); else { stopStream("Live input is off."); refreshInfo(true); }
+      });
+      E.gmPeriod.addEventListener("change", () => { if (streamOn) sendStream(true).catch(() => {}); });
+      function onInput(d) {
+        if (!streamOn) return; // a late event after the stream was switched off
+        const now = performance.now(); rxTimes.push(now); while (rxTimes.length && now - rxTimes[0] > 2000) rxTimes.shift();
+        if (rxTimes.length >= 2) E.gmRxRate.textContent = ((rxTimes.length - 1) * 1000 / (now - rxTimes[0])).toFixed(1) + " Hz";
+        if (d.connected !== lastInputConnected) {
+          lastInputConnected = d.connected;
+          E.gmLiveState.textContent = d.connected ? "controller connected" : "no controller";
+          E.gmLiveState.className = "badge " + (d.connected ? "ok" : "warn");
+          E.gmRawOverlay.hidden = E.gmMappedOverlay.hidden = d.connected;
+          E.gmRawOverlay.textContent = E.gmMappedOverlay.textContent = "No controller is connected to the dongle.";
+        }
+        if (!d.connected) return;
+        updateSide(rawRefs, d.raw);
+        updateSide(mappedRefs, d.mapped);
+        if (learn) learnOnInput(d.raw);
+      }
+
+      // ---- learn ----
+      function startLearn(row) {
+        cancelLearn();
+        if (!online()) { setEditStatus("Connect the dongle first: Learn reads the controller's live input.", "err"); return; }
+        if (!E.gmLive.checked) E.gmLive.checked = true;
+        startStream();
+        learn = { row, base: null, timer: setTimeout(() => { logLine("warn", "Learn timed out (nothing pressed)."); cancelLearn(); }, GM_LEARN_TIMEOUT_MS) };
+        E.gmLearnBanner.hidden = false;
+        E.gmLearnText.textContent = "Rule " + (row + 1) + ": press a button, or push a stick / trigger past 50 %, on the controller…";
+        E.gmSideRaw.classList.add("learning");
+        renderRules();
+      }
+      function cancelLearn() {
+        if (!learn) return;
+        clearTimeout(learn.timer); learn = null;
+        E.gmLearnBanner.hidden = true; E.gmSideRaw.classList.remove("learning");
+        renderRules();
+      }
+      E.gmLearnCancel.addEventListener("click", cancelLearn);
+      function learnOnInput(raw) {
+        if (!learn.base) { learn.base = learnBaseline(raw); return; }
+        const step = learnStep(learn.base, raw, limits().buttonCount);
+        learn.base = step.base;
+        if (!step.hit || !editMap || !editMap.rules[learn.row]) return;
+        const row = learn.row, h = step.hit;
+        editMap.rules[row] = applyLearnHit(editMap.rules[row], h);
+        logLine("sys", "Rule " + (row + 1) + " source learned: " + (h.type === "button" ? BUTTON_TEXT[h.index] : AXIS_TEXT[h.index] + (isTrigger(h.index) ? "" : " (" + (h.sign < 0 ? "-" : "+") + ")")) + ".");
+        cancelLearn(); // re-renders the table
+      }
+
+      E.gmGotoFull.addEventListener("click", () => { if (fw) fw.open(); });
+      E.gmGotoFull2.addEventListener("click", () => { if (fw) fw.open(); });
+
+      // ---- hooks for the rest of the console ----
+      function updateControls() {
+        const missing = lacking();   // connected firmware without the module (older than v4)
+        E.gmMissing.hidden = !missing;
+        E.gmNeedsFlash.hidden = missing || !(transport && lastInfo && lastInfo.needsFullFlash);
+        E.gmMain.hidden = E.gmSide.hidden = missing;
+        updateValidation();
+      }
+      async function onTabShown() {
+        updateControls();
+        if (!available()) return;
+        if (!started) { started = true; await refreshDevice(false); }
+        else await refreshInfo(true);
+        if (E.gmLive.checked) startStream();
+      }
+      function onTabHidden() { stopStream("Live input pauses while this tab is not shown."); }
+      async function onConnected() {
+        started = false;
+        renderEditor();
+        updateControls();
+        if (activeTab === "mapping") await onTabShown();
+      }
+      function onDisconnected() {
+        cancelLearn();
+        streamOn = false; started = false;
+        devInfo = null; profiles = []; infoKey = ""; loading = saving = erasing = false;
+        for (const id of ["gmCtlName", "gmDevProfiles", "gmDevMaxRules", "gmDevControls"]) E[id].textContent = "-";
+        E.gmCtlProfile.textContent = "-"; E.gmCtlProfile.className = "badge";
+        setLiveIdle("Connect the dongle to see the controller's input.");
+        rebuildTargets();
+        // the editor keeps its contents across a disconnect (edits survive a reconnect)
+        renderEditor();
+        updateControls();
+      }
+      function onInputFrame(payload) {
+        const d = decodeInput(payload);
+        if (d) onInput(d); else logLine("warn", "Button mapping: malformed INPUT (" + payload.length + " B).");
+      }
+      function onInfoEvent(payload) {
+        const d = decodeInfo(payload);
+        if (d) applyInfo(d); else logLine("warn", "Button mapping: malformed INFO (" + payload.length + " B).");
+      }
+      async function beforeDisconnect() { await stopStream(); }
+
+      setLiveIdle("Connect the dongle to see the controller's input.");
+      rebuildTargets();
+      renderEditor();
+      return { updateControls, onTabShown, onTabHidden, onConnected, onDisconnected, onInputFrame, onInfoEvent, beforeDisconnect };
+    })();
+
+    // =====================================================================
+    // Firmware tab: Full update (esptool-js over Web Serial)
+    // =====================================================================
+    // Step 1 (one click): load the images (firmware/latest/ next to this page,
+    // or local files), check them, then ask the dongle through the System
+    // module to restart into the ESP32-S3 ROM download mode; the WebUSB link
+    // drops and the ROM enumerates as an Espressif USB serial device.
+    // Step 2 (a second click: navigator.serial.requestPort() needs a user
+    // gesture, and the reboot dropped the WebUSB device): pick that port;
+    // esptool-js writes every image at its offset (no chip erase: NVS keeps the
+    // paired controllers and the settings), verifies each one by MD5, then
+    // resets the chip into the new firmware, which Auto-connect opens again.
+    fw = (() => {
+      const MANIFEST_PATH = "firmware/latest/manifest.json";
+      const MANIFEST_RECHECK_MS = 5 * 60 * 1000;
+      // the local-file fallback: one file input per offset (the layout of partitions.csv)
+      const LOCAL_FILES = [["0x0", "bootloader.bin"], ["0x8000", "partition-table.bin"], ["0xf000", "ota_data_initial.bin"], ["0x20000", "esp-usb-ble-hid.bin"]];
+      const serialOk = typeof navigator !== "undefined" && !!navigator.serial && typeof navigator.serial.requestPort === "function";
+      const E = {};
+      for (const id of ["fullUpdateBanner", "fullUpdateBannerText", "fullUpdateBannerBtn", "fullUpdateBannerOffer", "fullCard", "fullChecked", "fullCheckBtn",
+                        "fullNeeded", "fullOffered", "fullFiles", "fullLocal", "fullLocalRows", "fullStep1", "fullStep2", "fullStartBtn", "fullPortBtn",
+                        "fullConfirm", "fullFill", "fullBytes", "fullPercent", "fullRate", "fullNote", "fullLog"])
+        E[id] = document.getElementById(id);
+
+      let manifest = null;           // parseFlashManifest() + { url }
+      let manifestError = "";        // why there is no usable manifest ("" = none checked / ok)
+      let manifestMissing = false;   // nothing published here (404, file://, unreachable): offer local files
+      let manifestChecking = false, manifestCheckedAt = 0;
+      let images = null;             // [{ offset, name, data }] checked and ready to write
+      let imagesFrom = "";           // what they are ("release v4.0.0" / "local files")
+      let state = "idle";            // idle | preparing | rebooting | awaitingPort | flashing
+      let flashedVersion = null;     // what the last successful full update wrote (until the dongle is back)
+      let promptKey = "";
+      const errText = (e) => (e && e.message) ? e.message : String(e);
+      const note = (cls, text) => setNote(E.fullNote, cls, text);
+
+      // ---- log box (esptool-js output + our own steps) ----
+      function flogRaw(text) {
+        E.fullLog.hidden = false;
+        E.fullLog.textContent += String(text).replace(/\r/g, "");
+        if (E.fullLog.textContent.length > 60000) E.fullLog.textContent = E.fullLog.textContent.slice(-50000);
+        E.fullLog.scrollTop = E.fullLog.scrollHeight;
+      }
+      function flog(cls, text) {
+        const t = E.fullLog.textContent;
+        flogRaw((t && !t.endsWith("\n") ? "\n" : "") + text + "\n");
+        logLine(cls, "Full update: " + text);
+      }
+
+      // ---- local images ----
+      const localRows = LOCAL_FILES.map(([offset, hint]) => {
+        const row = document.createElement("div"); row.className = "flashrow";
+        const off = document.createElement("input"); off.type = "text"; off.value = offset; off.spellcheck = false;
+        off.setAttribute("aria-label", "Flash offset for " + hint);
+        const pick = document.createElement("label"); pick.className = "filebtn"; pick.textContent = "Choose…";
+        const input = document.createElement("input"); input.type = "file"; input.accept = ".bin,application/octet-stream";
+        input.setAttribute("aria-label", hint + " image file");
+        pick.append(input);
+        const name = document.createElement("span"); name.className = "fname muted small-text"; name.textContent = hint + " — no file";
+        row.append(off, pick, name);
+        E.fullLocalRows.append(row);
+        const rec = { off, input, nameEl: name, hint, name: "", data: null };
+        input.addEventListener("change", async () => {
+          const f = input.files && input.files[0];
+          rec.data = null; rec.name = "";
+          if (imagesFrom === "local files") images = null;
+          if (!f) { name.textContent = hint + " — no file"; render(); return; }
+          try {
+            rec.data = new Uint8Array(await f.arrayBuffer()); rec.name = f.name;
+            name.textContent = f.name + " — " + f.size.toLocaleString() + " bytes";
+          } catch (e) { name.textContent = "could not read " + f.name + ": " + errText(e); }
+          render();
+        });
+        off.addEventListener("input", () => { if (imagesFrom === "local files") images = null; });
+        return rec;
+      });
+      const localPlanRows = () => localRows.map((r) => ({ offset: r.off.value, name: r.name || r.hint, data: r.data }));
+
+      // ---- the published manifest ----
+      async function checkManifest(force) {
+        if (manifestChecking || state === "flashing") return;
+        if (!force && manifestCheckedAt && Date.now() - manifestCheckedAt < MANIFEST_RECHECK_MS) return;
+        manifestChecking = true; render();
+        const missing = (msg) => Object.assign(new Error(msg), { missing: true });
+        try {
+          if (location.protocol === "file:") throw missing("the page was opened from a file, so nothing is published next to it");
+          const url = new URL(MANIFEST_PATH, location.href).href;
+          let res;
+          try { res = await fetch(url, { cache: "no-store" }); }
+          catch (e) { throw missing("could not fetch " + MANIFEST_PATH + " (" + errText(e) + ")"); }
+          if (res.status === 404) throw missing("no published firmware here (" + MANIFEST_PATH + ": HTTP 404)");
+          if (!res.ok) throw new Error(MANIFEST_PATH + ": HTTP " + res.status);
+          const plan = Object.assign(parseFlashManifest(await res.text()), { url });
+          if (!manifest || manifest.version !== plan.version || JSON.stringify(manifest.files) !== JSON.stringify(plan.files)) {
+            if (imagesFrom.startsWith("release")) images = null;
+            logLine("sys", "Full update: published firmware " + plan.version + " — " + plan.files.map((f) => hexAddr(f.offset) + " " + f.path).join(", ") + ".");
+          }
+          manifest = plan; manifestError = ""; manifestMissing = false;
+        } catch (e) {
+          manifest = null; manifestError = errText(e); manifestMissing = !!(e && e.missing);
+          if (imagesFrom.startsWith("release")) images = null;
+          logLine(manifestMissing ? "sys" : "warn", "Full update: " + manifestError + " — local image files can be picked instead.");
+        } finally {
+          manifestChecking = false; manifestCheckedAt = Date.now(); render();
+        }
+      }
+      async function downloadPublished() {
+        const out = [];
+        const list = flashFileUrls(manifest, manifest.url);
+        for (let i = 0; i < list.length; i++) {
+          const f = list[i];
+          note("muted", "Downloading " + f.path + " (" + (i + 1) + " / " + list.length + ")…");
+          let res;
+          try { res = await fetch(f.url, { cache: "no-store" }); }
+          catch (e) { throw new Error("could not download " + f.path + " (" + errText(e) + ")"); }
+          if (!res.ok) throw new Error(f.path + " (" + hexAddr(f.offset) + ") is not published next to manifest.json (HTTP " + res.status + ")");
+          out.push({ offset: f.offset, name: f.path, data: new Uint8Array(await res.arrayBuffer()) });
+        }
+        return out;
+      }
+      // Load + check the images (published, else local); throws on any problem.
+      async function prepareImages() {
+        if (!manifest && !manifestCheckedAt) await checkManifest(false);
+        let files, warnings, source;
+        if (manifest) { files = await downloadPublished(); warnings = manifest.warnings; source = "release " + manifest.version; }
+        else {
+          if (!localRows.some((r) => r.data)) throw new Error((manifestError ? manifestError + ": " : "") + "pick the image files below first");
+          const plan = buildLocalFlashPlan(localPlanRows()); files = plan.files; warnings = plan.warnings; source = "local files";
+        }
+        const check = checkFlashImages(files);
+        for (const w of warnings.concat(check.warnings)) flog("warn", "Warning: " + w + ".");
+        if (check.errors.length) throw new Error(check.errors.join("; "));
+        images = files; imagesFrom = source;
+        flog("sys", "Images ready (" + source + "): " + files.map((f) => hexAddr(f.offset) + " " + f.name + " (" + f.data.length.toLocaleString() + " B)").join(", ") +
+             (check.nvs.length ? "; kept: " + check.nvs.map((p) => (p.label || "nvs") + " @ " + hexAddr(p.offset)).join(", ") + " (paired controllers + settings)" : "") + ".");
+        render();
+        return files;
+      }
+
+      // ---- step 1: reboot into the ROM download mode ----
+      async function start() {
+        if (!(state === "idle" || state === "awaitingPort") || !transport || busy || !serialOk) return;
+        E.fullLog.textContent = ""; E.fullLog.hidden = true;
+        E.fullFill.className = "progress-fill"; E.fullFill.style.width = "0%"; E.fullPercent.textContent = "0%"; E.fullBytes.textContent = "—"; E.fullRate.textContent = "-";
+        state = "preparing"; render();
+        try { await prepareImages(); }
+        catch (e) { state = "idle"; note("err", "Cannot start the Full update: " + errText(e) + "."); flog("err", "Not started: " + errText(e) + "."); render(); return; }
+        const canReboot = transport && moduleAvailable(systemModuleId()) && (systemCaps & SYS_CAP_BOOTLOADER);
+        if (!canReboot) {
+          state = "awaitingPort"; render();
+          note("warn", "This firmware cannot restart itself into download mode. Unplug the dongle, hold its BOOT button while plugging it back in, then click “Select the bootloader port and flash”.");
+          return;
+        }
+        const ok = await askConfirm(E.fullConfirm, E.fullStartBtn, "Flash " + imagesFrom + " (" + images.length + " images) onto this dongle? It restarts into its ROM download mode now, then you pick its serial port. Paired controllers and settings are kept.", "Reboot into download mode");
+        if (!ok || !transport) { state = "idle"; render(); note("muted", "Full update cancelled."); return; }
+        state = "rebooting"; render();
+        try {
+          const acked = await rebootIntoBootloader(250);
+          state = "awaitingPort";
+          flog("sys", acked ? "The dongle is restarting into its ROM download mode." : "The dongle went away before acknowledging: it is entering its ROM download mode.");
+          note("warn", "Now click “Select the bootloader port and flash” and pick the Espressif port (303a:1001 “USB JTAG/serial debug unit”, or 303a:0009). If it is not listed yet, wait a second and click again.");
+        } catch (e) {
+          state = "idle";
+          note("err", "Rebooting into download mode failed: " + errText(e) + ".");
+          flog("err", "Rebooting into download mode failed: " + errText(e) + ".");
+        }
+        render();
+      }
+
+      // ---- step 2: pick the ROM port and flash ----
+      async function pickAndFlash() {
+        if (!serialOk || state === "flashing" || state === "preparing" || state === "rebooting") return;
+        let port;
+        try { port = await navigator.serial.requestPort({ filters: [{ usbVendorId: ROM_USB_VID }] }); }   // first: the click's user activation
+        catch (e) {
+          if (e && e.name === "NotFoundError") note("warn", "No port picked. In download mode the dongle shows up as an Espressif serial port (303a:…); click again once it is listed.");
+          else note("err", "Port selection failed: " + errText(e) + ".");
+          return;
+        }
+        const before = state;
+        state = "flashing"; render();
+        const startedAt = Date.now();
+        try {
+          if (!images) await prepareImages();
+          const version = imagesFrom;
+          await flashOverSerial(port, images);
+          flashedVersion = manifest && imagesFrom.startsWith("release") ? manifest.version : imagesFrom;
+          state = "idle";
+          E.fullFill.className = "progress-fill done"; E.fullFill.style.width = "100%"; E.fullPercent.textContent = "100%";
+          flog("ok", "Done in " + ((Date.now() - startedAt) / 1000).toFixed(1) + " s: " + version + " written and verified; the dongle is restarting into it.");
+          note("ok", "Full update complete. The dongle restarts into the new firmware — " +
+               (els.autoConnect.checked ? "Auto-connect opens it when it is back (a few seconds); " : "click “Connect dongle” once it is back; ") +
+               "if it does not come back, unplug and replug it.");
+          if (!transport) setStatus("busy", "Dongle restarting…");
+        } catch (e) {
+          state = before === "awaitingPort" ? "awaitingPort" : "idle";
+          E.fullFill.className = "progress-fill failed";
+          const msg = errText(e);
+          flog("err", "Failed: " + msg);
+          let tip = "";
+          if (/sync|connect|timeout|download mode|wrong boot/i.test(msg)) tip = " Make sure you picked the dongle's Espressif ROM port and that it is in download mode: unplug it, hold BOOT while plugging it in, and try again.";
+          else if (/md5|verif/i.test(msg)) tip = " The written data did not verify: try again (another USB port or cable can help).";
+          note("err", "Full update failed: " + msg + "." + tip + " The dongle stays in download mode until it is reset or replugged, so the update can simply be retried.");
+        } finally { render(); }
+      }
+      async function flashOverSerial(port, files) {
+        const info = typeof port.getInfo === "function" ? (port.getInfo() || {}) : {};
+        flog("sys", "Port: " + describeRomPort(info) + ".");
+        let esptool;
+        try { esptool = await import("./esptool-bundle.js"); }
+        catch (e) {
+          throw new Error("esptool-js could not be loaded (" + errText(e) + ")" +
+            (location.protocol === "file:" ? "; a page opened from a file cannot import it: use the hosted console, or serve the web/ folder over http://localhost" : ""));
+        }
+        const { ESPLoader, Transport } = esptool;
+        fixEsptoolReadTimeout(Transport);
+        const terminal = { clean() {}, writeLine(d) { flogRaw(String(d) + "\n"); }, write(d) { flogRaw(String(d)); } };
+        const makeLoader = (t) => new ESPLoader({ transport: t, baudrate: 115200, romBaudrate: 115200, terminal, debugLogging: false });
+        // Transport.disconnect() waits for the port's streams to unlock, which
+        // never happens when the device vanished mid-way: bound it, then close
+        // the port directly so a retry can open it again.
+        const release = async (t) => {
+          const ok = await Promise.race([t.disconnect().then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 2000))]);
+          if (!ok) { try { await port.close(); } catch (_) {} }
+        };
+        let serial = new Transport(port, false);
+        let loader = makeLoader(serial);
+        const t0 = Date.now();
+        try {
+          let chip;
+          // the ROM already waits in download mode: talk to it without a reset
+          // pulse (on the USB-OTG ROM port DTR / RTS could reset it out of it).
+          // esptool-js gives up after ~25 s when nothing answers.
+          note("muted", "Connecting to the ESP32-S3 ROM bootloader (esptool-js gives up after about 25 s if it does not answer)…");
+          try { chip = await loader.main("no_reset"); }
+          catch (e) {
+            if (info.usbProductId !== 0x1001) throw e;
+            // USB-Serial-JTAG: its reset sequence re-enters download mode, so retry with it
+            flog("warn", "No answer without a reset (" + errText(e) + "); retrying with a reset into download mode…");
+            await release(serial);
+            serial = new Transport(port, false); loader = makeLoader(serial);
+            chip = await loader.main("default_reset");
+          }
+          const name = loader.chip && loader.chip.CHIP_NAME;
+          flog("ok", "Connected to " + (chip || name || "the chip") + ".");
+          if (normalizeChip(name) !== FULL_FLASH_CHIP) throw new Error("that port belongs to an " + (name || "unknown chip") + ", not the dongle's ESP32-S3");
+          const sizes = files.map((f) => f.data.length), total = sizes.reduce((a, b) => a + b, 0);
+          const before = (i) => sizes.slice(0, i).reduce((a, b) => a + b, 0);
+          await loader.writeFlash({
+            fileArray: files.map((f) => ({ data: bytesToBinaryString(f.data), address: f.offset })),
+            flashSize: "keep", flashMode: "keep", flashFreq: "keep",
+            eraseAll: false,   // never: NVS keeps the paired controllers and the settings
+            compress: true,
+            reportProgress: (i, written, of) => {
+              const f = files[i]; if (!f) return;
+              const done = before(i) + (of ? sizes[i] * Math.min(1, written / of) : 0);
+              const pct = total ? 100 * done / total : 0;
+              E.fullFill.style.width = pct.toFixed(1) + "%"; E.fullPercent.textContent = pct.toFixed(0) + "%";
+              E.fullBytes.textContent = "writing " + f.name + " (" + (i + 1) + " / " + files.length + ") @ " + hexAddr(f.offset);
+              const s = (Date.now() - t0) / 1000;
+              if (s > 0.5) E.fullRate.textContent = (done / 1024 / s).toFixed(1) + " KiB/s";
+            },
+            // esptool-js then compares each region with the flash's own MD5
+            calculateMD5Hash: (bstr) => md5Hex(binaryStringToBytes(bstr)),
+          });
+          flog("ok", "All " + files.length + " images written and verified (MD5). Resetting the dongle…");
+          await resetChip(loader, serial, info);
+        } finally {
+          await release(serial);
+        }
+      }
+      // Restart the chip into the new firmware. The RTC watchdog resets it on
+      // either ROM port (DTR / RTS do nothing on the USB-OTG one), after the
+      // force-download-boot flag the reboot set is cleared so it boots the app;
+      // esptool's rtc_wdt_reset() sequence. The ESP32-S3 registers
+      // (soc/esp32s3/register/soc/rtc_cntl_reg.h; esptool-js 0.5.7 only knows
+      // them for the ESP32-S2, at other addresses). The chip was checked to be
+      // an ESP32-S3 before anything was written.
+      const S3_RTC = { OPTION1: 0x6000812C, FORCE_DOWNLOAD_BOOT: 0x1, WDTCONFIG0: 0x60008098, WDTCONFIG1: 0x6000809C,
+                       WDTWPROTECT: 0x600080B0, WDT_WKEY: 0x50D83AA1 };
+      async function resetChip(loader, serial, info) {
+        try {
+          await loader.writeReg(S3_RTC.OPTION1, 0, S3_RTC.FORCE_DOWNLOAD_BOOT);   // boot the app, not download mode
+          await loader.writeReg(S3_RTC.WDTWPROTECT, S3_RTC.WDT_WKEY);              // unlock
+          await loader.writeReg(S3_RTC.WDTCONFIG1, 5000);                          // stage 0 timeout (slow-clock ticks)
+          await loader.writeReg(S3_RTC.WDTCONFIG0, (1 << 31) | (5 << 28) | (1 << 8) | 2); // enable, stage 0 resets the chip
+          try { await loader.writeReg(S3_RTC.WDTWPROTECT, 0); } catch (_) {}        // lock (the reset may beat the reply)
+          flog("sys", "Reset by the RTC watchdog.");
+          return;
+        } catch (e) { flog("warn", "Watchdog reset failed (" + errText(e) + "); trying the RTS line."); }
+        try {
+          await serial.setDTR(false); await serial.setRTS(true);
+          await new Promise((r) => setTimeout(r, 100));
+          await serial.setRTS(false);
+          flog("sys", "Reset through RTS" + (info.usbProductId === 0x1001 ? "." : " (if the dongle does not restart, unplug and replug it)."));
+        } catch (_) { flog("warn", "Could not reset the dongle: unplug and replug it."); }
+      }
+
+      // ---- rendering ----
+      function renderPrompt() {
+        const reason = transport ? fullUpdateReason(discovered, lastInfo) : null;
+        E.fullUpdateBanner.hidden = !reason;
+        if (reason) {
+          E.fullUpdateBannerText.textContent = reason.text + " Paired controllers and settings are kept.";
+          E.fullUpdateBannerOffer.textContent = manifest ? "Published: " + manifest.version : manifestChecking ? "checking the published firmware…" : "";
+          if (!manifestCheckedAt && !manifestChecking) checkManifest(false);
+        }
+        E.fullNeeded.textContent = !transport ? "connect the dongle to check (the Full update works without a connection too)"
+          : reason ? "yes — " + reason.text
+          : hasGamepadMapModule(discovered) === null ? "cannot tell (the firmware answered no discovery)"
+          : "no — this firmware already has the button-map storage (a Full update still works, e.g. to repair a dongle)";
+        E.fullNeeded.className = reason ? "warn" : "";
+        const key = reason ? reason.code : "";
+        if (key !== promptKey) { promptKey = key; if (reason) logLine("warn", "Full update needed: " + reason.text + " (Firmware tab → Full update)."); }
+      }
+      function render() {
+        renderPrompt();
+        const running = runningFirmwareVersion();
+        if (manifestChecking) E.fullOffered.textContent = "checking…";
+        else if (manifest) {
+          const cmp = running ? compareFirmware(running, manifest.version) : null;
+          E.fullOffered.textContent = manifest.version + (!cmp ? "" : cmp.status === "update" ? " — newer than the dongle's " + running
+            : cmp.status === "current" ? " — the version the dongle runs" : cmp.status === "unknown" ? "" : " — older than the dongle's " + running);
+        } else E.fullOffered.textContent = manifestCheckedAt ? (manifestMissing ? manifestError : "unusable: " + manifestError) : "not checked yet";
+        E.fullOffered.className = manifest || !manifestCheckedAt || manifestMissing ? "" : "warn";
+        E.fullFiles.textContent = images ? images.map((f) => hexAddr(f.offset) + " " + f.name).join(" · ") + " (" + imagesFrom + ", ready)"
+          : manifest ? manifest.files.map((f) => hexAddr(f.offset) + " " + f.path).join(" · ")
+          : localRows.some((r) => r.data) ? localRows.filter((r) => r.data).map((r) => r.off.value + " " + r.name).join(" · ") : "—";
+        E.fullLocal.hidden = !(manifestCheckedAt && !manifest && !manifestChecking);
+        E.fullChecked.textContent = manifestCheckedAt && !manifestChecking ? "checked " + new Date(manifestCheckedAt).toLocaleTimeString() : "";
+        E.fullCheckBtn.disabled = manifestChecking || state === "flashing";
+        const step1Done = state === "awaitingPort" || state === "flashing";
+        E.fullStep1.className = step1Done ? "done" : (state === "preparing" || state === "rebooting" || (state === "idle" && transport)) ? "current" : "";
+        E.fullStep2.className = step1Done || (state === "idle" && !transport) ? "current" : "";
+        E.fullStartBtn.textContent = state === "preparing" ? "Preparing…" : state === "rebooting" ? "Rebooting…" : "Full update";
+        E.fullStartBtn.disabled = !serialOk || !transport || busy || !(state === "idle" || state === "awaitingPort");
+        E.fullStartBtn.title = !serialOk ? "This browser has no Web Serial (use Chrome or Edge)" : !transport ? "Connect the dongle first (or put it into download mode and use the port button)" : "";
+        E.fullStartBtn.classList.toggle("primary", state !== "awaitingPort");
+        E.fullPortBtn.textContent = state === "flashing" ? "Flashing…" : "Select the bootloader port and flash";
+        E.fullPortBtn.disabled = !serialOk || state === "flashing" || state === "preparing" || state === "rebooting";
+        E.fullPortBtn.classList.toggle("primary", state === "awaitingPort" || state === "flashing");
+        if (!serialOk && !E.fullNote.textContent) note("warn", "This browser has no Web Serial, which the Full update needs: use Chrome or Edge on a desktop.");
+      }
+
+      E.fullStartBtn.addEventListener("click", start);
+      E.fullPortBtn.addEventListener("click", pickAndFlash);
+      E.fullCheckBtn.addEventListener("click", () => checkManifest(true));
+      function open() {
+        selectTab("firmware");
+        try { E.fullCard.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (_) {}
+        checkManifest(false);
+      }
+      E.fullUpdateBannerBtn.addEventListener("click", open);
+
+      return {
+        updateControls: render,
+        renderPrompt,
+        open,
+        onTabShown: () => { checkManifest(false); render(); },
+        // the reboot for step 2 is under way or done: the link loss is expected
+        awaitingPort: () => state === "rebooting" || state === "awaitingPort",
+        onConnected: () => {
+          if (state === "awaitingPort") {
+            state = "idle";
+            note("warn", "The dongle is back as itself without having been flashed (it left download mode). Start the Full update again when ready.");
+          } else if (flashedVersion) {
+            note("ok", "The dongle is back after the Full update (" + flashedVersion + ").");
+            flashedVersion = null;
+          }
+          render();
+        },
+      };
+    })();
+
     // ---- ready ------------------------------------------------------------------------
     updateUI();
+    if (activeTab === "firmware") fw.onTabShown();
     {
       // Show a still-fresh cached release check right away (no API call; the
       // comparison is filled in once the dongle's INFO arrives).
