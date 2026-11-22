@@ -3,7 +3,10 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <thread>
+#include <vector>
 
 #include "esp_app_desc.h"
 #include "esp_system.h"
@@ -13,8 +16,13 @@
 #include "task.hpp"
 #include "timer.hpp"
 
+#include "gamepad_inputs.hpp"
+#include "gamepad_map.hpp"
+#include "gamepad_state.hpp"
+#include "gamepad_state_hid_rp.hpp"
+#include "hid-rp-report-map.hpp"
+#include "hid-rp-xbox.hpp"
 #include "switch_pro.hpp"
-#include "xbox.hpp"
 #include "xinput.hpp"
 
 #include "ble.hpp"
@@ -38,7 +46,6 @@ using namespace std::chrono_literals;
 #if HAS_DISPLAY
 static std::shared_ptr<Gui> gui;
 #endif
-static std::shared_ptr<GamepadDevice> ble_gamepad;
 static std::shared_ptr<espp::SwitchPro> usb_controller;
 static std::atomic<int> battery_level_percent{100};
 static std::mutex serial_number_mutex;
@@ -53,21 +60,79 @@ static void set_serial_number(const std::string &sn) {
   serial_number = sn;
 }
 
-/********* Input mapping ***************/
+/********* Controller decoding + button map ***************/
 
-// Radial deadzone: inside it the stick reads (0,0); outside it the remaining
-// travel is rescaled so full deflection still reaches 1.0.
-static void apply_deadzone(GamepadInputs::Joystick &j, float deadzone) {
-  if (deadzone <= 0.0f)
-    return;
-  const float mag = std::sqrt(j.x * j.x + j.y * j.y);
-  if (mag < deadzone) {
-    j.x = j.y = 0.0f;
-    return;
+// The connected controller's report decoder (built from the report map it
+// reported when it connected) and the button map applied to it. Both are
+// replaced from the BLE scan-timer task (connect) or the console (map edits)
+// while reports are decoded on the NimBLE host task: one mutex.
+static std::mutex decode_mutex;
+static std::optional<espp::hid_rp::GamepadDecoder> decoder;
+static espp::GamepadMap active_map;
+
+// The decoder for a controller: its own report map, or (unreadable / not a
+// gamepad) the Xbox Wireless controller's, which is what every controller was
+// decoded as before.
+static espp::hid_rp::GamepadDecoder make_decoder(const BleControllerInfo &info,
+                                                 espp::Logger &logger) {
+  std::optional<espp::hid_rp::ReportMap> map;
+  if (!info.report_map.empty()) {
+    map = espp::hid_rp::ReportMap::parse(info.report_map);
+    if (map && !espp::hid_rp::GamepadDecoder::looks_like_gamepad(*map)) {
+      logger.warn("'{}' report map does not describe a gamepad; decoding it as an Xbox controller",
+                  info.name);
+      map.reset();
+    } else if (!map) {
+      logger.warn("'{}' report map could not be parsed; decoding it as an Xbox controller",
+                  info.name);
+    }
   }
-  const float scale = std::min(1.0f, (mag - deadzone) / (1.0f - deadzone)) / mag;
-  j.x *= scale;
-  j.y *= scale;
+  if (!map) {
+    const auto xbox = espp::xbox_descriptor();
+    map = espp::hid_rp::ReportMap::parse(std::vector<uint8_t>(xbox.begin(), xbox.end()));
+  }
+  espp::hid_rp::GamepadDecoder d(std::move(*map));
+  d.apply_quirks(info.vid, info.pid);
+  // a bridge: every control reports only itself, the button map does the rest
+  d.set_combine_controls(false);
+  logger.info("'{}' ({:04x}:{:04x}): {} layout", info.name, info.vid, info.pid,
+              espp::hid_rp::GamepadDecoder::layout_name(d.quirks().layout));
+  return d;
+}
+
+// The mapped state as the output stage's GamepadInputs. Positions keep the
+// labels they always had: the controller's A (south) is reported as A, so a
+// Switch shows its A where an Xbox pad has it (swap south / east in the map for
+// the Nintendo layout). Sticks stay HID-style (Y down) here.
+static GamepadInputs to_inputs(const espp::GamepadState &s) {
+  using B = espp::GamepadState::Button;
+  using A = espp::GamepadState::Axis;
+  GamepadInputs in{};
+  auto &b = in.buttons;
+  b.a = s.pressed(B::South);
+  b.b = s.pressed(B::East);
+  b.x = s.pressed(B::West);
+  b.y = s.pressed(B::North);
+  b.l1 = s.pressed(B::L1);
+  b.r1 = s.pressed(B::R1);
+  b.l2 = s.pressed(B::L2);
+  b.r2 = s.pressed(B::R2);
+  b.l3 = s.pressed(B::L3);
+  b.r3 = s.pressed(B::R3);
+  b.up = s.pressed(B::Up);
+  b.down = s.pressed(B::Down);
+  b.left = s.pressed(B::Left);
+  b.right = s.pressed(B::Right);
+  b.home = s.pressed(B::Home);
+  b.capture = s.pressed(B::Capture);
+  b.start = s.pressed(B::Start);
+  b.select = s.pressed(B::Select);
+  constexpr float full = espp::GamepadState::AXIS_MAX;
+  in.left_joystick = {s.axis(A::LeftX) / full, s.axis(A::LeftY) / full};
+  in.right_joystick = {s.axis(A::RightX) / full, s.axis(A::RightY) / full};
+  in.l2.value = s.axis(A::LeftTrigger) / full;
+  in.r2.value = s.axis(A::RightTrigger) / full;
+  return in;
 }
 
 // The last inputs pushed (before settings), so the report can be re-pushed by
@@ -92,24 +157,10 @@ static void push_inputs_locked(GamepadInputs inputs) {
     inputs.buttons.l1 = 1;
     inputs.buttons.r1 = 1;
   }
-  const auto s = services_settings();
-  if (s.invert_left_y)
-    inputs.left_joystick.y = -inputs.left_joystick.y;
-  if (s.invert_right_y)
-    inputs.right_joystick.y = -inputs.right_joystick.y;
-  const float deadzone = s.deadzone_percent / 100.0f;
-  apply_deadzone(inputs.left_joystick, deadzone);
-  apply_deadzone(inputs.right_joystick, deadzone);
-  if (s.swap_ab) {
-    const bool a = inputs.buttons.a, b = inputs.buttons.b;
-    inputs.buttons.a = b;
-    inputs.buttons.b = a;
-  }
-  if (s.swap_xy) {
-    const bool x = inputs.buttons.x, y = inputs.buttons.y;
-    inputs.buttons.x = y;
-    inputs.buttons.y = x;
-  }
+  // The inputs arrive mapped (button map: swaps, dead zones, inversions...)
+  // with HID-style sticks (Y down); both the Switch and X-Input want Y up.
+  inputs.left_joystick.y = -inputs.left_joystick.y;
+  inputs.right_joystick.y = -inputs.right_joystick.y;
   if (usb_personality() == device_config::UsbController::Xbox360) {
     // X-Input: the same physical layout as the wireless Xbox controller the
     // inputs come from, so buttons map one to one; the sticks are the settings-
@@ -197,16 +248,22 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
     return;
   }
   // otherwise this is a HID report: which one is told by the characteristic's
-  // Report Reference (a controller may notify several input reports); an
-  // unknown characteristic is assumed to be the main gamepad input report
-  const uint8_t report_id =
-      ble_report_id_for(pRemoteCharacteristic).value_or(ble_gamepad->get_input_report_id());
-  ble_gamepad->set_report_data(report_id, pData, length);
-  if (report_id != ble_gamepad->get_input_report_id())
-    return; // not the gamepad input report: nothing to forward
-
-  // convert it to GamepadInputs and push it to the USB controller
-  push_inputs(ble_gamepad->get_gamepad_inputs());
+  // Report Reference (a controller may notify several input reports; the
+  // decoder keeps the latest of each and decodes them together)
+  const uint8_t report_id = ble_report_id_for(pRemoteCharacteristic).value_or(1);
+  espp::GamepadState raw, mapped;
+  {
+    std::lock_guard<std::mutex> lk(decode_mutex);
+    if (!decoder)
+      return; // no controller info yet (cannot happen: it is read before subscribing)
+    espp::hid_rp::GamepadReport report;
+    if (!decoder->update(report_id, std::span<const uint8_t>(pData, length), report))
+      return; // a report that carries no gamepad control (e.g. output-only)
+    raw = espp::to_gamepad_state(report);
+    active_map.apply(raw, mapped);
+  }
+  services_gamepad_input(raw, mapped);
+  push_inputs(to_inputs(mapped));
 
   // Debugging aid (off by default): toggle the LED on every report that
   // reaches the USB side, so input activity is visible on the dongle. The
@@ -243,6 +300,8 @@ static device_config::Info device_info() {
   info.usb_hid_reports = usb_hid_reports_sent();
   info.usb_hid_ready = usb_hid_ready();
   info.usb_controller = static_cast<uint8_t>(usb_personality());
+  // a v4 image on a v3 partition table: the console offers the full update
+  info.needs_full_flash = !services_gamepad_storage_available();
   // where the controller link is (and why it is there), for the console
   using LinkState = device_config::Info::LinkState;
   switch (ble_link_state()) {
@@ -378,7 +437,11 @@ extern "C" void app_main(void) {
                               .on_action = device_action,
                               .bonds = device_bonds,
                               .forget_bond = device_forget_bond,
-                              .on_settings_changed = apply_settings});
+                              .on_settings_changed = apply_settings,
+                              .on_gamepad_map_changed = [](const espp::GamepadMap &map) {
+                                std::lock_guard<std::mutex> lk(decode_mutex);
+                                active_map = map;
+                              }});
   const auto settings = services_settings();
   apply_settings(settings);
   if (const auto report = services_crash_report(); !report.empty())
@@ -404,7 +467,6 @@ extern "C" void app_main(void) {
   // MARK: Gamepad initialization
   usb_controller = std::make_shared<espp::SwitchPro>(
       espp::SwitchPro::Config{.log_level = espp::Logger::Verbosity::WARN});
-  ble_gamepad = std::make_shared<Xbox>();
 
   // MARK: BLE initialization -- before USB: as soon as the device is mounted
   // the console can ask for status / bonds / actions, which use NimBLE.
@@ -418,8 +480,23 @@ extern "C" void app_main(void) {
   // when the controller goes away (powered off, out of range, ...), release
   // every button and center the sticks: the Switch would otherwise keep seeing
   // whatever was last reported, forever
+  // a controller connecting: decode its reports with its own report map, and
+  // map them with its profile (or the default map)
+  ble_set_controller_info_callback([&logger](const BleControllerInfo &info) {
+    auto d = make_decoder(info, logger);
+    const auto map = services_gamepad_connected(info.vid, info.pid, info.name);
+    std::lock_guard<std::mutex> lk(decode_mutex);
+    decoder = std::move(d);
+    active_map = map;
+  });
   ble_set_disconnect_callback([]() {
     battery_level_percent = 0;
+    {
+      std::lock_guard<std::mutex> lk(decode_mutex);
+      if (decoder)
+        decoder->reset(); // the next connection starts from no reports
+    }
+    services_gamepad_disconnected();
     push_inputs(GamepadInputs{});
   });
 

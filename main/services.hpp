@@ -6,6 +6,9 @@
 //   module 0x07  system info / reboot        (espp::SystemService: identity, reboot,
 //                                             reboot into the ROM bootloader)
 //   module 0x08  heap + task monitor         (espp::MonitorService)
+//   module 0x0B  gamepad button / axis maps  (espp::GamepadMapService: the default map +
+//                                             one profile per controller type, in a
+//                                             LittleFS file)
 //   module 0x10  device configuration        (DeviceConfig, components/device_config)
 // plus the persisted settings (NVS) the rest of the app reads.
 
@@ -15,6 +18,8 @@
 #include <vector>
 
 #include "dispatcher_worker.hpp"
+#include "gamepad_map.hpp"
+#include "gamepad_state.hpp"
 
 #include "device_config.hpp"
 
@@ -31,6 +36,8 @@ struct ServicesCallbacks {
       forget_bond{nullptr};
   /// Called whenever the settings changed (already persisted); apply them.
   std::function<void(const device_config::Settings &)> on_settings_changed{nullptr};
+  /// Called when the console changed the connected controller's button map.
+  std::function<void(const espp::GamepadMap &)> on_gamepad_map_changed{nullptr};
 };
 
 /// Initialize NVS, load the settings, and register the OTA / core-dump / system /
@@ -53,3 +60,16 @@ void services_clear_bond_names();
 
 /// The last crash report (empty if the previous boot was clean).
 std::string services_crash_report();
+
+/// A controller connected: returns the button map to apply to it (its
+/// profile's, else the default map) and tells the console about it.
+espp::GamepadMap services_gamepad_connected(uint16_t vid, uint16_t pid, const std::string &name);
+/// The controller disconnected.
+void services_gamepad_disconnected();
+/// Every input, before and after mapping, for the console's live view (cheap
+/// while the console is not watching).
+void services_gamepad_input(const espp::GamepadState &raw, const espp::GamepadState &mapped);
+/// Whether the button maps are persisted (false on a dongle flashed before the
+/// `littlefs` partition existed: the maps then last until the next reboot, and
+/// the console offers a full update that adds the partition).
+bool services_gamepad_storage_available();

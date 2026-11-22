@@ -13,10 +13,13 @@ Hosted copy: <https://finger563.github.io/esp-usb-ble-hid/dongle_console.html>
   do not implement WebUSB.
 - WebUSB only works from a secure context: `https://` (the hosted copy above),
   `http://localhost`, or a local `file://` path. Double-clicking the file works.
-- No build step, no CDN: the page is self-contained (inline CSS + JS). Copy it
-  anywhere. Its only network access is the optional firmware-update check
-  against GitHub Releases (see the Firmware tab below); everything else works
-  offline.
+- No build step, no CDN: the page is self-contained (inline CSS + JS), except
+  for the Full update's flasher, `esptool-bundle.js`, which sits next to it and
+  is imported from the same origin (see [esptool-js](#esptool-js-attribution)).
+  Copy both files anywhere. Its only network access is the optional
+  firmware-update check against GitHub Releases and the Full update's
+  `firmware/latest/` files next to the page (see the Firmware tab below);
+  everything else works offline.
 - Click **Connect dongle** and pick the device. The dongle enumerates as a
   *Nintendo Switch Pro Controller* (VID `057E`, PID `2009`); **Pick any USB
   device…** lists every device if you are on a modified build.
@@ -24,7 +27,14 @@ Hosted copy: <https://finger563.github.io/esp-usb-ble-hid/dongle_console.html>
 
 On connect the console sends a dispatcher discovery request and shows the
 device name / firmware in the header. A tab whose module the firmware does not
-advertise is disabled.
+advertise is disabled, except **Button mapping** (it explains that the firmware
+predates v4) and **Firmware** (its Full update needs no module).
+
+When the connected dongle needs the one-time [Full update](#full-update-web-serial)
+— it runs firmware older than v4 (discovery lists no `espp.gamepad_map`
+module), or a v4+ image on the old partition table (device-config INFO flag
+bit5, `needs_full_flash`) — a banner at the top of the Device tab says so and
+links to it.
 
 ## Tabs
 
@@ -59,13 +69,54 @@ advertise is disabled.
 
 ### Settings (module `0x10`, `device_config`)
 
-Stick Y-axis inversion, A/B and X/Y swaps, radial stick deadzone (0–50 %),
-status-LED brightness, the LED level held while a controller is connected
-(default 25 % of that brightness; 0 = off while playing), an optional
-blink-on-every-input debugging mode (off by default), BLE device name (applies
-after a reboot). **Apply changes** sends only the keys you changed; the form
-always re-renders from the dongle's reply. **Reset to defaults** restores the
-firmware defaults.
+USB controller type (Switch Pro / Xbox 360, applies after a reboot),
+status-LED brightness, the LED levels while connected / reconnecting / pairing
+(shares of that brightness; 0 = off), an optional blink-on-every-input
+debugging mode (off by default), BLE device name (applies after a reboot).
+**Apply changes** sends only the keys you changed (`SET_SETTINGS` is partial);
+the form always re-renders from the dongle's reply. **Reset to defaults**
+restores the firmware defaults.
+
+The stick / button options (invert left / right stick Y, swap A/B, swap X/Y,
+stick deadzone) moved to the **Button mapping** tab in firmware v4, which
+ignores those keys (it migrated them into the default map once): against v4
+the form hides them, never sends them, and says "Stick / button options moved
+to Button mapping". Against v3 firmware (no `espp.gamepad_map` module) they are
+shown as before, since v3 still applies them.
+
+### Button mapping (module `11`, espp `GamepadMapService`, firmware v4+)
+
+The dongle decodes any BLE gamepad into one controller state (buttons named by
+position: South = Xbox A / Nintendo B, ...) and rewrites it with a **map**
+before sending it to the USB host: the **default map** for every controller,
+or a **profile** for one controller type (its Bluetooth VID:PID; by name when
+both are 0). The tab speaks `espp.gamepad_map` v1 (resolved through discovery
+by protocol id, default module 11) on the console's WebUSB link:
+
+- **Live input** — the controller's input before (raw) and after (mapped) the
+  map, buttons, sticks (with the editor's dead zone drawn on the raw sticks)
+  and triggers. The dongle streams it while this tab is open and visible with
+  *Live input* on: the console renews the stream every 3 s and switches it off
+  when you leave the tab, hide the page or disconnect (a closed page simply
+  stops renewing and the dongle stops by itself).
+- **Map to edit** — the default map, the connected controller's profile (a
+  controller without one starts from the default map; saving creates it), any
+  stored profile, or a new profile by VID / PID / name. **Profiles** lists the
+  stored ones.
+- **Map editor** — per-stick radial dead zones (0–90 %) and the rules: button
+  → button, axis → button (by threshold and direction), button → axis (adds a
+  value while held), axis → axis (by scale, negative inverts); a rule moves its
+  source unless *keep* is ticked, a target of *none* removes it. **Learn** fills
+  a rule's source in from the controller (press a button or push a stick /
+  trigger past 50 %). **Presets** append common rules (Nintendo A/B swap,
+  West / North swap, invert left / right Y, swap sticks, left stick → d-pad,
+  d-pad → left stick, triggers → L2/R2 and back). The editor checks the map the
+  way the firmware does (`GamepadMap::valid()`) and lists every problem before
+  **Save to dongle** is allowed. **Revert**, **Erase this profile** and **Reset
+  all maps** (every profile erased, default map = identity) confirm in-page.
+- A dongle on firmware older than v4 has no button mapping: the tab says so and
+  links to the Full update. A v4+ dongle that still needs the Full update
+  (`needs_full_flash`) is warned that maps are not stored until then.
 
 ### System (module `7`, espp SystemService; module `8`, espp MonitorService)
 
@@ -129,6 +180,50 @@ and falls back to the published ids `0x07` / `0x08`.
   **Abort update** stops after the in-flight chunk and discards the partial
   image.
 
+#### Full update (Web Serial)
+
+An OTA update only replaces the app. Moving to firmware with a new flash
+layout needs one **Full update**: v3 → v4 is one (v4 adds the LittleFS
+partition that stores the button maps), and so is a v4+ image that was put on a
+v3 dongle over OTA (it reports `needs_full_flash` and cannot save maps). The
+console prompts for it in those cases; it can also be run at any time (e.g. to
+repair a dongle). It writes the bootloader, partition table, OTA data and app
+at their offsets with esptool-js through the ESP32-S3 ROM's download mode. It
+does **not** erase the chip: the NVS partition, which holds the paired
+controllers and the settings, is kept (the console refuses images that would
+overlap it), and so are the button maps of a v4 dongle.
+
+1. **Full update** (connected dongle): the console fetches
+   `firmware/latest/manifest.json` next to the page (the published release,
+   shown with its version against the running one), downloads and checks the
+   images, asks for confirmation, then asks the dongle (System module,
+   *reboot into bootloader*) to restart into the ROM download mode. The WebUSB
+   link drops; the ROM enumerates as an Espressif USB serial device
+   (`303a:1001` USB-Serial-JTAG or `303a:0009` USB-OTG).
+2. **Select the bootloader port and flash** (a second click: picking a serial
+   port needs a user gesture): pick that port (the chooser only lists
+   Espressif `303a` devices). esptool-js writes every image (compressed),
+   verifies each one against the flash's MD5, then resets the chip with the
+   RTC watchdog. The dongle comes back as itself and Auto-connect opens it.
+
+A dongle that cannot reboot itself (no System module, or it does not answer):
+unplug it, hold its BOOT button while plugging it in, and use step 2 directly.
+If anything fails, the dongle stays in download mode until it is reset or
+replugged, so step 2 can simply be retried; the log under the card shows
+esptool-js's output.
+
+Published layout (the Pages workflow puts the latest release there):
+`firmware/latest/manifest.json` =
+`{"version": "<release tag>", "chip": "esp32s3", "files": [{"offset": <number>, "path": "<file name>"}...]}`
+plus the `.bin` files beside it. Without a manifest (a page opened from
+`file://`, or nothing published yet) the card says so and offers one file
+picker per offset, prefilled `0x0` / `0x8000` / `0xf000` / `0x20000`: use
+`build/bootloader/bootloader.bin`, `build/partition_table/partition-table.bin`,
+`build/ota_data_initial.bin` and `build/esp-usb-ble-hid.bin`. Web Serial needs
+Chrome or Edge on a desktop; a page opened from `file://` cannot import the
+flasher module, so flash from the hosted page or serve `web/` over
+`http://localhost` (`python3 -m http.server` in `web/`).
+
 ### Crash dump (module `4`, espp CoreDumpService)
 
 - Shows the last crash summary (or "clean boot history") and the size of the
@@ -158,3 +253,40 @@ and v2) / INFO / BONDS / system INFO / HEAP parsers, the settings TLV encoder
 version comparison (`parseVersion`, `compareFirmware`, `pickFirmwareAsset`,
 `normalizeRelease`) can be unit-checked by extracting that block into a `.js`
 file and `require`-ing it.
+
+Two marked blocks inside it carry the newer pure logic: the `espp.gamepad_map`
+codec (between `// --- begin gamepad map codec` and `// --- end gamepad map
+codec ---`, a verbatim copy of the block in espp's
+`components/gamepad_map/web/gamepad_map_console.html`; re-sync by replacing it)
+and the Full update plan (between `// --- begin full update plan` and
+`// --- end full update plan ---`: manifest parsing, the local-file plan,
+partition table / image checks, MD5, the esptool-js read fix and the decision
+to offer the Full update). `test/dongle_console_test.js` checks both against
+byte vectors derived from the C++ headers, plus the INFO `needs_full_flash`
+flag and that every inline script parses; dependency-free:
+
+```
+node web/test/dongle_console_test.js
+```
+
+## esptool-js attribution
+
+The Full update is powered by **esptool-js**
+(<https://github.com/espressif/esptool-js>), © Espressif Systems, licensed under
+the **Apache License 2.0**. To keep the console free of any runtime third-party
+CDN dependency, esptool-js is **vendored same-origin**: the published bundled
+build is committed here verbatim as `esptool-bundle.js` (the same file espp's
+`components/usb_device/web/` vendors) and imported by `dongle_console.html` on
+demand via `import('./esptool-bundle.js')`.
+
+- Pinned version: **esptool-js 0.5.7**
+- Source of the bundle:
+  `https://cdn.jsdelivr.net/npm/esptool-js@0.5.7/bundle.js`
+
+To update it, re-download that pinned URL (bump the version) and replace
+`esptool-bundle.js`; the console needs the bundle to keep exporting `ESPLoader`
+and `Transport`. The console patches one thing at runtime: 0.5.7's
+`Transport.readLoop` drops a read that timed out while it stays queued on the
+stream, losing the next chunk the chip sends (which breaks talking to a ROM
+that already waits in download mode); `fixEsptoolReadTimeout()` keeps that
+read for the next call. Re-check it when bumping the version.

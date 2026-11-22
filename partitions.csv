@@ -1,10 +1,14 @@
 # Name,   Type, SubType,  Offset,   Size
 # NVS stays where it always was (BLE bonds survive the upgrade); otadata + two
 # OTA app slots replace the single factory app so the firmware can be updated
-# over USB (espp ota); the coredump partition keeps its 256K.
+# over USB (espp ota). v4 split the old 256K coredump partition: 128K for core
+# dumps and a 128K LittleFS partition for the button maps (espp::GamepadProfiles).
+# A partition-table change cannot be applied by an OTA update: a dongle moving
+# from v3 to v4 needs one full flash (the web console does it over Web Serial).
 nvs,      data, nvs,      0x9000,   0x6000
 otadata,  data, ota,      0xf000,   0x2000
 phy_init, data, phy,      0x11000,  0x1000
 ota_0,    app,  ota_0,    0x20000,  0x1D0000
 ota_1,    app,  ota_1,    0x1F0000, 0x1D0000
-coredump, data, coredump, 0x3C0000, 0x40000
+coredump, data, coredump, 0x3C0000, 0x20000
+littlefs, data, littlefs, 0x3E0000, 0x20000

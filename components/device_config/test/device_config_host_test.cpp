@@ -72,7 +72,8 @@ int main() {
                                1, 7};
     const auto rc = dc::Settings::parse(recon, s);
     CHECK(rc && rc->led_reconnecting_brightness == 7 && rc->led_pairing_brightness == 80);
-    std::vector<uint8_t> pair{dc::kProtocolVersion, 1, uint8_t(dc::Key::LedPairingBrightness), 1, 40};
+    std::vector<uint8_t> pair{dc::kProtocolVersion, 1, uint8_t(dc::Key::LedPairingBrightness), 1,
+                              40};
     const auto pr = dc::Settings::parse(pair, dc::Settings{});
     CHECK(pr && pr->led_pairing_brightness == 40 && pr->led_reconnecting_brightness == 1);
     auto old = s.serialize();
@@ -188,6 +189,13 @@ int main() {
           dback->usb_hid_reports == 999999 && dback->usb_hid_ready);
     CHECK(dback && dback->link_state == uint8_t(dc::Info::LinkState::Encrypting) &&
           dback->link_detail == d.link_detail);
+    CHECK(dback && !dback->needs_full_flash && !(db[1] & dc::Info::kFlagNeedsFullFlash));
+    d.needs_full_flash = true;
+    const auto fb = d.serialize();
+    CHECK(fb[1] & dc::Info::kFlagNeedsFullFlash);
+    CHECK(fb.size() == db.size()); // a flag, not a field
+    const auto fback = dc::Info::parse(fb);
+    CHECK(fback && fback->needs_full_flash && fback->usb_hid_ready);
     // the trailer is [3 x u32][link_state u8][link_detail str]: firmware from
     // before the link state stops after the counters, older firmware stops
     // before the counters

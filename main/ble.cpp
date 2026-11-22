@@ -52,6 +52,9 @@ static void set_link_detail(std::string detail) {
 static NimBLEUUID hid_service_uuid(espp::HidService::SERVICE_UUID);
 static NimBLEUUID hid_input_uuid(espp::HidService::REPORT_UUID);
 static NimBLEUUID report_reference_uuid(espp::HidService::REPORT_DESCRIPTOR_UUID); // 0x2908
+static NimBLEUUID report_map_uuid(espp::HidService::REPORT_MAP_UUID);              // 0x2A4B
+static NimBLEUUID device_info_uuid(espp::DeviceInfoService::SERVICE_UUID);         // 0x180A
+static NimBLEUUID pnp_id_uuid(espp::DeviceInfoService::PNP_CHAR_UUID);             // 0x2A50
 
 static NimBLEUUID battery_service_uuid(espp::BatteryService::BATTERY_SERVICE_UUID);
 static NimBLEUUID battery_level_uuid(espp::BatteryService::BATTERY_LEVEL_CHAR_UUID);
@@ -72,6 +75,7 @@ static std::unordered_map<const NimBLERemoteCharacteristic *, uint8_t> report_id
 // decide to connect (scan task) and used as the fallback if the GAP Device Name
 // cannot be read (scan-timer task), hence the mutex.
 static bond_name_callback_t bond_name_callback = nullptr;
+static controller_info_callback_t controller_info_callback = nullptr;
 static std::mutex advertised_name_mutex;
 static std::string advertised_name;
 
@@ -117,6 +121,34 @@ static std::string read_controller_name(NimBLEClient *client) {
       break;
   }
   return clean;
+}
+
+// The report map (how to decode the reports) and the PnP ID (which controller
+// type this is: the key of its button-map profile). Both are optional; a
+// controller without a readable report map is decoded with the Xbox Wireless
+// layout, as it always was.
+static BleControllerInfo read_controller_info(NimBLEClient *client,
+                                              NimBLERemoteService *hid_service) {
+  BleControllerInfo info;
+  if (auto *chr = hid_service->getCharacteristic(report_map_uuid); chr && chr->canRead()) {
+    const auto value = chr->readValue();
+    info.report_map.assign(value.data(), value.data() + value.size());
+  }
+  if (auto *dis = client->getService(device_info_uuid)) {
+    if (auto *chr = dis->getCharacteristic(pnp_id_uuid); chr && chr->canRead()) {
+      // [vendor id source u8][vendor id u16][product id u16][version u16]
+      const auto value = chr->readValue();
+      if (value.size() >= 5) {
+        const uint8_t *d = value.data();
+        info.vid = static_cast<uint16_t>(d[1] | (d[2] << 8));
+        info.pid = static_cast<uint16_t>(d[3] | (d[4] << 8));
+      }
+    }
+  }
+  info.name = read_controller_name(client);
+  ble_logger.info("controller '{}' {:04x}:{:04x}, report map {} bytes", info.name, info.vid,
+                  info.pid, info.report_map.size());
+  return info;
 }
 
 // Forget everything about the current link. Called from the NimBLE host task
@@ -175,8 +207,8 @@ static auto led_callback = [](auto &m, auto &cv) -> bool {
   static espp::Rgb led_color(0.0f, 0.0f, 1.0f); // blue
   espp::Hsv hsv = led_color.hsv();
   // read the configured peak every tick so a settings change applies at once
-  hsv.v = breathe() * (is_pairing.load() ? g_led_pairing_level.load()
-                                        : g_led_reconnecting_level.load());
+  hsv.v = breathe() *
+          (is_pairing.load() ? g_led_pairing_level.load() : g_led_reconnecting_level.load());
   set_led(hsv);
   std::unique_lock<std::mutex> lk(m);
   cv.wait_for(lk, 10ms);
@@ -416,6 +448,10 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
     why = fmt::format("HID service not found ({} services discovered)", services.size());
     return 0;
   }
+  // Tell the app what this controller is (its report layout, its type) before
+  // its reports start arriving, so the first one is already decoded.
+  if (controller_info_callback)
+    controller_info_callback(read_controller_info(client, svc));
   size_t count = 0, report_chars = 0, failed = 0;
   for (auto *chr : svc->getCharacteristics(refresh)) {
     if (chr->getUUID() != hid_input_uuid || !chr->canNotify())
@@ -751,6 +787,10 @@ uint8_t ble_bond_count() { return static_cast<uint8_t>(NimBLEDevice::getNumBonds
 
 void ble_set_bond_name_callback(bond_name_callback_t callback) {
   bond_name_callback = std::move(callback); // set once at startup, before scanning
+}
+
+void ble_set_controller_info_callback(controller_info_callback_t callback) {
+  controller_info_callback = std::move(callback); // set once at startup, before scanning
 }
 
 void ble_set_disconnect_callback(disconnect_callback_t callback) {
