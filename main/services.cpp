@@ -327,6 +327,7 @@ void services_init(espp::DispatcherWorker *link, const ServicesCallbacks &callba
   device_config_module = std::make_unique<DeviceConfig>(DeviceConfig::Config{
       .send = send,
       .initial = settings,
+      .defaults = default_settings(),
       .on_settings_changed =
           [on_changed = callbacks.on_settings_changed](const device_config::Settings &s,
                                                        std::string &error) {

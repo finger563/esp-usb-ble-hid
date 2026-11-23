@@ -185,13 +185,18 @@ static void push_inputs_locked(GamepadInputs inputs) {
     st.set(Button::Back, b.select);
     st.set(Button::Guide, b.home);
     auto axis = [](float v) { return static_cast<int16_t>(std::clamp(v, -1.0f, 1.0f) * 32767.0f); };
-    auto trigger = [](float v) { return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+    // A trigger follows its axis, or is fully pressed by its digital L2 / R2
+    // button: a pad with on/off triggers reports only the button, and a button
+    // map can target either one.
+    auto trigger = [](float v, bool pressed) {
+      return pressed ? uint8_t{255} : static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f);
+    };
     st.lx = axis(inputs.left_joystick.x);
     st.ly = axis(inputs.left_joystick.y);
     st.rx = axis(inputs.right_joystick.x);
     st.ry = axis(inputs.right_joystick.y);
-    st.left_trigger = trigger(inputs.l2.value);
-    st.right_trigger = trigger(inputs.r2.value);
+    st.left_trigger = trigger(inputs.l2.value, b.l2);
+    st.right_trigger = trigger(inputs.r2.value, b.r2);
     usb_push_xinput(st);
     return;
   }
@@ -200,8 +205,12 @@ static void push_inputs_locked(GamepadInputs inputs) {
     r.set_buttons(inputs.buttons);
     r.set_left_joystick(inputs.left_joystick.x, inputs.left_joystick.y);
     r.set_right_joystick(inputs.right_joystick.x, inputs.right_joystick.y);
-    r.set_brake(inputs.l2.value);
-    r.set_accelerator(inputs.r2.value);
+    // ZL / ZR are digital on a Pro Controller: pressed by the digital L2 / R2
+    // button or by the trigger axis past half way. (set_brake / set_accelerator
+    // assign ZL / ZR, so the button state set_buttons() wrote must be OR-ed in
+    // here, or a button-only trigger would never reach the host.)
+    r.set_brake(inputs.buttons.l2 || inputs.l2.value > 0.5f);
+    r.set_accelerator(inputs.buttons.r2 || inputs.r2.value > 0.5f);
   });
   usb_controller->set_battery_level(static_cast<uint8_t>(battery_level_percent.load()));
 }

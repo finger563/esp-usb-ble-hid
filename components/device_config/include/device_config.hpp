@@ -58,7 +58,9 @@ public:
 
   struct Config {
     send_fn send{nullptr};
-    Settings initial{}; ///< settings at startup (loaded by the app)
+    Settings initial{};  ///< settings at startup (loaded by the app)
+    Settings defaults{}; ///< what RESET_SETTINGS restores: the build's first-boot
+                         ///< settings (e.g. the USB controller type a build starts in)
     settings_changed_fn on_settings_changed{nullptr};
     info_fn info{nullptr};
     action_fn on_action{nullptr};
@@ -75,6 +77,7 @@ public:
       , on_action_(config.on_action)
       , bonds_(config.bonds)
       , forget_bond_(config.forget_bond)
+      , defaults_(config.defaults)
       , settings_(config.initial) {}
 
   /// The dispatcher module id this module answers on.
@@ -131,13 +134,12 @@ public:
       break;
     }
     case Msg::ResetSettings: {
-      const Settings defaults{};
-      if (std::string error; !apply(defaults, error)) {
+      if (std::string error; !apply(defaults_, error)) {
         send_error(request, ErrorCode::Failed, error);
         break;
       }
       send(Msg::Ok, device_config::make_ok_payload(request));
-      send(Msg::Settings, defaults.serialize());
+      send(Msg::Settings, defaults_.serialize());
       break;
     }
     case Msg::Action: {
@@ -223,6 +225,7 @@ protected:
   forget_bond_fn forget_bond_;
 
   mutable std::mutex mutex_;
+  const Settings defaults_;
   Settings settings_;
 };
 
