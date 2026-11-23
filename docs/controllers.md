@@ -72,7 +72,7 @@ If a controller doesn't publish a readable button description, or the one it pub
 | Analog triggers | Yes, as ZL / ZR, pressed once a trigger passes half its travel (a Pro Controller's ZL / ZR are on/off buttons) | Yes, analog (LT / RT) |
 | L2 / R2 reported as buttons | Yes, as ZL / ZR | Yes, as a fully pulled LT / RT |
 | Back paddles | No | No |
-| Battery level | Yes: the controller's battery is reported to the Switch, when the controller shares it over Bluetooth | No |
+| Battery level | Yes: the controller's battery is reported to the Switch, when the controller shares it over Bluetooth (the Xbox Wireless controller's own battery report stands in until then) | No |
 | Rumble | No | No (rumble sent by the PC is accepted and ignored) |
 | Motion controls (gyro) | No | No |
 | NFC (amiibo) | No | n/a |
