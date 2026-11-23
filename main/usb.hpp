@@ -22,6 +22,7 @@
 
 #include "device_config.hpp"
 #include "dispatcher_worker.hpp"
+#include "rumble_state.hpp"
 #include "switch_pro.hpp"
 #include "xinput.hpp"
 
@@ -69,13 +70,13 @@ bool usb_hid_ready();
 /// Input reports accepted by the USB stack since boot (diagnostics).
 uint32_t usb_hid_reports_sent();
 
-/// Called when the USB host sends rumble, with the left / right motor levels
-/// (0..255): from the TinyUSB task for host reports (Switch Pro: decoded from
-/// the 0x10 / 0x01 output reports; Xbox 360: from the X-Input rumble report),
-/// and from the sender task with zero levels when the host unmounts or
-/// suspends the bus, so no effect outlives its host. Set once at startup,
-/// before start_usb(). The callback must not block (queue the work elsewhere).
-using rumble_callback_t = std::function<void(uint8_t left, uint8_t right)>;
+/// Called (from the TinyUSB task) with the rumble the USB host wants: in Xbox
+/// 360 mode the X-Input rumble reports (espp::xinput::decode_rumble), and in
+/// both modes an all-off state when the host unmounts or suspends the bus, so
+/// rumble stops with the host. (Switch Pro mode's rumble comes from
+/// espp::SwitchPro::Config::on_rumble, set where the engine is created.) Set
+/// once at startup, before start_usb(). The callback must not block.
+using rumble_callback_t = std::function<void(const espp::RumbleState &rumble)>;
 void usb_set_rumble_callback(rumble_callback_t callback);
 
 /// Write a complete frame to the vendor interface (no-op if it is disabled).

@@ -116,7 +116,7 @@ LED levels, the BLE name and the USB controller type are settings in the
 
 - **Bluetooth LE controllers only.** Controllers that only speak Bluetooth Classic (DualShock 4, DualSense, Switch Pro Controller, Joy-Con) cannot pair, because the ESP32-S3 has no Bluetooth Classic radio. [How to tell →](docs/controllers.md#compatibility)
 - **One controller per dongle.** For local multiplayer, use one dongle per player.
-- **Rumble from the host.** The host's rumble (the Switch's, or a PC's X-Input rumble in Xbox 360 mode) is forwarded to the motors of the Xbox Wireless controller (Series X|S, model 1914). Other controllers' rumble layouts are not known, so their motors are not driven. Motion sensors are not forwarded. [What is forwarded →](docs/controllers.md#what-is-forwarded)
+- **Rumble.** The host's rumble (the Switch's, or a PC's in Xbox 360 mode) plays on the controller's motors, on controllers that describe a rumble report the way the Xbox Wireless Controller does. The web console says whether yours does, and can test it. Motion sensors are not forwarded. [What is forwarded →](docs/controllers.md#what-is-forwarded)
 - **It cannot wake a sleeping Switch.** The Switch cuts USB power when it sleeps, so wake it with a Joy-Con or the console's own button.
 - **Xbox 360 mode is for PCs, Steam Deck and Android**, not for the Switch. macOS has no X-Input driver, so use Switch Pro mode there.
 

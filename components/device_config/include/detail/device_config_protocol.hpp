@@ -19,6 +19,7 @@
 //   0x03 SET_SETTINGS  (Settings TLVs)   0x83 OK        [request u8]
 //   0x04 RESET_SETTINGS(no payload)      0x84 ERROR     [request u8][code u32][utf8 message]
 //   0x05 ACTION        [action u8]       0x85 BONDS     (see serialize_bonds)
+//                      (TEST_RUMBLE: ERROR when the controller cannot rumble)
 //   0x06 GET_BONDS     (no payload)
 //   0x07 FORGET_BOND   [addr 6B][type u8]
 //
@@ -106,6 +107,7 @@ enum class Action : uint8_t {
   StartPairing = 0x01, ///< enter BLE pairing mode (same as holding the button)
   ClearBonds = 0x02,   ///< forget every paired controller
   Reboot = 0x03,       ///< restart the dongle
+  TestRumble = 0x04,   ///< play a short rumble on the connected controller (ERROR if it cannot)
 };
 
 /// Error codes carried in ERROR replies (the message is authoritative).
@@ -367,6 +369,10 @@ struct Info {
   /// the maps are not saved; a full flash (the console's Full update) adds it.
   /// flags bit5; older firmware never sets it.
   bool needs_full_flash{false};
+  /// Whether the connected controller can be rumbled: its report map declares a
+  /// rumble report the dongle can write (false with no controller). nullopt =
+  /// firmware that does not report it (a later addition, optional).
+  std::optional<bool> rumble_supported;
 
   /// The controller link's bring-up step (link_state). 0 is reserved for
   /// firmware that does not report it.
@@ -395,7 +401,8 @@ struct Info {
   ///               [usb_hid_reports u32]  (usb_hid_ready is flags bit4,
   ///               needs_full_flash bit5), then
   ///               (a later addition, also optional): [link_state u8][link_detail str],
-  ///               then (later still, optional): [usb_controller u8] (see UsbController)
+  ///               then (later still, optional): [usb_controller u8] (see UsbController),
+  ///               then (optional): [rumble_supported u8] (0 / 1)
   std::vector<uint8_t> serialize() const {
     std::vector<uint8_t> out;
     put_u8(out, kProtocolVersion);
@@ -427,6 +434,8 @@ struct Info {
     put_u8(out, link_state);
     put_str(out, link_detail);
     put_u8(out, usb_controller);
+    if (rumble_supported)
+      put_u8(out, *rumble_supported ? 1 : 0);
     return out;
   }
 
@@ -473,6 +482,8 @@ struct Info {
       i.link_detail = *detail;
     if (const auto usb = r.u8())
       i.usb_controller = *usb;
+    if (const auto rumble = r.u8())
+      i.rumble_supported = *rumble != 0;
     return i;
   }
 };

@@ -149,7 +149,7 @@ public:
       }
       const auto action = static_cast<Action>(frame.payload[0]);
       if (action != Action::StartPairing && action != Action::ClearBonds &&
-          action != Action::Reboot) {
+          action != Action::Reboot && action != Action::TestRumble) {
         send_error(request, ErrorCode::UnknownRequest, "unknown action");
         break;
       }

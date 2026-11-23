@@ -90,6 +90,7 @@ The badges show whether USB is mounted, whether a controller is connected, and w
 
 - **USB controller**: the mode the dongle is running in (Switch Pro or Xbox 360). If you changed it in Settings, this row also says *set to …, reboot to apply*.
 - **Controller** and **Battery**: the connected controller's serial number and battery level.
+- **Rumble**: whether the connected controller can rumble, that is, whether its report map declares a rumble report the dongle can write. Older firmware doesn't report it.
 - **Paired controllers**: how many controllers the dongle remembers.
 - **Uptime**, **Project**, **Firmware**, **Hardware** and **ESP-IDF**: what is running, and on which board.
 - **Latest release**: whether a newer firmware exists. See [Updating the firmware](updating.md).
@@ -115,6 +116,7 @@ Every controller the dongle remembers is listed by the name it reported when it 
 ### Actions
 
 - **Start pairing**: the same as holding the dongle's button. See [Pair a controller](getting-started.md#pair-a-controller).
+- **Test rumble**: plays a short rumble on the connected controller. Available when the **Rumble** row says *supported*.
 - **Forget all controllers**: clears every pairing, after you confirm. The dongle then goes into pairing mode.
 - **Reboot dongle**: restarts the dongle, after you confirm. The USB link drops for a few seconds and the console reconnects (see [Auto-connect](#auto-connect)).
 

@@ -197,7 +197,9 @@ The **USB controller** type and the **BLE device name** apply only after the don
 
 ### Does rumble work?
 
-Yes, with the Xbox Wireless controller (Series X|S, model 1914): the host's rumble (the Switch's, or a PC's X-Input rumble in Xbox 360 mode) is forwarded to its motors. Other controllers' rumble layouts are not known to the dongle, so their motors are not driven. See [What is forwarded](controllers.md#what-is-forwarded).
+Yes, on controllers that describe a rumble report in their report map, as the Xbox Wireless Controller does: the host's rumble (the Switch's, or a PC's in Xbox 360 mode) plays on the controller's motors. The [web console](web-console.md#status)'s **Rumble** row says whether the connected controller does, and **Test rumble** plays a short pulse to check it. Nothing is written to a controller that doesn't describe one.
+
+Rumble stops when the host sends a stop, goes to sleep or is unplugged, and when the controller disconnects. See [What is forwarded](controllers.md#what-is-forwarded).
 
 ### Do motion controls work?
 

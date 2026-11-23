@@ -20,7 +20,6 @@
 #include "usb_device.hpp"
 
 #include "bsp.hpp"
-#include "switch_rumble.hpp"
 
 using namespace std::chrono_literals;
 
@@ -38,7 +37,7 @@ static std::atomic<bool> ever_mounted{false};
 static std::atomic<int64_t> unmounted_at_us{0};
 static std::atomic<uint32_t> hid_reports_sent{0}; // input reports accepted by TinyUSB
 // set once at startup, before start_usb(); invoked from the TinyUSB task (host
-// rumble) and from the sender task (the stop on unmount / suspend)
+// rumble, and the stop on unmount / suspend)
 static rumble_callback_t rumble_callback;
 
 // --- X-Input TX: the latest state, sent from the sender task ----------------------
@@ -84,13 +83,6 @@ static void enqueue_hid(espp::SwitchPro::ReportData rd) {
 }
 
 static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
-  // a suspended host sends no more rumble updates: stop the effect once on the
-  // transition (on resume the host re-sends whatever is still active)
-  static bool was_suspended = false;
-  const bool suspended = tud_suspended();
-  if (suspended && !was_suspended && rumble_callback)
-    rumble_callback(0, 0);
-  was_suspended = suspended;
   OutReport rep;
   bool have = false;
   {
@@ -243,16 +235,6 @@ void usb_set_rumble_callback(rumble_callback_t callback) {
   rumble_callback = std::move(callback); // set once at startup, before USB starts
 }
 
-// Forward the rumble part of a Switch Pro OUTPUT report (0x10 rumble-only,
-// 0x01 rumble + subcommand) if it carries one. Runs on the TinyUSB task.
-static void forward_switch_rumble(std::span<const uint8_t> data) {
-  if (!rumble_callback)
-    return;
-  uint8_t left = 0, right = 0;
-  if (switch_rumble_decode(data, left, right))
-    rumble_callback(left, right);
-}
-
 bool usb_write_vendor(std::span<const uint8_t> frame) {
 #if CONFIG_DONGLE_USB_VENDOR_INTERFACE
   if (!usb || !mounted.load())
@@ -307,12 +289,17 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
     cfg.remote_wakeup = false;
     espp::UsbDevice::XInputFunction xinput;
     xinput.interface_name = "Xbox 360 Controller";
-    // rumble / LED reports from the host: forward the two motor levels to the
-    // app (which queues them for the BLE controller); the LED part is ignored
+    // rumble / LED reports from the host: the two motor levels go to the app
+    // (which drives the BLE controller with them); LED reports are ignored
     xinput.on_rumble = [](std::span<const uint8_t> data) {
-      // [0x00][0x08][0x00][left motor][right motor][0x00 x3]
-      if (rumble_callback && data.size() >= 5 && data[0] == 0x00)
-        rumble_callback(data[3], data[4]);
+      if (!rumble_callback)
+        return;
+      if (const auto r = espp::xinput::decode_rumble(data)) {
+        espp::RumbleState state;
+        state.set(espp::RumbleState::Motor::Strong, r->left);
+        state.set(espp::RumbleState::Motor::Weak, r->right);
+        rumble_callback(state);
+      }
     };
     cfg.xinput = xinput;
   } else {
@@ -332,7 +319,6 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
       // TinyUSB task context: compute the reply and queue it (don't send here)
       if (data.empty())
         return;
-      forward_switch_rumble(data);
       if (auto reply = controller->on_hid_report(data[0], data.data(), data.size()))
         enqueue_hid(std::move(*reply));
     };
@@ -397,14 +383,18 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
     usb_dispatcher().request_reset();
 #endif
   });
+  usb->set_suspend_callback([]() {
+    logger.info("USB suspended");
+    if (rumble_callback)
+      rumble_callback(espp::RumbleState{}); // the host is asleep: stop its rumble
+  });
   usb->set_unmount_callback([]() {
     logger.info("USB unmounted");
+    if (rumble_callback)
+      rumble_callback(espp::RumbleState{}); // the host is gone: stop its rumble
     // timestamp first: the sender reads it right after it sees mounted == false
     unmounted_at_us.store(esp_timer_get_time());
     mounted.store(false);
-    // the host is gone: stop any rumble it left running
-    if (rumble_callback)
-      rumble_callback(0, 0);
     {
       std::lock_guard<std::mutex> lock(hid_tx_mutex);
       hid_tx_queue.clear();
