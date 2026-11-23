@@ -535,6 +535,33 @@ extern "C" void app_main(void) {
     services_gamepad_disconnected();
     push_inputs(GamepadInputs{});
   });
+  // rumble: USB host -> BLE controller. The callback runs on the TinyUSB task:
+  // build the controller's rumble report and queue it; the BLE side writes it
+  // on its own task. Queued reports are dropped while no controller is
+  // subscribed, and a stale one never reaches the next controller.
+  usb_set_rumble_callback([](uint8_t left, uint8_t right) {
+    // Only the Xbox Wireless controller's rumble layout is known: output
+    // report id 3, [enable nibble][left trigger][right trigger][strong][weak]
+    // [sustain 10ms][release 10ms][loop count] (the layout Linux's xpadneo
+    // driver uses). Enable bits: 0x01 weak (right main motor), 0x02 strong
+    // (left main motor), 0x04 / 0x08 the trigger motors. The effect is a long
+    // pulse reprogrammed by every host update, like the Windows driver does;
+    // a zero-level update stops it. Other controllers: nothing to drive.
+    if (!controller_is_xbox.load())
+      return;
+    espp::XboxRumbleOutputReport<> report;
+    report.set_enabled(0x03);                                         // strong + weak main motors
+    report.set_magnitude(2, static_cast<uint8_t>(left * 100 / 255));  // strong = left
+    report.set_magnitude(3, static_cast<uint8_t>(right * 100 / 255)); // weak = right
+    report.set_duration(0xFF); // 2.55 s sustain, reprogrammed by each update
+    report.set_start_delay(0);
+    report.set_loop_count(0xEB);
+    auto bytes = report.get_report();
+    // espp 1.4.6's enable field is a bit-field struct whose unnamed padding
+    // nibble is never initialized; keep it zero (fixed in espp main)
+    bytes[0] &= 0x0F;
+    ble_queue_output_report(espp::XboxRumbleOutputReport<>::ID, std::move(bytes));
+  });
 
   // MARK: USB initialization -- as the controller the settings ask for
   // (descriptors are fixed at enumeration, so a changed setting applies at

@@ -69,6 +69,7 @@ flowchart TB
 | NimBLE host task | NimBLE (6 KB stack) | on each notification | Decodes the report, applies the map, publishes live input and pushes the result to the output stage. Also stores battery-level notifications. |
 | `Scan Timer` (link supervisor) | `main/ble.cpp` | every 100 ms (8 KB stack) | Restarts scans, re-requests security, subscribes to the HID reports, notices missed disconnects and owns the LED. |
 | `breathe` | `main/ble.cpp` | every 10 ms, only while nothing is connected | The breathing LED. |
+| `ble_rumble` | `main/ble.cpp` | wakes on a queued output report (4 KB stack) | Writes the latest queued HID output report (rumble) to the controller, off the TinyUSB / NimBLE host tasks. |
 | `usb_hid_tx` | `main/usb.cpp` | wakes on demand or every 8 ms (priority 10) | Sends the Pro Controller handshake replies and its input report stream, submits and retries X-Input reports, and re-arms the USB pull-up. |
 | `usb_rx` (DispatcherWorker) | `main/usb.cpp` | on vendor bytes (8 KB stack) | Parses frames and runs every console module's handler and replies, away from the TinyUSB task. |
 | `usb-reg` | `main/main.cpp` | every 50 ms | Holds L+R for 1 s after the Switch finishes the handshake (Switch Pro mode only). |
@@ -171,7 +172,7 @@ The MS OS 2.0 descriptor comes with the vendor interface. A build without it (`C
 
 Other details:
 
-- **Rumble and LED reports from the host are accepted and ignored.** Nothing on the BLE side drives them.
+- **Rumble reports from the host drive the Xbox Wireless controller's motors.** The two motor levels are decoded on the TinyUSB task and queued (`ble_queue_output_report()`); the `ble_rumble` task does the BLE write of the controller's rumble output report (id 3, the xpadneo layout). Only the latest queued report is sent, and a queued report never survives a disconnect. Other controllers' rumble layouts are not known, so their motors are not driven. The LED part of the report is ignored.
 - **Reports are sent on change.** The sender keeps the latest state and retries it every 8 ms until the endpoint takes it, so a button release, or the neutral state after a disconnect, is never lost. After a remount it sends the current state again.
 - **Detecting a host with no X-Input driver.** If a report stays in flight for more than 250 ms, nobody is reading the interface. `usb_hid_ready()` then reports false, and the console's Device tab says the host is not reading X-Input reports. On a Mac this is expected.
 - **The console must know the identity.** `web/dongle_console.html` lists `045E:0E60` next to `057E:2009` in `DONGLE_IDS`. Keep the two in step if you change the product ID.

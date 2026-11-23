@@ -3,6 +3,7 @@
 #include "esp_timer.h"
 #include "tusb.h" // tud_connect / tud_disconnect (pull-up re-arm)
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -225,6 +226,47 @@ bool usb_push_xinput(const espp::xinput::GamepadState &state) {
 
 uint32_t usb_hid_reports_sent() { return hid_reports_sent.load(); }
 
+// --- rumble: USB host -> the app (which forwards it to the BLE controller) ----
+// set once at startup, before start_usb(); invoked from the TinyUSB task
+static rumble_callback_t rumble_callback;
+
+void usb_set_rumble_callback(rumble_callback_t callback) {
+  rumble_callback = std::move(callback); // set once at startup, before USB starts
+}
+
+// Switch Pro rumble data: 4 bytes per motor, left first (dekuNukem's
+// Nintendo_Switch_Reverse_Engineering, "Rumble data"). Per motor:
+//   [0] high-band frequency, low byte
+//   [1] bit0: high-band frequency high bit; bits 1-7: high-band amplitude
+//       (0..100, twice the 0..1 value)
+//   [2] low-band frequency (+0x80 selects the intermediate amplitude range)
+//   [3] low-band amplitude, 0x40..0x72 for 0..1
+// The dongle has two motors to drive, so take the stronger of the two bands
+// as the motor level.
+static uint8_t switch_rumble_level(const uint8_t *motor) {
+  const float hf = std::min<int>(motor[1] >> 1, 100) / 100.0f;
+  const float lf =
+      motor[3] > 0x40 ? std::min<int>(motor[3] - 0x40, 0x32) / static_cast<float>(0x32) : 0.0f;
+  return static_cast<uint8_t>(std::max(hf, lf) * 255.0f);
+}
+
+// Forward the rumble part of a Switch Pro OUTPUT report (0x10 rumble-only,
+// 0x01 rumble + subcommand) if it carries one. Runs on the TinyUSB task.
+static void forward_switch_rumble(std::span<const uint8_t> data) {
+  if (!rumble_callback || data.empty())
+    return;
+  size_t off = 0;
+  if (data[0] == 0x10)
+    off = 1; // [0x10][8 rumble bytes]
+  else if (data[0] == 0x01)
+    off = 2; // [0x01][packet number][8 rumble bytes][subcommand...]
+  else
+    return;
+  if (data.size() >= off + 8)
+    rumble_callback(switch_rumble_level(data.data() + off),
+                    switch_rumble_level(data.data() + off + 4));
+}
+
 bool usb_write_vendor(std::span<const uint8_t> frame) {
 #if CONFIG_DONGLE_USB_VENDOR_INTERFACE
   if (!usb || !mounted.load())
@@ -279,9 +321,13 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
     cfg.remote_wakeup = false;
     espp::UsbDevice::XInputFunction xinput;
     xinput.interface_name = "Xbox 360 Controller";
-    // rumble / LED reports from the host: nothing to drive them with (the
-    // wireless controller's rumble is not forwarded), so they are ignored
-    xinput.on_rumble = [](std::span<const uint8_t>) {};
+    // rumble / LED reports from the host: forward the two motor levels to the
+    // app (which queues them for the BLE controller); the LED part is ignored
+    xinput.on_rumble = [](std::span<const uint8_t> data) {
+      // [0x00][0x08][0x00][left motor][right motor][0x00 x3]
+      if (rumble_callback && data.size() >= 5 && data[0] == 0x00)
+        rumble_callback(data[3], data[4]);
+    };
     cfg.xinput = xinput;
   } else {
     // Descriptor details a Switch compares against a real Pro Controller: device
@@ -300,6 +346,7 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
       // TinyUSB task context: compute the reply and queue it (don't send here)
       if (data.empty())
         return;
+      forward_switch_rumble(data);
       if (auto reply = controller->on_hid_report(data[0], data.data(), data.size()))
         enqueue_hid(std::move(*reply));
     };

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
@@ -69,6 +70,10 @@ static disconnect_callback_t disconnect_callback = nullptr;
 // on disconnect (the characteristic objects die with the client).
 static std::mutex report_map_mutex;
 static std::unordered_map<const NimBLERemoteCharacteristic *, uint8_t> report_ids;
+// The HID *output* report characteristics by report id (Report Reference type
+// 2, e.g. the Xbox controller's rumble report), for ble_queue_output_report().
+// Same lifetime / lock as report_ids.
+static std::unordered_map<uint8_t, NimBLERemoteCharacteristic *> output_reports;
 
 // The controller's name, reported to the app once it is connected + subscribed
 // (see ble_set_bond_name_callback). The advertised name is captured when we
@@ -83,6 +88,57 @@ static NimBLEUUID generic_access_service_uuid(espp::GenericAccessService::SERVIC
 static NimBLEUUID device_name_uuid(espp::GenericAccessService::NAME_CHAR_UUID);
 
 static espp::Logger ble_logger({.tag = "BLE", .level = espp::Logger::Verbosity::INFO});
+
+// --- HID output reports (rumble): latest-wins queue + sender task ------------
+// ble_queue_output_report() records the report (any task may call it, e.g. the
+// TinyUSB task); the sender task does the blocking BLE write. Only the latest
+// queued report is sent: rumble is a stream of levels, an old one is worthless.
+static std::mutex rumble_mutex;
+static std::condition_variable rumble_cv;
+static bool rumble_pending{false};
+static uint8_t rumble_report_id{0};
+static std::vector<uint8_t> rumble_data;
+static std::unique_ptr<espp::Task> rumble_task;
+
+void ble_queue_output_report(uint8_t report_id, std::vector<uint8_t> data) {
+  if (!subscribed.load())
+    return; // no controller link: nothing to drive
+  {
+    std::lock_guard<std::mutex> lk(rumble_mutex);
+    rumble_pending = true;
+    rumble_report_id = report_id;
+    rumble_data = std::move(data);
+  }
+  rumble_cv.notify_one();
+}
+
+static bool rumble_task_fn(std::mutex &, std::condition_variable &) {
+  uint8_t id = 0;
+  std::vector<uint8_t> data;
+  {
+    std::unique_lock<std::mutex> lk(rumble_mutex);
+    rumble_cv.wait(lk, [] { return rumble_pending; });
+    id = rumble_report_id;
+    data = std::move(rumble_data);
+    rumble_pending = false;
+  }
+  NimBLERemoteCharacteristic *chr = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(report_map_mutex);
+    const auto it = output_reports.find(id);
+    if (it != output_reports.end())
+      chr = it->second;
+  }
+  if (chr && subscribed.load()) {
+    // prefer write-without-response (no round trip); the controller's rumble
+    // characteristic supports it. A failed write is not worth retrying: the
+    // host keeps sending rumble updates while the effect is active.
+    const bool response = !chr->canWriteNoResponse();
+    if (!chr->writeValue(data.data(), data.size(), response))
+      ble_logger.debug("could not write HID output report {}", id);
+  }
+  return false; // don't stop the task
+}
 
 // connection parameters requested once the link is up / encrypted
 static constexpr uint16_t min_conn_interval = 12;    // 1.25ms units = 15ms
@@ -161,6 +217,12 @@ static void reset_link_state(const std::string &why) {
   {
     std::lock_guard<std::mutex> lk(report_map_mutex);
     report_ids.clear();
+    output_reports.clear();
+  }
+  {
+    // a rumble queued for the old link must not reach the next controller
+    std::lock_guard<std::mutex> lk(rumble_mutex);
+    rumble_pending = false;
   }
   set_link_detail(why);
   if (was_subscribed) {
@@ -441,6 +503,7 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
     // the previous attempt's (dangling) entries
     std::lock_guard<std::mutex> lk(report_map_mutex);
     report_ids.clear();
+    output_reports.clear();
   }
   const auto &services = client->getServices(refresh);
   auto *svc = client->getService(hid_service_uuid);
@@ -454,19 +517,29 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
     controller_info_callback(read_controller_info(client, svc));
   size_t count = 0, report_chars = 0, failed = 0;
   for (auto *chr : svc->getCharacteristics(refresh)) {
-    if (chr->getUUID() != hid_input_uuid || !chr->canNotify())
+    if (chr->getUUID() != hid_input_uuid)
       continue;
-    ++report_chars;
     uint8_t report_id = 1;
+    uint8_t report_type = 1; // without a Report Reference: assume the main input report
     if (auto *ref = chr->getDescriptor(report_reference_uuid)) {
       const auto value = ref->readValue();
       if (value.size() >= 2) {
         report_id = value.data()[0];
-        const uint8_t report_type = value.data()[1];
-        if (report_type != 1) // 1 = input; skip output / feature reports
-          continue;
+        report_type = value.data()[1];
       }
     }
+    if (report_type == 2) {
+      // an output report (e.g. the Xbox controller's rumble report): remember
+      // it for ble_queue_output_report(), nothing to subscribe to
+      std::lock_guard<std::mutex> lk(report_map_mutex);
+      output_reports[report_id] = chr;
+      ble_logger.info("HID output report id {} (handle {:#06x}) available", report_id,
+                      chr->getHandle());
+      continue;
+    }
+    if (report_type != 1 || !chr->canNotify()) // skip feature reports / silent chars
+      continue;
+    ++report_chars;
     if (!chr->subscribe(true, on_notify)) {
       ble_logger.warn("could not subscribe to input report {}", report_id);
       ++failed;
@@ -484,6 +557,7 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
     why = fmt::format("subscribing to {} of {} input reports failed", failed, count + failed);
     std::lock_guard<std::mutex> lk(report_map_mutex);
     report_ids.clear(); // the next attempt subscribes them all again
+    output_reports.clear();
     return 0;
   }
   if (count == 0) {
@@ -750,6 +824,14 @@ static void start_scan(bool pairing) {
                             .callback = timer_callback,
                             .stack_size_bytes = 8192,
                             .log_level = espp::Logger::Verbosity::INFO});
+  }
+  if (!rumble_task) {
+    // sends queued HID output reports (rumble) with a blocking BLE write, off
+    // the TinyUSB / NimBLE host tasks
+    rumble_task =
+        espp::Task::make_unique({.callback = rumble_task_fn,
+                                 .task_config = {.name = "ble_rumble", .stack_size_bytes = 4096}});
+    rumble_task->start();
   }
 }
 
