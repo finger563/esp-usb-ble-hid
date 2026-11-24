@@ -25,7 +25,8 @@ What changes between the two modes:
 | Your controller's Xbox / Home button | Home | Guide |
 | Share / Capture button | Capture | Not available (X-Input has no such button) |
 | Controller battery level | Sent to the Switch | Not sent |
-| Rumble and motion controls | Not forwarded | Not forwarded |
+| Rumble | The Switch's rumble drives the motors of the Xbox Wireless controller (Series X|S, model 1914) | The PC's X-Input rumble drives them |
+| Motion controls | Not forwarded | Not forwarded |
 | Web console | Works | Works |
 
 For everything the dongle passes on, and what it doesn't, see [What is forwarded](controllers.md#what-is-forwarded).
@@ -96,7 +97,8 @@ Now plug the dongle into your PC, Steam Deck or Android device. The dongle store
 - **Linux** uses the kernel's `xpad` driver. To use the web console on Linux, see [Linux permissions](#linux-permissions).
 - **Android**: connect through a USB-C (OTG) adapter.
 - **Analog triggers** (LT / RT). Your controller's Xbox or Home button becomes **Guide**, and View and Menu become **Back** and **Start**.
-- **Not included:** the Share / Capture button, because X-Input has no such button (you can [remap it](button-mapping.md) to something else). The dongle ignores rumble sent by the PC. The controller's battery level isn't reported.
+- **Rumble** sent by the PC drives the motors of the Xbox Wireless controller (Series X|S, model 1914; the LED part of the report is ignored).
+- **Not included:** the Share / Capture button, because X-Input has no such button (you can [remap it](button-mapping.md) to something else). The controller's battery level isn't reported.
 
 You can still use the web console in Xbox 360 mode. On a computer that is also your game PC, the console and the controller work side by side.
 

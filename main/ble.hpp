@@ -44,6 +44,12 @@ void ble_set_disconnect_callback(disconnect_callback_t callback);
 /// The HID report id a subscribed characteristic carries (from its Report
 /// Reference descriptor); nullopt for an unknown characteristic.
 std::optional<uint8_t> ble_report_id_for(const NimBLERemoteCharacteristic *chr);
+/// Queue a HID output report (e.g. rumble) for the connected controller,
+/// latest-wins: only the most recent queued report is sent. Dropped when no
+/// controller is subscribed. Sent by the BLE side's own task (a blocking BLE
+/// write), so this is safe from any task -- including the TinyUSB task, which
+/// must not block. @p data is the report payload, without the report id.
+void ble_queue_output_report(uint8_t report_id, std::vector<uint8_t> data);
 /// Link diagnostics: notifications received since the current subscription
 /// began, and the age of the last one (UINT32_MAX if none yet).
 uint32_t ble_notification_count();

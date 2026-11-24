@@ -69,6 +69,15 @@ bool usb_hid_ready();
 /// Input reports accepted by the USB stack since boot (diagnostics).
 uint32_t usb_hid_reports_sent();
 
+/// Called when the USB host sends rumble, with the left / right motor levels
+/// (0..255): from the TinyUSB task for host reports (Switch Pro: decoded from
+/// the 0x10 / 0x01 output reports; Xbox 360: from the X-Input rumble report),
+/// and from the sender task with zero levels when the host unmounts or
+/// suspends the bus, so no effect outlives its host. Set once at startup,
+/// before start_usb(). The callback must not block (queue the work elsewhere).
+using rumble_callback_t = std::function<void(uint8_t left, uint8_t right)>;
+void usb_set_rumble_callback(rumble_callback_t callback);
+
 /// Write a complete frame to the vendor interface (no-op if it is disabled).
 /// Safe to call from any task except the TinyUSB task.
 bool usb_write_vendor(std::span<const uint8_t> frame);
