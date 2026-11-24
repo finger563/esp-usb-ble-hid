@@ -8,6 +8,9 @@
 
 #include "esp_timer.h"
 
+#include "host/ble_gatt.h" // ble_gattc_write_*_flat
+#include "host/ble_hs.h"   // BLE_HS_CONN_HANDLE_NONE
+
 #include "ble.hpp"
 #include "bsp.hpp"
 #include "format.hpp"
@@ -72,8 +75,15 @@ static std::mutex report_map_mutex;
 static std::unordered_map<const NimBLERemoteCharacteristic *, uint8_t> report_ids;
 // The HID *output* report characteristics by report id (Report Reference type
 // 2, e.g. the Xbox controller's rumble report), for ble_queue_output_report().
-// Same lifetime / lock as report_ids.
-static std::unordered_map<uint8_t, NimBLERemoteCharacteristic *> output_reports;
+// Stored as connection + value handles, not characteristic pointers: a
+// reconnect refreshes the services and frees those objects, while a write may
+// still be in flight. Same lifetime / lock as report_ids.
+struct BleOutputReport {
+  uint16_t handle;      // the characteristic's value handle
+  bool no_response;     // it supports write-without-response
+};
+static std::unordered_map<uint8_t, BleOutputReport> output_reports;
+static uint16_t output_conn_handle{BLE_HS_CONN_HANDLE_NONE};
 
 // The controller's name, reported to the app once it is connected + subscribed
 // (see ble_set_bond_name_callback). The advertised name is captured when we
@@ -91,20 +101,31 @@ static espp::Logger ble_logger({.tag = "BLE", .level = espp::Logger::Verbosity::
 
 // --- HID output reports (rumble): latest-wins queue + sender task ------------
 // ble_queue_output_report() records the report (any task may call it, e.g. the
-// TinyUSB task); the sender task does the blocking BLE write. Only the latest
-// queued report is sent: rumble is a stream of levels, an old one is worthless.
+// TinyUSB task); the sender task does the BLE write. Only the latest queued
+// report is sent: rumble is a stream of levels, an old one is worthless.
+// Unchanged levels are not re-queued: while an effect is active the sender
+// re-sends it itself (keep-alive), so a host that repeats the same level in
+// every packet (the Switch does) costs no airtime. The effect itself is a
+// short pulse (see the app's rumble callback), so a lost write -- or a lost
+// stop -- dies with the pulse instead of running for minutes.
 static std::mutex rumble_mutex;
 static std::condition_variable rumble_cv;
 static bool rumble_pending{false};
+static bool rumble_active{false};      // the last report was non-zero: keep it alive
 static uint8_t rumble_report_id{0};
-static std::vector<uint8_t> rumble_data;
+static std::vector<uint8_t> rumble_data; // the last report queued (dedupe + keep-alive)
 static std::unique_ptr<espp::Task> rumble_task;
+
+// keep-alive period: must stay well under the effect's pulse length
+static constexpr auto kRumbleKeepalive = std::chrono::milliseconds(100);
 
 void ble_queue_output_report(uint8_t report_id, std::vector<uint8_t> data) {
   if (!subscribed.load())
     return; // no controller link: nothing to drive
   {
     std::lock_guard<std::mutex> lk(rumble_mutex);
+    if (report_id == rumble_report_id && data == rumble_data)
+      return; // unchanged level: the keep-alive already covers it
     rumble_pending = true;
     rumble_report_id = report_id;
     rumble_data = std::move(data);
@@ -112,31 +133,63 @@ void ble_queue_output_report(uint8_t report_id, std::vector<uint8_t> data) {
   rumble_cv.notify_one();
 }
 
+// Write by connection + value handle, never through a characteristic object
+// (a reconnect frees those; see output_reports). The flat write fails cleanly
+// when the link is gone.
+static void rumble_write(uint8_t id, const std::vector<uint8_t> &data) {
+  uint16_t conn = BLE_HS_CONN_HANDLE_NONE;
+  uint16_t handle = 0;
+  bool no_response = true;
+  {
+    std::lock_guard<std::mutex> lk(report_map_mutex);
+    const auto it = output_reports.find(id);
+    if (it == output_reports.end())
+      return;
+    conn = output_conn_handle;
+    handle = it->second.handle;
+    no_response = it->second.no_response;
+  }
+  if (conn == BLE_HS_CONN_HANDLE_NONE || !subscribed.load())
+    return;
+  // prefer write-without-response (no round trip); the controller's rumble
+  // characteristic supports it. A failed write is not worth retrying: the
+  // effect is a short pulse, and the keep-alive re-sends it while active.
+  const int rc = no_response
+                     ? ble_gattc_write_no_rsp_flat(conn, handle, data.data(), data.size())
+                     : ble_gattc_write_flat(conn, handle, data.data(), data.size(), nullptr,
+                                            nullptr);
+  if (rc != 0)
+    ble_logger.debug("could not write HID output report {} ({})", id, rc);
+}
+
 static bool rumble_task_fn(std::mutex &, std::condition_variable &) {
   uint8_t id = 0;
   std::vector<uint8_t> data;
   {
     std::unique_lock<std::mutex> lk(rumble_mutex);
-    rumble_cv.wait(lk, [] { return rumble_pending; });
-    id = rumble_report_id;
-    data = std::move(rumble_data);
-    rumble_pending = false;
+    if (!rumble_pending) {
+      if (!rumble_active) {
+        rumble_cv.wait(lk, [] { return rumble_pending; });
+      } else {
+        // keep-alive: re-send the active effect before its pulse expires; a
+        // newly queued report supersedes it
+        rumble_cv.wait_for(lk, kRumbleKeepalive, [] { return rumble_pending; });
+        if (!rumble_pending) {
+          id = rumble_report_id;
+          data = rumble_data;
+        }
+      }
+    }
+    if (rumble_pending) {
+      rumble_pending = false;
+      id = rumble_report_id;
+      data = rumble_data; // copy: it stays for dedupe + keep-alive
+      // an all-zero report is a stop: nothing to keep alive afterwards
+      rumble_active = std::any_of(data.begin(), data.end(), [](uint8_t b) { return b != 0; });
+    }
   }
-  NimBLERemoteCharacteristic *chr = nullptr;
-  {
-    std::lock_guard<std::mutex> lk(report_map_mutex);
-    const auto it = output_reports.find(id);
-    if (it != output_reports.end())
-      chr = it->second;
-  }
-  if (chr && subscribed.load()) {
-    // prefer write-without-response (no round trip); the controller's rumble
-    // characteristic supports it. A failed write is not worth retrying: the
-    // host keeps sending rumble updates while the effect is active.
-    const bool response = !chr->canWriteNoResponse();
-    if (!chr->writeValue(data.data(), data.size(), response))
-      ble_logger.debug("could not write HID output report {}", id);
-  }
+  if (!data.empty())
+    rumble_write(id, data);
   return false; // don't stop the task
 }
 
@@ -218,11 +271,15 @@ static void reset_link_state(const std::string &why) {
     std::lock_guard<std::mutex> lk(report_map_mutex);
     report_ids.clear();
     output_reports.clear();
+    output_conn_handle = BLE_HS_CONN_HANDLE_NONE;
   }
   {
     // a rumble queued for the old link must not reach the next controller
     std::lock_guard<std::mutex> lk(rumble_mutex);
     rumble_pending = false;
+    rumble_active = false;
+    rumble_report_id = 0;
+    rumble_data.clear();
   }
   set_link_detail(why);
   if (was_subscribed) {
@@ -504,6 +561,7 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
     std::lock_guard<std::mutex> lk(report_map_mutex);
     report_ids.clear();
     output_reports.clear();
+    output_conn_handle = BLE_HS_CONN_HANDLE_NONE;
   }
   const auto &services = client->getServices(refresh);
   auto *svc = client->getService(hid_service_uuid);
@@ -530,9 +588,10 @@ static size_t subscribe_input_reports(NimBLEClient *client, std::string &why) {
     }
     if (report_type == 2) {
       // an output report (e.g. the Xbox controller's rumble report): remember
-      // it for ble_queue_output_report(), nothing to subscribe to
+      // its handles for ble_queue_output_report(), nothing to subscribe to
       std::lock_guard<std::mutex> lk(report_map_mutex);
-      output_reports[report_id] = chr;
+      output_reports[report_id] = {chr->getHandle(), chr->canWriteNoResponse()};
+      output_conn_handle = client->getConnHandle();
       ble_logger.info("HID output report id {} (handle {:#06x}) available", report_id,
                       chr->getHandle());
       continue;

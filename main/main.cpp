@@ -52,9 +52,10 @@ static std::atomic<int> battery_level_percent{100};
 // delivered a level for the current controller: until then the controller's
 // own battery report (quarters only) is used
 static std::atomic<bool> have_bas_battery{false};
-// whether the connected controller is the Xbox Wireless controller (model
-// 1708), whose own report layouts (battery id 4, rumble id 3) are known here;
-// other controllers' reports go to the generic decoder
+// whether the connected controller is the Xbox Wireless controller (Series
+// X|S, model 1914, BLE 045E:0B13): its battery report (id 4) and rumble output
+// report (id 3) layouts are the ones known here; other controllers' reports go
+// to the generic decoder
 static std::atomic<bool> controller_is_xbox{false};
 static std::mutex serial_number_mutex;
 static std::string serial_number = "";
@@ -518,6 +519,9 @@ extern "C" void app_main(void) {
   ble_set_controller_info_callback([&logger](const BleControllerInfo &info) {
     auto d = make_decoder(info, logger);
     const auto map = services_gamepad_connected(info.vid, info.pid, info.name);
+    // the Xbox Wireless controller (Series X|S, model 1914): its own battery
+    // report and rumble output report layouts are known (see notifyCB / the
+    // rumble callback)
     controller_is_xbox = (info.vid == 0x045E && info.pid == 0x0B13);
     std::lock_guard<std::mutex> lk(decode_mutex);
     decoder = std::move(d);
@@ -544,18 +548,21 @@ extern "C" void app_main(void) {
     // report id 3, [enable nibble][left trigger][right trigger][strong][weak]
     // [sustain 10ms][release 10ms][loop count] (the layout Linux's xpadneo
     // driver uses). Enable bits: 0x01 weak (right main motor), 0x02 strong
-    // (left main motor), 0x04 / 0x08 the trigger motors. The effect is a long
-    // pulse reprogrammed by every host update, like the Windows driver does;
-    // a zero-level update stops it. Other controllers: nothing to drive.
+    // (left main motor), 0x04 / 0x08 the trigger motors. Other controllers:
+    // nothing to drive.
     if (!controller_is_xbox.load())
       return;
     espp::XboxRumbleOutputReport<> report;
-    report.set_enabled(0x03);                                         // strong + weak main motors
-    report.set_magnitude(2, static_cast<uint8_t>(left * 100 / 255));  // strong = left
-    report.set_magnitude(3, static_cast<uint8_t>(right * 100 / 255)); // weak = right
-    report.set_duration(0xFF); // 2.55 s sustain, reprogrammed by each update
-    report.set_start_delay(0);
-    report.set_loop_count(0xEB);
+    if (left || right) {
+      report.set_enabled(0x03);                                         // strong + weak main motors
+      report.set_magnitude(2, static_cast<uint8_t>(left * 100 / 255));  // strong = left
+      report.set_magnitude(3, static_cast<uint8_t>(right * 100 / 255)); // weak = right
+      // a short pulse (300 ms), re-sent by the BLE sender while the level is
+      // non-zero: a lost write -- or a lost stop -- dies with the pulse
+      // instead of running for minutes
+      report.set_duration(0x1E);
+    }
+    // zero levels: the default report is all zero = the effect off (a stop)
     auto bytes = report.get_report();
     // espp 1.4.6's enable field is a bit-field struct whose unnamed padding
     // nibble is never initialized; keep it zero (fixed in espp main)

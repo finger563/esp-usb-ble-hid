@@ -360,7 +360,7 @@ The first rule switches the Xbox button off. The second makes Share the Home but
 - **No combinations** where two buttons pressed together do something else, and **no shift layers.**
 - **No switching maps from the controller, or per game.**
 - **No export, import or backup of maps.**
-- **No rumble or motion controls** ([What is forwarded](controllers.md#what-is-forwarded)).
+- **No motion controls** ([What is forwarded](controllers.md#what-is-forwarded)).
 
 ## Coming from v3
 

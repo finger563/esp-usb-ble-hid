@@ -73,7 +73,7 @@ If a controller doesn't publish a readable button description, or the one it pub
 | L2 / R2 reported as buttons | Yes, as ZL / ZR | Yes, as a fully pulled LT / RT |
 | Back paddles | No | No |
 | Battery level | Yes: the controller's battery is reported to the Switch, when the controller shares it over Bluetooth (the Xbox Wireless controller's own battery report stands in until then) | No |
-| Rumble | Yes: the Switch's rumble drives the Xbox Wireless controller's motors (other controllers: not forwarded) | Yes: the PC's X-Input rumble drives them (the LED part of the report is ignored) |
+| Rumble | Yes: the Switch's rumble drives the motors of the Xbox Wireless controller (Series X|S, model 1914; other controllers: not forwarded) | Yes: the PC's X-Input rumble drives them (the LED part of the report is ignored) |
 | Motion controls (gyro) | No | No |
 | NFC (amiibo) | No | n/a |
 | Headset jack audio | No | No |

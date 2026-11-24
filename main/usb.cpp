@@ -20,6 +20,7 @@
 #include "usb_device.hpp"
 
 #include "bsp.hpp"
+#include "switch_rumble.hpp"
 
 using namespace std::chrono_literals;
 
@@ -36,6 +37,9 @@ static constexpr int64_t kReenumerateAfterUs = 2500 * 1000;
 static std::atomic<bool> ever_mounted{false};
 static std::atomic<int64_t> unmounted_at_us{0};
 static std::atomic<uint32_t> hid_reports_sent{0}; // input reports accepted by TinyUSB
+// set once at startup, before start_usb(); invoked from the TinyUSB task (host
+// rumble) and from the sender task (the stop on unmount / suspend)
+static rumble_callback_t rumble_callback;
 
 // --- X-Input TX: the latest state, sent from the sender task ----------------------
 //
@@ -80,6 +84,13 @@ static void enqueue_hid(espp::SwitchPro::ReportData rd) {
 }
 
 static bool hid_sender_fn(std::mutex &, std::condition_variable &) {
+  // a suspended host sends no more rumble updates: stop the effect once on the
+  // transition (on resume the host re-sends whatever is still active)
+  static bool was_suspended = false;
+  const bool suspended = tud_suspended();
+  if (suspended && !was_suspended && rumble_callback)
+    rumble_callback(0, 0);
+  was_suspended = suspended;
   OutReport rep;
   bool have = false;
   {
@@ -227,44 +238,19 @@ bool usb_push_xinput(const espp::xinput::GamepadState &state) {
 uint32_t usb_hid_reports_sent() { return hid_reports_sent.load(); }
 
 // --- rumble: USB host -> the app (which forwards it to the BLE controller) ----
-// set once at startup, before start_usb(); invoked from the TinyUSB task
-static rumble_callback_t rumble_callback;
-
+// set once at startup, before start_usb()
 void usb_set_rumble_callback(rumble_callback_t callback) {
   rumble_callback = std::move(callback); // set once at startup, before USB starts
-}
-
-// Switch Pro rumble data: 4 bytes per motor, left first (dekuNukem's
-// Nintendo_Switch_Reverse_Engineering, "Rumble data"). Per motor:
-//   [0] high-band frequency, low byte
-//   [1] bit0: high-band frequency high bit; bits 1-7: high-band amplitude
-//       (0..100, twice the 0..1 value)
-//   [2] low-band frequency (+0x80 selects the intermediate amplitude range)
-//   [3] low-band amplitude, 0x40..0x72 for 0..1
-// The dongle has two motors to drive, so take the stronger of the two bands
-// as the motor level.
-static uint8_t switch_rumble_level(const uint8_t *motor) {
-  const float hf = std::min<int>(motor[1] >> 1, 100) / 100.0f;
-  const float lf =
-      motor[3] > 0x40 ? std::min<int>(motor[3] - 0x40, 0x32) / static_cast<float>(0x32) : 0.0f;
-  return static_cast<uint8_t>(std::max(hf, lf) * 255.0f);
 }
 
 // Forward the rumble part of a Switch Pro OUTPUT report (0x10 rumble-only,
 // 0x01 rumble + subcommand) if it carries one. Runs on the TinyUSB task.
 static void forward_switch_rumble(std::span<const uint8_t> data) {
-  if (!rumble_callback || data.empty())
+  if (!rumble_callback)
     return;
-  size_t off = 0;
-  if (data[0] == 0x10)
-    off = 1; // [0x10][8 rumble bytes]
-  else if (data[0] == 0x01)
-    off = 2; // [0x01][packet number][8 rumble bytes][subcommand...]
-  else
-    return;
-  if (data.size() >= off + 8)
-    rumble_callback(switch_rumble_level(data.data() + off),
-                    switch_rumble_level(data.data() + off + 4));
+  uint8_t left = 0, right = 0;
+  if (switch_rumble_decode(data, left, right))
+    rumble_callback(left, right);
 }
 
 bool usb_write_vendor(std::span<const uint8_t> frame) {
@@ -416,6 +402,9 @@ bool start_usb(device_config::UsbController which, const std::shared_ptr<espp::S
     // timestamp first: the sender reads it right after it sees mounted == false
     unmounted_at_us.store(esp_timer_get_time());
     mounted.store(false);
+    // the host is gone: stop any rumble it left running
+    if (rumble_callback)
+      rumble_callback(0, 0);
     {
       std::lock_guard<std::mutex> lock(hid_tx_mutex);
       hid_tx_queue.clear();
