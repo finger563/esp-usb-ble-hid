@@ -84,8 +84,14 @@ static bool is_bonded_peer(const NimBLEAddress &address) {
   if (NimBLEDevice::isBonded(address))
     return true;
   const uint8_t type = address.getType();
-  if (type == BLE_ADDR_PUBLIC_ID || type == BLE_ADDR_RANDOM_ID)
-    return NimBLEDevice::isBonded(NimBLEAddress(address.getVal(), type & 0x01));
+  if (type == BLE_ADDR_PUBLIC_ID || type == BLE_ADDR_RANDOM_ID) {
+    // copy the ble_addr_t (its bytes LSB-first, as the bond store keeps them)
+    // and change only the type: NimBLEAddress(const uint8_t[6], type) expects
+    // MSB-first bytes and would reverse them
+    ble_addr_t identity = *address.getBase();
+    identity.type = type & 0x01;
+    return NimBLEDevice::isBonded(NimBLEAddress(identity));
+  }
   return false;
 }
 
