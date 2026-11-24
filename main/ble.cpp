@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 #include "esp_timer.h"
@@ -47,6 +48,63 @@ static std::string link_detail;
 static void set_link_detail(std::string detail) {
   std::lock_guard<std::mutex> lk(link_detail_mutex);
   link_detail = std::move(detail);
+}
+
+// What kind of BLE address this is, for logs and the console's Link block.
+static const char *address_kind(const NimBLEAddress &address) {
+  switch (address.getType()) {
+  case BLE_ADDR_PUBLIC:
+    return "public";
+  case BLE_ADDR_PUBLIC_ID:
+    return "public identity, resolved from a private address";
+  case BLE_ADDR_RANDOM_ID:
+    return "random identity, resolved from a private address";
+  default:
+    break;
+  }
+  if (address.isRpa())
+    return "random, resolvable private";
+  if (address.isNrpa())
+    return "random, non-resolvable private";
+  if (address.isStatic())
+    return "random static";
+  return "random";
+}
+
+// Whether an address seen while scanning belongs to a paired (bonded)
+// controller. The bond store holds each controller's identity address, typed
+// public (0) or random (1). A controller that reconnects with a resolvable
+// private address is reported, once the radio's resolving list (loaded with
+// the bonded controllers' IRKs) resolves it, with that same identity address
+// typed public identity (2) or random identity (3). NimBLEDevice::isBonded()
+// compares the type exactly and would miss it, so the controller would never
+// be reconnected to (NimBLE itself treats the two as the same device:
+// ble_gap_addr_type_equivalent()).
+static bool is_bonded_peer(const NimBLEAddress &address) {
+  if (NimBLEDevice::isBonded(address))
+    return true;
+  const uint8_t type = address.getType();
+  if (type == BLE_ADDR_PUBLIC_ID || type == BLE_ADDR_RANDOM_ID)
+    return NimBLEDevice::isBonded(NimBLEAddress(address.getVal(), type & 0x01));
+  return false;
+}
+
+// While reconnecting, a gamepad that advertises but is not paired is noted in
+// the link detail, with its kind of address: a paired controller that comes
+// back under an address the dongle does not recognise looks exactly like this.
+// Updated when the address changes and otherwise every 10 s, as scan results
+// arrive many times a second.
+static void note_unpaired_gamepad(const NimBLEAddress &address) {
+  static std::string last_address;
+  static int64_t last_note_us = 0;
+  const int64_t now = esp_timer_get_time();
+  const std::string a = address.toString();
+  if (a == last_address && now - last_note_us < 10'000'000)
+    return;
+  last_address = a;
+  last_note_us = now;
+  set_link_detail(fmt::format("scanning; a gamepad that is not paired is advertising: {} ({})", a,
+                              address_kind(address)));
 }
 
 static NimBLEUUID hid_service_uuid(espp::HidService::SERVICE_UUID);
@@ -343,10 +401,12 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       // if we're pairing, then simply connect to the first device that advertises
       // the HID service. The connection callback will try to bond to it.
       should_connect = true;
-    } else if (!is_pairing && NimBLEDevice::isBonded(advertisedDevice->getAddress())) {
+    } else if (!is_pairing && is_bonded_peer(advertisedDevice->getAddress())) {
       // if we're not pairing, then we're reconnecting, so we need to check if
-      // the device is bonded
+      // the device is bonded (by its identity, see is_bonded_peer())
       should_connect = true;
+    } else if (!is_pairing && is_pairable_device) {
+      note_unpaired_gamepad(advertisedDevice->getAddress());
     }
     if (should_connect) {
       // tell the supervisor a connection is in flight BEFORE stopping the scan,
@@ -354,7 +414,9 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       connect_pending = true;
       connect_started_us = esp_timer_get_time();
       link_state = BleLinkState::Connecting;
-      set_link_detail(fmt::format("connecting to {}", advertisedDevice->getAddress().toString()));
+      set_link_detail(fmt::format("connecting to {} ({})",
+                                  advertisedDevice->getAddress().toString(),
+                                  address_kind(advertisedDevice->getAddress())));
 
       /** stop scan before connecting, since we use async connections and don't
           want to possibly try to connect to multiple devices. */
@@ -384,7 +446,9 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       static constexpr bool delete_on_disconnect = true;
       static constexpr bool delete_on_connect_fail = true;
       pClient->setSelfDelete(delete_on_disconnect, delete_on_connect_fail);
-      if (!pClient->connect(true, true,
+      // connect to the address just seen, not whatever a reused client was
+      // created for: a controller with a private address changes it
+      if (!pClient->connect(advertisedDevice->getAddress(), true, true,
                             false)) { // delete attributes, async connect, no MTU exchange
         logger.error("Failed to connect");
         set_link_detail("could not start the connection attempt");
