@@ -48,6 +48,14 @@ static std::shared_ptr<Gui> gui;
 #endif
 static std::shared_ptr<espp::SwitchPro> usb_controller;
 static std::atomic<int> battery_level_percent{100};
+// whether the standard Battery Service characteristic (exact percent) has
+// delivered a level for the current controller: until then the controller's
+// own battery report (quarters only) is used
+static std::atomic<bool> have_bas_battery{false};
+// whether the connected controller is the Xbox Wireless controller (model
+// 1708), whose own report layouts (battery id 4, rumble id 3) are known here;
+// other controllers' reports go to the generic decoder
+static std::atomic<bool> controller_is_xbox{false};
 static std::mutex serial_number_mutex;
 static std::string serial_number = "";
 
@@ -253,13 +261,29 @@ void notifyCB(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData,
   // return.
   if (pRemoteCharacteristic->getUUID().equals(
           NimBLEUUID(espp::BatteryService::BATTERY_LEVEL_CHAR_UUID))) {
-    battery_level_percent = pData[0];
+    if (length >= 1) {
+      battery_level_percent = pData[0];
+      have_bas_battery = true;
+    }
     return;
   }
   // otherwise this is a HID report: which one is told by the characteristic's
   // Report Reference (a controller may notify several input reports; the
   // decoder keeps the latest of each and decodes them together)
   const uint8_t report_id = ble_report_id_for(pRemoteCharacteristic).value_or(1);
+  // The Xbox Wireless controller's own battery report (id 4): the status
+  // byte's bits 0-1 carry the capacity in quarters (the mapping Linux's
+  // xpadneo driver reads). It stands in until the exact Battery Service level
+  // arrives -- some controllers never expose that characteristic. Only the
+  // Xbox pad's report id 4 is a battery report; on other controllers it is
+  // ordinary input, so it goes to the decoder instead.
+  if (controller_is_xbox.load() && report_id == espp::XboxBatteryInputReport<>::ID && length >= 1) {
+    if (!have_bas_battery.load()) {
+      static constexpr uint8_t kQuarterPercent[] = {0, 33, 66, 100};
+      battery_level_percent = kQuarterPercent[pData[0] & 0x03];
+    }
+    return;
+  }
   espp::GamepadState raw, mapped;
   {
     std::lock_guard<std::mutex> lk(decode_mutex);
@@ -494,12 +518,15 @@ extern "C" void app_main(void) {
   ble_set_controller_info_callback([&logger](const BleControllerInfo &info) {
     auto d = make_decoder(info, logger);
     const auto map = services_gamepad_connected(info.vid, info.pid, info.name);
+    controller_is_xbox = (info.vid == 0x045E && info.pid == 0x0B13);
     std::lock_guard<std::mutex> lk(decode_mutex);
     decoder = std::move(d);
     active_map = map;
   });
   ble_set_disconnect_callback([]() {
     battery_level_percent = 0;
+    have_bas_battery = false;
+    controller_is_xbox = false;
     {
       std::lock_guard<std::mutex> lk(decode_mutex);
       if (decoder)
