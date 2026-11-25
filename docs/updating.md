@@ -30,7 +30,7 @@ Updates run from a computer, so unplug the dongle from the Switch (or wherever i
 
 Good to know:
 
-- **Only the firmware itself is replaced.** Settings, paired controllers and button maps stay as they are.
+- **Only the firmware itself is replaced.** Settings, paired controllers and button maps stay as they are. Going back to an older firmware is different once you've edited maps: see [Roll back after editing maps](#roll-back-after-editing-maps).
 - **The download comes from GitHub Pages, not GitHub Releases.** A web page isn't allowed to download GitHub release files directly, because they are served without CORS headers. So each release's images are mirrored next to the console, and the console downloads from there. Right after a new release is published, the mirror can take a little while to catch up. If the download fails, the console shows a direct link to the file: save it and [install it yourself](#install-your-own-bin).
 - **An interrupted update is harmless.** The new image goes into the dongle's other firmware slot (it has two), and the dongle only switches to it after the image has been checked. Until then it keeps running the old firmware. **Abort update** stops after the chunk in flight and throws the partial image away.
 - **The update check is cached.** The console remembers the answer for 10 minutes. **Check for updates** asks again. If GitHub can't be reached or limits the request, the console says so and keeps working.
@@ -64,6 +64,15 @@ On the **Firmware** tab, the **Running image** card shows *PENDING VERIFY* and a
 The firmware never confirms itself. This is on purpose: a broken build could otherwise mark itself as good just before it crashes. The console (or the command-line tool) has to confirm it from outside.
 
 When the running image isn't pending verify, the card shows **Mark running image valid** and **Roll back and reboot** instead, which do the same two jobs. **Roll back and reboot** asks you to confirm, then switches to the image in the other slot, if that slot holds a working one. **Check status** reads the state again.
+
+### Roll back after editing maps
+
+Firmware with rumble options (the **Rumble** row on the [Button mapping](button-mapping.md#rumble) tab) stores the button maps in a newer format. It reads maps saved by older firmware and keeps them as they are, until you save, erase or reset a map or change a rumble option. That first change writes the maps in the new format, which older firmware can't read.
+
+If you then go back to firmware from before rumble options, by rolling back, by not confirming an update, or by installing an older release, the older firmware can't load the maps. It moves the file aside as `gamepad_profiles.bin.unreadable` and starts with no profiles and a fresh default map. Paired controllers and settings aren't affected.
+
+- **To keep your maps on the older firmware, roll back before you change anything** on the Button mapping tab.
+- **Updating again doesn't bring the set-aside maps back.** The console can't restore them, so note down your layouts before you roll back if you want to set them up again.
 
 ## Full update
 

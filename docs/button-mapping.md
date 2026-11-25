@@ -1,6 +1,6 @@
 # Button mapping
 
-You can remap buttons, sticks and triggers inside the dongle from the [web console](web-console.md), with one layout per controller model. The dongle applies your layout before anything reaches the Switch or PC, so it works in every game and on every host, with nothing to install there.
+You can remap buttons, sticks and triggers inside the dongle from the [web console](web-console.md), with one layout per controller model. The dongle applies your layout before anything reaches the Switch or PC, so it works in every game and on every host, with nothing to install there. Each layout also sets how that controller plays the host's rumble: on or off, how strong, and which motor is which ([Rumble](#rumble)).
 
 Looking for a particular layout? Go to the [recipes](#recipes).
 
@@ -27,9 +27,9 @@ To undo it, delete the two rules (✕) and save again, or click **Erase this pro
 - **The default map** applies to every controller that has no profile. It starts empty, so every control passes straight through. The exception is a dongle that had custom input settings on v3 ([Coming from v3](#coming-from-v3)).
 - **A profile** belongs to one controller model. The dongle identifies a model by the vendor and product ID (VID:PID) it reports over Bluetooth. A controller that reports neither (0000:0000) is matched by its name instead. Two controllers of the same model share one profile.
 - **The dongle picks the map when a controller connects.** Each of your controllers can have its own layout, and you never switch by hand. You can't switch maps from the controller itself, or per game.
-- **A new profile starts as a copy of the default map.** After that the two are separate, so later changes to the default map don't reach controllers that have their own profile.
+- **A new profile starts as a copy of the default map,** rumble options included. After that the two are separate, so later changes to the default map don't reach controllers that have their own profile.
 - **Saving takes effect at once.** If you save the map the connected controller uses, the new layout is live as soon as the dongle accepts it. There's no restart.
-- **Maps are stored on the dongle.** They go with it to any Switch, PC or Steam Deck, and they're kept through restarts and firmware updates. Forgetting a paired controller doesn't delete its profile.
+- **Maps are stored on the dongle.** They go with it to any Switch, PC or Steam Deck, and they're kept through restarts and firmware updates. Forgetting a paired controller doesn't delete its profile. Rolling back to older firmware is the exception: see [Roll back after editing maps](updating.md#roll-back-after-editing-maps).
 - **Maps don't change with the USB controller type.** A profile that swaps A and B on the Switch also swaps them in [Xbox 360 mode](hosts.md#switch-to-xbox-360-mode).
 
 A map has a dead zone for each stick and a list of rules. The dongle applies the dead zones first, then all the rules at once:
@@ -114,6 +114,23 @@ While you drag a slider, the dashed circle on the Raw panel's stick shows the de
 
 Dead zones apply to the physical stick before any rule runs, so a rule that moves the stick elsewhere carries the dead zone with it. Triggers have no dead zone.
 
+## Rumble
+
+The **Rumble** row, under the dead zones, sets how the host's rumble plays on the controller. Like the rest of the map, it belongs to one controller model (its profile), or to the default map for every controller without a profile. **Save to dongle** stores it together with the map, and it takes effect at once, even in the middle of a rumble.
+
+<!-- screenshot: the Map editor's Rumble row (on, Strength at 150 %, swap ticked, Test) with its note underneath -->
+
+- **on:** untick it to keep the host's rumble off this controller model. The dongle sends the controller a stop instead, so a rumble that is playing ends straight away.
+- **Strength:** 0 to 200 % of what the host asks for, on every motor. 100 % plays rumble exactly as the host sends it, and the **100 %** button sets it back. Above 100 %, strong effects reach the motor's full power sooner and stay there. 0 % is silent, the same as off.
+- **swap strong / weak motors:** the strong motor (in the left grip) and the weak motor (in the right grip) trade places. Use it for a controller whose motors come out the wrong way round. Trigger motors, on controllers that have them, are never swapped.
+- **Test** plays a short pattern on the connected controller with the settings as they are in the editor, so you can try them before you save: the strong motor for about a third of a second, then the weak one. With swap ticked you feel the weak motor first. Test saves nothing.
+
+The note under the row says in words what the settings do. While rumble is off, the strength and swap keep their values but are greyed out.
+
+**Test** needs a controller connected to the dongle, and isn't offered while rumble is off. If the dongle can't play the pattern, the status line under the editor says why, for example *the connected controller cannot rumble*, which means the controller has no rumble the dongle can drive ([What is forwarded](controllers.md#what-is-forwarded)). The Device tab's **Test rumble** plays the same pattern with the connected controller's **saved** settings.
+
+On firmware from before rumble options, the row stays greyed out and its note says that the firmware doesn't store them. Saving then changes only the map. The **Profiles** card's *Rumble options* entry shows which kind of firmware you have: *per map*, or *not in this firmware*.
+
 ## Presets
 
 A preset adds ready-made rules to the map in the editor. It doesn't save on its own, and applying it a second time doesn't undo it. It adds the same rules again. For **Invert** or **Swap sticks**, that makes the stick move twice as far for the same push. To undo a preset, delete its rules.
@@ -166,10 +183,10 @@ The Mapped panel shows everything the map produces, which is slightly more than 
 
 ## Save, revert, erase and reset
 
-- **Save to dongle** checks the map the way the dongle does, and lists every problem first, under *The dongle would refuse this map*. A threshold of 0, or Keep with no target, are examples. Save becomes available once they're fixed.
-- **Revert** loads the stored map again and drops your unsaved edits.
-- **Erase this profile** deletes the profile, and that controller model goes back to the default map.
-- **Reset all maps** erases every profile and empties the default map. Settings and paired controllers are kept.
+- **Save to dongle** checks the map the way the dongle does, and lists every problem first, under *The dongle would refuse this map*. A threshold of 0, or Keep with no target, are examples. Save becomes available once they're fixed. The rumble options are saved in the same step.
+- **Revert** loads the stored map again and drops your unsaved edits, rumble options included.
+- **Erase this profile** deletes the profile, and that controller model goes back to the default map and its rumble options.
+- **Reset all maps** erases every profile, empties the default map and sets the default rumble back to on, 100 %, not swapped. Settings and paired controllers are kept.
 - **Edit another map:** choose it under **Map to edit** and click **Load**. You can choose the default map, the connected controller, a stored profile, or **New profile**. For a new profile, type a VID, PID and name, which lets you set up a controller that isn't connected. The **Profiles** card lists the stored profiles, each with an **Edit** button.
 
 ## Triggers
@@ -351,6 +368,7 @@ The first rule switches the Xbox button off. The second makes Share the Home but
 - **Scale (axis → axis):** −400 to +400 %.
 - **Threshold (axis → button):** 1 to 100 %. A trigger's threshold always points the *pressed* way.
 - **Amount (button → axis):** −100 to +100 % of full travel.
+- **Rumble strength:** 0 to 200 %.
 - **Profiles follow the controller model,** not the individual controller, the game or the USB mode.
 
 ### What it can't do yet
@@ -360,7 +378,7 @@ The first rule switches the Xbox button off. The second makes Share the Home but
 - **No combinations** where two buttons pressed together do something else, and **no shift layers.**
 - **No switching maps from the controller, or per game.**
 - **No export, import or backup of maps.**
-- **No rumble or motion controls in a map.** Rumble plays the way the host sends it ([What is forwarded](controllers.md#what-is-forwarded)).
+- **No motion controls.** For rumble, a map can only turn it off, change its strength and swap the two grip motors ([Rumble](#rumble)). It can't move rumble to the trigger motors or change it per game.
 
 ## Coming from v3
 
@@ -375,6 +393,6 @@ If you never changed those settings, the default map stays empty. On v4 the cons
 
 ## Use espp's Gamepad Map Console
 
-The dongle uses espp's gamepad map protocol, so espp's own [Gamepad Map Console](https://esp-cpp.github.io/espp/apps/gamepad_map_console.html) can edit its maps too. In that page, tick **Any device (ignore VID/PID filter)** before you click **Connect (WebUSB)**. Otherwise its device picker lists only devices with espp's default USB vendor ID, and the dongle isn't one of them. Only one page can use the dongle at a time, so disconnect the dongle console first.
+The dongle uses espp's gamepad map protocol, so espp's own [Gamepad Map Console](https://esp-cpp.github.io/espp/apps/gamepad_map_console.html) can edit its maps and rumble options too. In that page, tick **Any device (ignore VID/PID filter)** before you click **Connect (WebUSB)**. Otherwise its device picker lists only devices with espp's default USB vendor ID, and the dongle isn't one of them. Only one page can use the dongle at a time, so disconnect the dongle console first.
 
 [Console protocol notes](../web/README.md) has the protocol-level detail.

@@ -11,7 +11,7 @@ to the [project README](../README.md).
 | [Getting started](getting-started.md) | What you need, install the firmware, pair a controller, next steps for your host |
 | [Hosts](hosts.md) | Nintendo Switch, PC / Steam Deck / Android in Xbox 360 mode, macOS and iOS, Linux permissions |
 | [Controllers](controllers.md) | Which controllers work, how to tell Bluetooth LE from Classic, pairing, the default layout, what is forwarded |
-| [Button mapping](button-mapping.md) | Profiles per controller, the four kinds of rules, presets, Learn, recipes |
+| [Button mapping](button-mapping.md) | Profiles per controller, the four kinds of rules, presets, Learn, rumble options, recipes |
 | [Troubleshooting and FAQ](troubleshooting.md) | Fixes by symptom, frequently asked questions, what to include in a bug report |
 
 ## Maintain
@@ -19,7 +19,7 @@ to the [project README](../README.md).
 | Page | What's there |
 |---|---|
 | [Web console](web-console.md) | Opening it, auto-connect, every tab and setting |
-| [Updating](updating.md) | One-click updates, installing your own build, confirm or roll back, the one-time Full update, command-line updates |
+| [Updating](updating.md) | One-click updates, installing your own build, confirm or roll back (and what a rollback does to edited maps), the one-time Full update, command-line updates |
 
 ## Build
 

@@ -87,6 +87,15 @@ Press the button while you watch **Live input** on the Button mapping tab:
 - **It lights up on Raw but not on Mapped.** A mapping rule moves it elsewhere, or a rule with the target "none" removes it. Edit or remove that rule.
 - **In Xbox 360 mode, Share / Capture does nothing.** X-Input has no such button. Map it to another button if you need it.
 
+### Rumble is missing, too strong, too weak or on the wrong side
+
+- **Check that the controller can rumble.** The Device tab's **Rumble** row must say *supported*. The dongle drives only controllers that describe a rumble report ([What is forwarded](controllers.md#what-is-forwarded)).
+- **Check the controller's Rumble row** on the Button mapping tab: load the map the controller uses (its profile, or the default map) and look at **on** and **Strength**. If the Device tab's **Test rumble** says *rumble is off for this controller (Button mapping tab)*, rumble is switched off or set to 0 % there.
+- **Too strong or too weak:** move **Strength** and click **Test** to feel it, then **Save to dongle**. 100 % is what the host asks for.
+- **The heavy rumble comes from the wrong grip:** with swap unticked, click **Test**. The first pulse is meant for the strong motor in the left grip. If you feel it on the right, tick **swap strong / weak motors**, test again and save.
+
+See [Rumble](button-mapping.md#rumble) for what each control does.
+
 ## Nintendo Switch
 
 ### The Switch doesn't see the controller
@@ -158,6 +167,7 @@ A new firmware stays on trial until you confirm it. If the dongle restarts befor
 
 - **Check that you saved them.** Changes in the map editor reach the dongle only when you click **Save to dongle**.
 - **If the Button mapping tab says "Maps are not saved yet",** the dongle runs v4 on the old flash layout and has nowhere to store maps. One [Full update](updating.md#full-update) fixes that.
+- **If you went back to older firmware after editing maps** (a rollback, an update you didn't confirm, or an older release), the older firmware couldn't read them. It set them aside as `gamepad_profiles.bin.unreadable` and started with no profiles. See [Roll back after editing maps](updating.md#roll-back-after-editing-maps).
 
 ### I installed a release on a board that isn't a T-Dongle-S3
 
@@ -197,9 +207,11 @@ The **USB controller** type and the **BLE device name** apply only after the don
 
 ### Does rumble work?
 
-Yes, on controllers that describe a rumble report in their report map, as the Xbox Wireless Controller does: the host's rumble (the Switch's, or a PC's in Xbox 360 mode) plays on the controller's motors. The [web console](web-console.md#status)'s **Rumble** row says whether the connected controller does, and **Test rumble** plays a short pulse to check it. Nothing is written to a controller that doesn't describe one.
+Yes, on controllers that describe a rumble report in their report map, as the Xbox Wireless Controller does: the host's rumble (the Switch's, or a PC's in Xbox 360 mode) plays on the controller's motors. The [web console](web-console.md#status)'s **Rumble** row says whether the connected controller does, and **Test rumble** plays a short pattern to check it. Nothing is written to a controller that doesn't describe one.
 
 Rumble stops when the host sends a stop, goes to sleep or is unplugged, and when the controller disconnects. See [What is forwarded](controllers.md#what-is-forwarded).
+
+You can also turn rumble off, make it weaker or stronger, or swap the motors, for each controller model, on the Button mapping tab ([Rumble](button-mapping.md#rumble)).
 
 ### Do motion controls work?
 
@@ -223,7 +235,7 @@ No. You need one for the first install, and later only if you want to change set
 
 ### Will an update erase my pairings, settings or button maps?
 
-No. Normal updates from the console replace only the firmware. The one-time Full update keeps your paired controllers, settings and button maps too. See [Updating](updating.md).
+No. Normal updates from the console replace only the firmware. The one-time Full update keeps your paired controllers, settings and button maps too. See [Updating](updating.md). Going back to older firmware after you've edited maps is the one case that loses them: see [Roll back after editing maps](updating.md#roll-back-after-editing-maps).
 
 ### Does it add input lag?
 
