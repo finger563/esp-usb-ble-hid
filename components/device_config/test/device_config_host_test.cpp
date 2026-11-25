@@ -223,6 +223,28 @@ int main() {
     CHECK(!dc::Info::parse(std::span<const uint8_t>(ib.data(), counters_only - 13)).has_value());
   }
 
+  // ---- rumble support: an optional byte after usb_controller ----
+  {
+    dc::Info r;
+    r.project = "p";
+    const auto none = r.serialize(); // unknown: not sent
+    const auto none_back = dc::Info::parse(none);
+    CHECK(none_back && !none_back->rumble_supported.has_value());
+    r.rumble_supported = true;
+    const auto yes = r.serialize();
+    CHECK(yes.size() == none.size() + 1 && yes.back() == 1);
+    const auto yes_back = dc::Info::parse(yes);
+    CHECK(yes_back && yes_back->rumble_supported == std::optional<bool>(true));
+    r.rumble_supported = false;
+    const auto no_back = dc::Info::parse(r.serialize());
+    CHECK(no_back && no_back->rumble_supported == std::optional<bool>(false));
+    // a payload from before the byte: unknown, everything else intact
+    const auto old_back = dc::Info::parse(std::span<const uint8_t>(yes.data(), yes.size() - 1));
+    CHECK(old_back && !old_back->rumble_supported.has_value() &&
+          old_back->usb_controller == r.usb_controller);
+    CHECK(static_cast<uint8_t>(dc::Action::TestRumble) == 0x04);
+  }
+
   // ---- version gating: a different payload version is refused, not mis-decoded ----
   {
     auto v2 = s.serialize();

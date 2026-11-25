@@ -355,6 +355,17 @@ const INFO_V4 = (flags) => {
   return D.parseInfo(bytes(p));
 };
 
+test("INFO: the optional rumble byte after usb_controller (absent = not reported)", () => {
+  const head = [1, 0x02, 80, 1, 0, 0, 0, 0, ...str("esp-usb-ble-hid"), ...str("v4.1.0"), ...str("T-Dongle-S3"), ...str("v6.1"), ...str("SN1")];
+  const trailer = [0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 6, ...str(""), 0]; // counters, link state/detail, usb_controller
+  const without = D.parseInfo(bytes([...head, ...trailer]));
+  assert.strictEqual(without.usbController, 0);
+  assert.strictEqual(without.rumbleSupported, null, "older firmware: rumble not reported");
+  assert.strictEqual(D.parseInfo(bytes([...head, ...trailer, 1])).rumbleSupported, true);
+  assert.strictEqual(D.parseInfo(bytes([...head, ...trailer, 0])).rumbleSupported, false);
+  assert.strictEqual(INFO_V4(0x01).rumbleSupported, null, "a payload without any trailer");
+});
+
 test("offer the Full update: v3 (no espp.gamepad_map), v4 with INFO flag 0x20, not for v4 without it", () => {
   assert.strictEqual(D.INFO_FLAG.NEEDS_FULL_FLASH, 0x20);
   assert.strictEqual(INFO_V4(0x01 | 0x20).needsFullFlash, true, "INFO flags bit5 = needs_full_flash");

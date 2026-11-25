@@ -507,6 +507,7 @@
           <dt>USB controller</dt><dd id="iUsbController">—</dd>
           <dt>Controller</dt><dd id="iController" class="mono">—</dd>
           <dt>Battery</dt><dd><span id="iBattery">—</span><span id="iBatteryMeter" class="meter" hidden><i></i></span></dd>
+          <dt>Rumble</dt><dd id="iRumble">—</dd>
           <dt>Paired controllers</dt><dd id="iBonds">—</dd>
           <dt>Uptime</dt><dd id="iUptime">—</dd>
           <dt>Project</dt><dd id="iProject">—</dd>
@@ -532,6 +533,7 @@
           <div class="card-head"><h2>Actions</h2></div>
           <div class="actions">
             <button id="actPair" type="button" disabled>Start pairing</button>
+            <button id="actRumble" type="button" disabled title="Play a short rumble on the connected controller">Test rumble</button>
             <button id="actForget" class="danger" type="button" disabled>Forget all controllers</button>
             <button id="actReboot" class="danger" type="button" disabled>Reboot dongle</button>
           </div>
@@ -970,7 +972,7 @@
     const LEGACY_MAP_KEYS = ["invert_left_y", "invert_right_y", "swap_ab", "swap_xy", "deadzone_percent"];
     // usb_controller values (device_config::UsbController)
     const USB_CONTROLLER = { 0: "Switch Pro", 1: "Xbox 360" };
-    const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3 };
+    const DEV_ACTION = { START_PAIRING: 1, CLEAR_BONDS: 2, REBOOT: 3, TEST_RUMBLE: 4 };
     const DEV_PROTOCOL_VERSION = 1;
     const DEV_MAX_DEADZONE = 50, DEV_MAX_BLE_NAME = 31;
     // NEEDS_FULL_FLASH (v4+): a v4 image running on a v3 partition table (an OTA
@@ -1341,6 +1343,8 @@
       const linkDetail = r.b.length - r.i >= 1 ? r.str() : "";
       // (later still, optional) what the dongle is on USB this boot; null when not sent
       const usbController = r.b.length - r.i >= 1 ? r.u8() : null;
+      // (optional) whether the connected controller can be rumbled; null when not sent
+      const rumbleSupported = r.b.length - r.i >= 1 ? r.u8() !== 0 : null;
       return {
         version, flags,
         usbMounted: !!(flags & INFO_FLAG.USB_MOUNTED),
@@ -1356,7 +1360,7 @@
         bleNotifications, bleLastNotifyAgeMs, usbHidReports,
         // link bring-up step + the dongle's note: null / "" when this firmware does not send them
         linkState: LINK_STATE[linkStateCode] || null, linkDetail,
-        usbController,
+        usbController, rumbleSupported,
       };
     }
 
@@ -2253,11 +2257,11 @@
     const els = {};
     for (const id of ["status", "devBadge", "connectBtn", "anyBtn", "autoConnect", "unsupported",
                       "infoAuto", "infoBtn", "bUsb", "bBle", "bScan", "bPair",
-                      "iUsbController", "iController", "iBattery", "iBatteryMeter", "iBonds", "iUptime", "iProject", "iFirmware", "iUpdate", "iHardware", "iIdf", "infoNote",
+                      "iUsbController", "iController", "iBattery", "iBatteryMeter", "iRumble", "iBonds", "iUptime", "iProject", "iFirmware", "iUpdate", "iHardware", "iIdf", "infoNote",
                       "lState", "lBle", "lUsb", "linkNote",
                       "bondsCount", "bondsRefresh", "bondsList", "bondsConfirm", "bondsNote",
                       "settingsDirty", "settingsReload", "settingsForm", "settingsApply", "settingsReset", "settingsConfirm", "settingsNote",
-                      "actPair", "actForget", "actReboot", "actionConfirm", "actionNote",
+                      "actPair", "actRumble", "actForget", "actReboot", "actionConfirm", "actionNote",
                       "otaStatusBtn", "otaFw", "otaRollback", "verifyPanel", "verifyText", "markValidBtn", "rollbackBtn",
                       "markValidBtn2", "rollbackBtn2", "otaConfirm", "otaStatusNote",
                       "updateChecked", "checkUpdatesBtn", "updateStatus", "installReleaseBtn", "installReleaseInfo", "installConfirm",
@@ -3282,6 +3286,7 @@
       els.settingsApply.disabled = !dev || !deviceSettings || !settingsDirtyKeys().length || !!settingsInvalid();
       els.settingsReset.disabled = !dev || !deviceSettings;
       els.actPair.disabled = !dev; els.actForget.disabled = !dev; els.actReboot.disabled = !dev;
+      els.actRumble.disabled = !dev || !(lastInfo && lastInfo.rumbleSupported === true);
       els.infoAuto.textContent = dev ? "auto-refresh 2 s" : "auto-refresh paused";
 
       const ota = connected && moduleAvailable(otaModuleId());
@@ -3356,6 +3361,10 @@
         els.iBattery.textContent = info.bleConnected ? "unknown" : "—";
         els.iBatteryMeter.hidden = true;
       }
+      els.iRumble.textContent = info.rumbleSupported === null ? "— (this firmware does not report it)"
+        : !info.bleConnected ? "—"
+        : info.rumbleSupported ? "supported" : "not supported by this controller";
+      els.actRumble.disabled = !transport || info.rumbleSupported !== true;
       els.iBonds.textContent = info.bonds + (info.bonds === 1 ? " controller" : " controllers");
       els.iUptime.textContent = formatUptime(info.uptime);
       els.iProject.textContent = info.project || "—";
@@ -3694,6 +3703,17 @@
       } catch (e) {
         logLine("err", "Start pairing failed: " + e.message);
         setNote(els.actionNote, "err", "Start pairing failed: " + e.message);
+      }
+    });
+    els.actRumble.addEventListener("click", async () => {
+      if (!transport) return;
+      try {
+        await sendAction(DEV_ACTION.TEST_RUMBLE, "Test rumble");
+        logLine("ok", "Test rumble sent.");
+        setNote(els.actionNote, "ok", "The controller should rumble for a moment.");
+      } catch (e) {
+        logLine("err", "Test rumble failed: " + e.message);
+        setNote(els.actionNote, "err", "Test rumble failed: " + e.message);
       }
     });
     els.actForget.addEventListener("click", async () => {

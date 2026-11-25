@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -44,12 +45,17 @@ void ble_set_disconnect_callback(disconnect_callback_t callback);
 /// The HID report id a subscribed characteristic carries (from its Report
 /// Reference descriptor); nullopt for an unknown characteristic.
 std::optional<uint8_t> ble_report_id_for(const NimBLERemoteCharacteristic *chr);
-/// Queue a HID output report (e.g. rumble) for the connected controller,
-/// latest-wins: only the most recent queued report is sent. Dropped when no
-/// controller is subscribed. Sent by the BLE side's own task (a blocking BLE
-/// write), so this is safe from any task -- including the TinyUSB task, which
-/// must not block. @p data is the report payload, without the report id.
-void ble_queue_output_report(uint8_t report_id, std::vector<uint8_t> data);
+/// Whether the connected controller has a writable HID output report with
+/// this id (found while subscribing; forgotten on disconnect).
+bool ble_has_output_report(uint8_t report_id);
+/// Write a HID output report (e.g. rumble) to the connected controller. @p data
+/// is the report payload, without the report id. Non-blocking: queued for the
+/// next connection event (a write without response when the characteristic
+/// takes one, else a write with response whose reply is not waited for), so it
+/// is safe from any task. Returns false when no controller is subscribed, it has
+/// no such report, or the stack refused the write (out of buffers, say); the
+/// caller decides whether to retry.
+bool ble_write_output_report(uint8_t report_id, std::span<const uint8_t> data);
 /// Link diagnostics: notifications received since the current subscription
 /// began, and the age of the last one (UINT32_MAX if none yet).
 uint32_t ble_notification_count();
