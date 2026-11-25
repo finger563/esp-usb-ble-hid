@@ -4892,15 +4892,19 @@
       // Ported from espp's console. Editable only when the map came with rumble
       // options (MAP flags bit1) AND the connected dongle stores them (INFO
       // flags bit1): an editor kept across a reconnect may face other firmware.
-      // Offline, the loaded map decides (Save is disabled then anyway). Each
-      // control rewrites only its own bit / field: the other flag bits, reserved
-      // ones included, are kept and echoed back as loaded.
-      const deviceStoresRumble = () => !devInfo || !!devInfo.rumbleOptions;
+      // Offline, the loaded map decides (Save is disabled then anyway); while
+      // connected but before this connection's INFO arrives, it is unknown: the
+      // row is not editable and Save waits (see infoPending). Each control
+      // rewrites only its own bit / field: the other flag bits, reserved ones
+      // included, are kept and echoed back as loaded.
+      const infoPending = () => !!transport && !devInfo;
+      const deviceStoresRumble = () => (devInfo ? !!devInfo.rumbleOptions : !transport);
       // the rumble options Save sends: null (the v1 form, which keeps what the
       // dongle stores) unless both the map and the dongle have them
       const rumbleToSave = (m) => (m && m.rumble && deviceStoresRumble() ? m.rumble : null);
       function rumbleNoteText() {
         if (!editMap) return "";
+        if (infoPending()) return "Reading the dongle's map settings…";
         const r = editMap.rumble;
         if (!deviceStoresRumble()) return "This dongle's firmware does not store rumble options (update it to set them per controller)." +
           (r ? " Save keeps the map only." : "");
@@ -4941,6 +4945,7 @@
                     !devInfo.controller ? "Connect a controller to the dongle to test rumble" :
                     !r ? "Load a map with rumble options to test them" :
                     off ? "Rumble is off for this controller type" :
+                    r.strength === 0 ? "Rumble is at 0 % in these settings (silent, like off)" :
                     validateRumble(r) ? "Fix the strength first" :
                     testing ? "Testing…" : "";
         E.gmRumbleTest.disabled = why !== "";
@@ -5124,7 +5129,7 @@
         }
         E.gmDirty.hidden = !isDirty();
         const on = online(), idle = !loading && !saving && !erasing;
-        E.gmSave.disabled = !on || !loaded || errors.length > 0 || !idle;
+        E.gmSave.disabled = !on || !loaded || errors.length > 0 || !idle || infoPending();
         E.gmRevert.disabled = !loaded || !idle;
         E.gmErase.disabled = !on || !loaded || !editTarget.profile || !editExists || !idle;
         E.gmLoad.disabled = !on || !idle;
@@ -5176,7 +5181,7 @@
         } finally { erasing = false; updateValidation(); }
       });
       async function saveMap() {
-        if (!editMap || !editTarget || !online()) return;
+        if (!editMap || !editTarget || !online() || infoPending()) return;
         const errors = updateValidation();
         if (errors.length) { setEditStatus("Not saved: fix the problems listed above first.", "err"); return; }
         if (editTarget.profile && !editExists && devInfo && devInfo.profileCount >= devInfo.maxProfiles)
