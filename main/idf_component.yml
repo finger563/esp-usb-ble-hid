@@ -30,5 +30,5 @@ dependencies:
   espp/nvs: '>=1.4.2'
   # button / axis maps per controller type (espp::GamepadMapService, module 11), stored in a
   # LittleFS file; the runtime HID decoder they are fed from needs hid-rp >= 1.4.6
-  espp/gamepad_map: '>=1.4.7'
+  espp/gamepad_map: '>=1.4.8'
   espp/file_system: '>=1.4.2'

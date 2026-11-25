@@ -247,10 +247,10 @@ The dongle doubles as a worked example of espp's USB, HID, gamepad and web-conso
 
 | Component | Needs | What the dongle uses it for |
 |---|---|---|
-| `espp/usb_device` | ≥ 1.4.2 | `espp::UsbDevice`: the composite device with `HidFunction` (Pro Controller), `XInputFunction` (X-Input + `XUSB10`), `VendorFunction` (WebUSB, MS OS 2.0, landing page) and `CdcFunction` (log console), on `esp_tinyusb`. In `main/usb.cpp`. |
-| `espp/switch_pro` | ≥ 1.4.2 | `espp::SwitchPro`: the Pro Controller's identity, report descriptor, handshake replies and input report. |
-| `espp/hid-rp` | ≥ 1.4.6 | `hid_rp::ReportMap` and `GamepadDecoder`: decoding any controller from its report map, the Xbox descriptor fallback, the per-controller quirks, and the Switch Pro report layout. |
-| `espp/gamepad_map` | ≥ 1.4.6 | `GamepadState`, `GamepadMap` (rules and dead zones), `GamepadProfiles` (maps in a file) and `GamepadMapService` (module `0x0B`). |
+| `espp/usb_device` | ≥ 1.4.7 | `espp::UsbDevice`: the composite device with `HidFunction` (Pro Controller), `XInputFunction` (X-Input + `XUSB10`), `VendorFunction` (WebUSB, MS OS 2.0, landing page) and `CdcFunction` (log console), on `esp_tinyusb`. In `main/usb.cpp`. |
+| `espp/switch_pro` | ≥ 1.4.7 | `espp::SwitchPro`: the Pro Controller's identity, report descriptor, handshake replies and input report, and the Switch's rumble (`Config::on_rumble`). |
+| `espp/hid-rp` | ≥ 1.4.7 | `hid_rp::ReportMap` and `GamepadDecoder`: decoding any controller from its report map, the Xbox descriptor fallback, the per-controller quirks, the Switch Pro report layout, and `RumbleEncoder` (a controller's rumble report, built from its report map) with the Switch HD-rumble decode. |
+| `espp/gamepad_map` | ≥ 1.4.8 | `GamepadState`, `GamepadMap` (rules and dead zones), `RumbleState` and `RumbleOptions` (per-controller off / strength / swap), `GamepadProfiles` (maps and rumble options in a file) and `GamepadMapService` (module `0x0B`, with the TEST_RUMBLE preview). |
 | `espp/stream_frame`, `espp/dispatcher` | ≥ 1.4.2 | The console stream's framing and module routing. `DispatcherWorker` runs the handlers on their own task. |
 | `espp/ota` | ≥ 1.4.2 | `espp::Ota` (two slots, rollback), `OtaService` (module `0x00`), and the `idf.py ota-usb` / `espp-ota` host tool. |
 | `espp/coredump` | ≥ 1.4.2 | `CoreDump` (reads the stored dump and formats the boot summary) and `CoreDumpService` (module `0x04`). |
