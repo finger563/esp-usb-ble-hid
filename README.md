@@ -56,7 +56,7 @@ the same USB plug.
 - **Set-and-forget pairing.** It remembers up to five controllers and reconnects to whichever one you turn on. If a controller drops out, every input is released at once, so nothing stays "pressed".
 
 **Make it yours**
-- **Button mapping, per controller.** Swap or move any button, turn a stick into a d-pad (or the other way round), make a trigger a button, invert or scale an axis, set dead zones, and keep one profile per controller model. [Button mapping →](docs/button-mapping.md)
+- **Button mapping, per controller.** Swap or move any button, turn a stick into a d-pad (or the other way round), make a trigger a button, invert or scale an axis, set dead zones, set how the controller rumbles (off, 0 to 200 % strength, swapped motors), and keep one profile per controller model. [Button mapping →](docs/button-mapping.md)
 - **Press to pick.** *Learn* fills in a rule when you press the control on the controller. Presets cover the common fixes (Nintendo A/B, invert Y, swap sticks…), and the live view shows the controller's input before and after the map, side by side.
 
 **Keep it running**
@@ -116,7 +116,7 @@ LED levels, the BLE name and the USB controller type are settings in the
 
 - **Bluetooth LE controllers only.** Controllers that only speak Bluetooth Classic (DualShock 4, DualSense, Switch Pro Controller, Joy-Con) cannot pair, because the ESP32-S3 has no Bluetooth Classic radio. [How to tell →](docs/controllers.md#compatibility)
 - **One controller per dongle.** For local multiplayer, use one dongle per player.
-- **Rumble.** The host's rumble (the Switch's, or a PC's in Xbox 360 mode) plays on the controller's motors, on controllers that describe a rumble report the way the Xbox Wireless Controller does. The web console says whether yours does, and can test it. Motion sensors are not forwarded. [What is forwarded →](docs/controllers.md#what-is-forwarded)
+- **Rumble.** The host's rumble (the Switch's, or a PC's in Xbox 360 mode) plays on the controller's motors, on controllers that describe a rumble report the way the Xbox Wireless Controller does. The web console says whether yours does, and can test it. Per controller model you can turn rumble off, make it weaker or stronger, or swap the motors ([Rumble →](docs/button-mapping.md#rumble)). Motion sensors are not forwarded. [What is forwarded →](docs/controllers.md#what-is-forwarded)
 - **It cannot wake a sleeping Switch.** The Switch cuts USB power when it sleeps, so wake it with a Joy-Con or the console's own button.
 - **Xbox 360 mode is for PCs, Steam Deck and Android**, not for the Switch. macOS has no X-Input driver, so use Switch Pro mode there.
 
@@ -135,7 +135,7 @@ LED levels, the BLE name and the USB controller type are settings in the
 | [Getting started](docs/getting-started.md) | Install the firmware, pair a controller, first steps on each host |
 | [Hosts](docs/hosts.md) | Switch, PC / Steam Deck / Android (Xbox 360 mode), macOS, Linux permissions |
 | [Controllers](docs/controllers.md) | Compatibility, pairing, the default layout, what is forwarded |
-| [Button mapping](docs/button-mapping.md) | Profiles, rules, presets, Learn, recipes |
+| [Button mapping](docs/button-mapping.md) | Profiles, rules, presets, Learn, rumble options, recipes |
 | [Web console](docs/web-console.md) | Every tab and setting, auto-connect |
 | [Updating](docs/updating.md) | One-click updates, rollback, the Full update, command line |
 | [Troubleshooting and FAQ](docs/troubleshooting.md) | Symptom-first fixes, FAQ, reporting a bug |

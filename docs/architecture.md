@@ -69,7 +69,7 @@ flowchart TB
 | NimBLE host task | NimBLE (6 KB stack) | on each notification | Decodes the report, applies the map, publishes live input and pushes the result to the output stage. Also stores battery-level notifications. |
 | `Scan Timer` (link supervisor) | `main/ble.cpp` | every 100 ms (8 KB stack) | Restarts scans, re-requests security, subscribes to the HID reports, notices missed disconnects and owns the LED. |
 | `breathe` | `main/ble.cpp` | every 10 ms, only while nothing is connected | The breathing LED. |
-| `rumble` | `main/rumble.cpp` | on a new rumble target, then every 150 ms while the motors run (4 KB stack) | Builds the controller's rumble report and writes it over BLE, off the TinyUSB / NimBLE host tasks. |
+| `rumble` | `main/rumble.cpp` | on a new rumble target or new rumble options, then every 150 ms while the motors run (4 KB stack) | Applies the controller's rumble options, builds its rumble report and writes it over BLE, off the TinyUSB / NimBLE host tasks. |
 | `usb_hid_tx` | `main/usb.cpp` | wakes on demand or every 8 ms (priority 10) | Sends the Pro Controller handshake replies and its input report stream, submits and retries X-Input reports, and re-arms the USB pull-up. |
 | `usb_rx` (DispatcherWorker) | `main/usb.cpp` | on vendor bytes (8 KB stack) | Parses frames and runs every console module's handler and replies, away from the TinyUSB task. |
 | `usb-reg` | `main/main.cpp` | every 50 ms | Holds L+R for 1 s after the Switch finishes the handshake (Switch Pro mode only). |
@@ -177,6 +177,7 @@ Other details:
   - each report plays a 300 ms pulse, re-sent every 150 ms while the motors run, so a lost write stops after one pulse at most;
   - a stop is sent three times;
   - the motors stop when the host sends a stop, unmounts or suspends the bus, and when the controller changes or disconnects.
+  The controller's rumble options (`espp::RumbleOptions`: off, strength 0–200 %, swap the strong and weak motors) come from its button-map profile, or the default map's, when it connects and whenever the console saves new ones. The `rumble` task applies them once, each time it decides what to send: the host's request is kept as the host sent it, and the deduplication, keep-alive and stops above work on the shaped result. So turning rumble off, or changing its strength, takes effect at once, even while the host holds a rumble on, and off sends a stop. The test pattern (the Device tab's **Test rumble**, and the Button mapping tab's **Test** through `GamepadMapService`'s `TEST_RUMBLE`) is the strong motor alone at half strength for 300 ms, then the weak motor alone, through the saved options or the ones the console sends for the test.
   Writes go by GATT handle (`ble_write_output_report()`: write without response when the characteristic takes it), never through a stored characteristic object, and never block. The LED part of an X-Input host's report is ignored.
 - **Reports are sent on change.** The sender keeps the latest state and retries it every 8 ms until the endpoint takes it, so a button release, or the neutral state after a disconnect, is never lost. After a remount it sends the current state again.
 - **Detecting a host with no X-Input driver.** If a report stays in flight for more than 250 ms, nobody is reading the interface. `usb_hid_ready()` then reports false, and the console's Device tab says the host is not reading X-Input reports. On a Mac this is expected.
@@ -200,7 +201,7 @@ The vendor interface is an `espp::UsbDevice` vendor function with WebUSB enabled
 | Core dump | `0x04` | `espp.coredump` | `espp::CoreDumpService` (`espp/coredump`) | Crash dump |
 | System | `0x07` | `espp.system` | `espp::SystemService` (`espp/system`): info, reboot, reboot into the ROM bootloader | System |
 | Monitor | `0x08` | `espp.monitor` | `espp::MonitorService` (`espp/monitor`): heap regions and the task table | System (Memory) |
-| Gamepad map | `0x0B` | `espp.gamepad_map` | `espp::GamepadMapService` (`espp/gamepad_map`): the default map and per-controller profiles, plus live input | Button mapping |
+| Gamepad map | `0x0B` | `espp.gamepad_map` | `espp::GamepadMapService` (`espp/gamepad_map`): the default map and per-controller profiles with their rumble options, live input, and a rumble test | Button mapping |
 | Device config | `0x10` | `esp-usb-ble-hid.device-config` | `DeviceConfig` (`components/device_config`, this repository) | Device, Settings |
 
 Each module is registered with one `register_module()` call in `services_init()`. The five espp modules speak protocols shared with espp's own tools. That is why, for example, espp's Gamepad Map Console can edit the dongle's maps. What each tab does for users is covered in the [web console guide](web-console.md). The console's side of the protocol is described in the [console protocol notes](../web/README.md).
@@ -235,7 +236,7 @@ v4 split v3's 256 KB core-dump partition into `coredump` and `littlefs`. NVS sta
 | | `inv_ly`, `inv_ry`, `swap_ab`, `swap_xy`, `deadzone` | v3's input settings, kept so the first v4 boot can turn them into the default map |
 | NVS namespace `bondnames` | the bond's address as 12 hex digits | The controller's name, as shown in the console |
 | NimBLE's NVS store | – | The bonds themselves (keys and addresses) |
-| `littlefs` | `gamepad_profiles.bin` | The default map and up to 16 controller profiles (`espp::GamepadProfiles`) |
+| `littlefs` | `gamepad_profiles.bin` | The default map and up to 16 controller profiles, each with its rumble options (`espp::GamepadProfiles`). Firmware with rumble options writes schema version 2 from the first change on; older firmware sets such a file aside as `gamepad_profiles.bin.unreadable` ([Roll back after editing maps](updating.md#roll-back-after-editing-maps)) |
 | `coredump` | – | The panic core dump, summarized in the log at the next boot |
 
 Settings changes go through the `DeviceConfig` module. A `SET_SETTINGS` request can be partial. The module validates the merged result, and the app stages every key on one NVS handle and commits once. Only when that commit succeeds are the new values applied and adopted. A failed save leaves the old values running, so the running settings always match what the next boot will load. LED changes apply at once, while the USB type and the BLE name apply at the next boot. If stored values ever fail validation at boot, the whole set falls back to the build's defaults.
@@ -246,10 +247,10 @@ The dongle doubles as a worked example of espp's USB, HID, gamepad and web-conso
 
 | Component | Needs | What the dongle uses it for |
 |---|---|---|
-| `espp/usb_device` | ≥ 1.4.2 | `espp::UsbDevice`: the composite device with `HidFunction` (Pro Controller), `XInputFunction` (X-Input + `XUSB10`), `VendorFunction` (WebUSB, MS OS 2.0, landing page) and `CdcFunction` (log console), on `esp_tinyusb`. In `main/usb.cpp`. |
-| `espp/switch_pro` | ≥ 1.4.2 | `espp::SwitchPro`: the Pro Controller's identity, report descriptor, handshake replies and input report. |
-| `espp/hid-rp` | ≥ 1.4.6 | `hid_rp::ReportMap` and `GamepadDecoder`: decoding any controller from its report map, the Xbox descriptor fallback, the per-controller quirks, and the Switch Pro report layout. |
-| `espp/gamepad_map` | ≥ 1.4.6 | `GamepadState`, `GamepadMap` (rules and dead zones), `GamepadProfiles` (maps in a file) and `GamepadMapService` (module `0x0B`). |
+| `espp/usb_device` | ≥ 1.4.7 | `espp::UsbDevice`: the composite device with `HidFunction` (Pro Controller), `XInputFunction` (X-Input + `XUSB10`), `VendorFunction` (WebUSB, MS OS 2.0, landing page) and `CdcFunction` (log console), on `esp_tinyusb`. In `main/usb.cpp`. |
+| `espp/switch_pro` | ≥ 1.4.7 | `espp::SwitchPro`: the Pro Controller's identity, report descriptor, handshake replies and input report, and the Switch's rumble (`Config::on_rumble`). |
+| `espp/hid-rp` | ≥ 1.4.7 | `hid_rp::ReportMap` and `GamepadDecoder`: decoding any controller from its report map, the Xbox descriptor fallback, the per-controller quirks, the Switch Pro report layout, and `RumbleEncoder` (a controller's rumble report, built from its report map) with the Switch HD-rumble decode. |
+| `espp/gamepad_map` | ≥ 1.4.8 | `GamepadState`, `GamepadMap` (rules and dead zones), `RumbleState` and `RumbleOptions` (per-controller off / strength / swap), `GamepadProfiles` (maps and rumble options in a file) and `GamepadMapService` (module `0x0B`, with the TEST_RUMBLE preview). |
 | `espp/stream_frame`, `espp/dispatcher` | ≥ 1.4.2 | The console stream's framing and module routing. `DispatcherWorker` runs the handlers on their own task. |
 | `espp/ota` | ≥ 1.4.2 | `espp::Ota` (two slots, rollback), `OtaService` (module `0x00`), and the `idf.py ota-usb` / `espp-ota` host tool. |
 | `espp/coredump` | ≥ 1.4.2 | `CoreDump` (reads the stored dump and formats the boot summary) and `CoreDumpService` (module `0x04`). |

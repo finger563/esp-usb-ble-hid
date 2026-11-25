@@ -252,14 +252,17 @@ void services_init(espp::DispatcherWorker *link, const ServicesCallbacks &callba
   // no transport (plain HID build): replies have nowhere to go
   const auto send = link ? link->sender() : [](std::span<const uint8_t>) {};
 
-  // --- gamepad button maps (module 11): the console edits them, the input
-  // path applies them ---
+  // --- gamepad button maps + rumble options (module 11): the console edits
+  // them, the input path applies the maps and the rumble sender the options
+  // (and plays the console's rumble test) ---
   init_gamepad_maps(settings);
-  gamepad_map_service = std::make_unique<espp::GamepadMapService>(
-      espp::GamepadMapService::Config{.send = send,
-                                      .profiles = gamepad_profiles.get(),
-                                      .on_active_map_changed = callbacks.on_gamepad_map_changed,
-                                      .log_level = espp::Logger::Verbosity::INFO});
+  gamepad_map_service = std::make_unique<espp::GamepadMapService>(espp::GamepadMapService::Config{
+      .send = send,
+      .profiles = gamepad_profiles.get(),
+      .on_active_map_changed = callbacks.on_gamepad_map_changed,
+      .on_active_rumble_changed = callbacks.on_gamepad_rumble_changed,
+      .on_test_rumble = callbacks.on_gamepad_test_rumble,
+      .log_level = espp::Logger::Verbosity::INFO});
   if (link)
     link->register_module(*gamepad_map_service);
 
@@ -364,6 +367,10 @@ std::string services_crash_report() { return crash_report; }
 espp::GamepadMap services_gamepad_connected(uint16_t vid, uint16_t pid, const std::string &name) {
   return gamepad_map_service ? gamepad_map_service->set_controller(vid, pid, name)
                              : espp::GamepadMap{};
+}
+
+espp::RumbleOptions services_gamepad_rumble() {
+  return gamepad_map_service ? gamepad_map_service->active_rumble() : espp::RumbleOptions{};
 }
 
 void services_gamepad_disconnected() {

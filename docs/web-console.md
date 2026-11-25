@@ -116,7 +116,7 @@ Every controller the dongle remembers is listed by the name it reported when it 
 ### Actions
 
 - **Start pairing**: the same as holding the dongle's button. See [Pair a controller](getting-started.md#pair-a-controller).
-- **Test rumble**: plays a short rumble on the connected controller. Available when the **Rumble** row says *supported*.
+- **Test rumble**: plays a short pattern on the connected controller, the strong motor and then the weak one, with that controller's saved rumble options from [Button mapping](button-mapping.md#rumble). Available when the **Rumble** row says *supported*. If rumble is off for the controller there, the note says so instead.
 - **Forget all controllers**: clears every pairing, after you confirm. The dongle then goes into pairing mode.
 - **Reboot dongle**: restarts the dongle, after you confirm. The USB link drops for a few seconds and the console reconnects (see [Auto-connect](#auto-connect)).
 
@@ -152,9 +152,9 @@ The stick and button options from older firmware (invert Y, swap A/B, swap X/Y, 
 
 ## Button mapping
 
-This tab edits how the controller's buttons and sticks reach the host. It has a live view of the controller's input before and after mapping (which also makes it a handy input tester), a default map, one profile per controller model, presets and **Learn**. It needs firmware v4. Older firmware shows a note that links to the Full update instead.
+This tab edits how the controller's buttons and sticks reach the host. It has a live view of the controller's input before and after mapping (which also makes it a handy input tester), a default map, one profile per controller model, presets and **Learn**. Each map also has a **Rumble** row: rumble on or off, its strength (0 to 200 %), swapping the strong and weak motors, and a **Test** button that tries the settings on the controller before you save them. It needs firmware v4. Older firmware shows a note that links to the Full update instead, and v4 firmware from before rumble options keeps the Rumble row greyed out.
 
-See the [button mapping guide](button-mapping.md) for how it works and for [recipes](button-mapping.md#recipes).
+See the [button mapping guide](button-mapping.md) for how it works, for the [Rumble row](button-mapping.md#rumble) and for [recipes](button-mapping.md#recipes).
 
 ## System
 

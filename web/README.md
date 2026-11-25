@@ -62,8 +62,12 @@ links to it.
   controller currently in use. **Forget** on a row drops that bond only
   (in-page confirmation). The list refreshes after connecting, after any
   action and quietly alongside the 2 s status poll.
-- **Actions** — *Start pairing* (same as holding the dongle's button), *Forget
-  all controllers* (clears every BLE bond, with an in-page confirmation),
+- **Actions** — *Start pairing* (same as holding the dongle's button), *Test
+  rumble* (`ACTION TEST_RUMBLE`: the test pattern, strong motor then weak, on
+  the connected controller through its saved rumble options; the device's
+  ERROR message says why when it cannot, e.g. rumble is off for that
+  controller), *Forget all controllers* (clears every BLE bond, with an in-page
+  confirmation),
   *Reboot dongle* (the console reconnects automatically when the dongle
   re-enumerates).
 
@@ -113,7 +117,18 @@ by protocol id, default module 11) on the console's WebUSB link:
   d-pad → left stick, triggers → L2/R2 and back). The editor checks the map the
   way the firmware does (`GamepadMap::valid()`) and lists every problem before
   **Save to dongle** is allowed. **Revert**, **Erase this profile** and **Reset
-  all maps** (every profile erased, default map = identity) confirm in-page.
+  all maps** (every profile erased, default map = identity, default rumble =
+  on / 100 % / not swapped) confirm in-page.
+- **Rumble row** (in the Map editor) — the map's rumble options
+  (`espp::RumbleOptions`): on / off, strength 0–200 % and swap strong / weak
+  motors, saved in the same `SET_MAP` as the map (a trailing `[flags][strength]`
+  block). Editable only when the dongle's INFO has flags bit1 (rumble options)
+  and the loaded MAP carried the block; otherwise Save sends the v1 form, which
+  keeps what the dongle stores. **Test** sends `TEST_RUMBLE` (`0x08`) with the
+  options as edited (not saved), only when INFO has flags bit2: the dongle plays
+  its test pattern through them and the status line shows the OK or the
+  dongle's reason (no controller, it cannot rumble, rumble is off in these
+  settings).
 - A dongle on firmware older than v4 has no button mapping: the tab says so and
   links to the Full update. A v4+ dongle that still needs the Full update
   (`needs_full_flash`) is warned that maps are not stored until then.
@@ -262,8 +277,10 @@ and the Full update plan (between `// --- begin full update plan` and
 `// --- end full update plan ---`: manifest parsing, the local-file plan,
 partition table / image checks, MD5, the esptool-js read fix and the decision
 to offer the Full update). `test/dongle_console_test.js` checks both against
-byte vectors derived from the C++ headers, plus the INFO `needs_full_flash`
-flag and that every inline script parses; dependency-free:
+byte vectors derived from the C++ headers (for the codec: the maps, the rumble
+options and `TEST_RUMBLE`, with espp's `RumbleOptions::apply()` parity table),
+plus the INFO `needs_full_flash` flag and that every inline script parses;
+dependency-free:
 
 ```
 node web/test/dongle_console_test.js

@@ -187,7 +187,7 @@ It prints `ALL DEVICE CONFIG PROTOCOL TESTS PASSED`. It round-trips the settings
 node web/test/dongle_console_test.js
 ```
 
-The test has no dependencies. It checks the console's pure logic against byte vectors derived from the C++ headers: the `espp.gamepad_map` codec block, the Full update planner (manifest, partition-table and image checks, MD5, the esptool-js read fix), the INFO `needs_full_flash` flag, the settings payload, and that every inline script parses. It ends with `ALL PASS`. How the console's code is laid out for this is described in the [console protocol notes](../web/README.md#testing-the-protocol-code).
+The test has no dependencies. It checks the console's pure logic against byte vectors derived from the C++ headers: the `espp.gamepad_map` codec block (with its rumble options and the rumble test), the Full update planner (manifest, partition-table and image checks, MD5, the esptool-js read fix), the INFO `needs_full_flash` flag, the settings payload, and that every inline script parses. It ends with `ALL PASS`. How the console's code is laid out for this is described in the [console protocol notes](../web/README.md#testing-the-protocol-code).
 
 ### Test the USB side without a controller
 

@@ -19,7 +19,8 @@
 //   0x03 SET_SETTINGS  (Settings TLVs)   0x83 OK        [request u8]
 //   0x04 RESET_SETTINGS(no payload)      0x84 ERROR     [request u8][code u32][utf8 message]
 //   0x05 ACTION        [action u8]       0x85 BONDS     (see serialize_bonds)
-//                      (TEST_RUMBLE: ERROR when the controller cannot rumble)
+//                      (TEST_RUMBLE: ERROR when the controller cannot rumble,
+//                       or its rumble options turn rumble off)
 //   0x06 GET_BONDS     (no payload)
 //   0x07 FORGET_BOND   [addr 6B][type u8]
 //
@@ -107,7 +108,8 @@ enum class Action : uint8_t {
   StartPairing = 0x01, ///< enter BLE pairing mode (same as holding the button)
   ClearBonds = 0x02,   ///< forget every paired controller
   Reboot = 0x03,       ///< restart the dongle
-  TestRumble = 0x04,   ///< play a short rumble on the connected controller (ERROR if it cannot)
+  TestRumble = 0x04,   ///< play the rumble test pattern on the connected controller, through
+                       ///< its saved rumble options (ERROR if it cannot, or they are off)
 };
 
 /// Error codes carried in ERROR replies (the message is authoritative).

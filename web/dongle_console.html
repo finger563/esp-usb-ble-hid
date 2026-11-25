@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dongle Console</title>
-  <meta name="description" content="Browser console for the ESP USB BLE HID gamepad dongle: device status and settings, per-controller button / axis mapping with live input, firmware update (OTA, or a full flash over Web Serial) and crash-dump retrieval over WebUSB.">
+  <meta name="description" content="Browser console for the ESP USB BLE HID gamepad dongle: device status and settings, per-controller button / axis mapping with live input and per-controller rumble options (off / strength / swap motors), firmware update (OTA, or a full flash over Web Serial) and crash-dump retrieval over WebUSB.">
   <meta name="color-scheme" content="light dark">
   <style>
     /* ------------------------------------------------------------------
@@ -398,6 +398,13 @@
     #tab-mapping .dzrow label { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 13px; }
     #tab-mapping .dzrow input[type="range"] { flex: 1; min-width: 80px; }
     #tab-mapping .dzrow output { font-family: var(--font-mono); font-size: 12.5px; min-width: 42px; text-align: right; }
+    /* rumble options: per map, saved with it (wraps to two or three lines at phone width) */
+    #tab-mapping .rumblerow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 12px; }
+    #tab-mapping .rumblerow > b { font-size: 13px; font-weight: 600; }
+    #tab-mapping .rumblerow label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 13px; }
+    #tab-mapping .rumblerow label.strength { display: flex; flex: 1 1 260px; min-width: 0; gap: 8px; }
+    #tab-mapping .rumblerow input[type="range"] { flex: 1; min-width: 100px; }
+    #tab-mapping .rumblerow output { font-family: var(--font-mono); font-size: 12.5px; min-width: 48px; text-align: right; }
     #tab-mapping .table-wrap { overflow-x: auto; margin-top: 12px; }
     #tab-mapping table.rules { width: 100%; border-collapse: collapse; font-size: 13px; }
     #tab-mapping table.rules th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -533,7 +540,7 @@
           <div class="card-head"><h2>Actions</h2></div>
           <div class="actions">
             <button id="actPair" type="button" disabled>Start pairing</button>
-            <button id="actRumble" type="button" disabled title="Play a short rumble on the connected controller">Test rumble</button>
+            <button id="actRumble" type="button" disabled title="Play a short rumble pattern on the connected controller (the strong motor, then the weak one) with its saved rumble options from the Button mapping tab">Test rumble</button>
             <button id="actForget" class="danger" type="button" disabled>Forget all controllers</button>
             <button id="actReboot" class="danger" type="button" disabled>Reboot dongle</button>
           </div>
@@ -700,6 +707,15 @@
             <label title="Radial dead zone of the left stick (0..90 % of full deflection); what is left is rescaled so full deflection still reads full">Left stick dead zone <input type="range" id="gmDzLeft" min="0" max="90" step="1" value="0" disabled> <output id="gmDzLeftOut">0 %</output></label>
             <label title="Radial dead zone of the right stick (0..90 % of full deflection)">Right stick dead zone <input type="range" id="gmDzRight" min="0" max="90" step="1" value="0" disabled> <output id="gmDzRightOut">0 %</output></label>
           </div>
+          <div class="rumblerow" id="gmRumbleRow"><b>Rumble</b>
+            <label title="Off: the host's rumble is never played on this controller type (the dongle sends a stop instead)"><input type="checkbox" id="gmRumbleOn" checked disabled> on</label>
+            <label class="strength" title="Every motor's level x this / 100; above 100 % strong effects saturate at full">Strength <input type="range" id="gmRumbleStrength" min="0" max="200" step="1" value="100" list="gmRumbleTicks" disabled> <output id="gmRumbleStrengthOut">100 %</output></label>
+            <datalist id="gmRumbleTicks"><option value="0"><option value="50"><option value="100"><option value="150"><option value="200"></datalist>
+            <button id="gmRumbleNormal" class="small" type="button" disabled title="Back to 100 % (as the host asks)">100 %</button>
+            <label title="The strong (left grip) and weak (right grip) motors trade places, for a controller whose motors come out the wrong way round; impulse-trigger motors are not swapped"><input type="checkbox" id="gmRumbleSwap" disabled> swap strong / weak motors</label>
+            <button id="gmRumbleTest" class="small" type="button" disabled title="Play a short test pattern on the connected controller with these settings (not saved)">Test</button>
+          </div>
+          <p id="gmRumbleNote" class="muted small-text" style="margin: 6px 0 0;"></p>
           <div class="table-wrap">
             <table class="rules">
               <thead><tr><th>#</th><th>Kind</th><th>Source</th><th>Target</th><th title="Keep the source at its own position too (otherwise the source is moved to the target)">Keep</th><th>Parameter</th><th>Does</th><th></th></tr></thead>
@@ -717,7 +733,7 @@
           <div class="actions">
             <button id="gmSave" class="primary" type="button" disabled title="Validate the map and store it on the dongle">Save to dongle</button>
             <button id="gmRevert" type="button" disabled title="Load the map stored on the dongle again, dropping the edits">Revert</button>
-            <button id="gmErase" class="danger" type="button" disabled title="Delete this profile from the dongle (the controller then uses the default map)">Erase this profile</button>
+            <button id="gmErase" class="danger" type="button" disabled title="Delete this profile from the dongle (the controller then uses the default map and its rumble options)">Erase this profile</button>
           </div>
           <div id="gmEditConfirm" class="confirm-slot"></div>
           <div id="gmEditStatus" class="note muted small-text"></div>
@@ -754,11 +770,12 @@
             <span>Stored: <b id="gmDevProfiles">-</b></span>
             <span>Rules per map: <b id="gmDevMaxRules">-</b></span>
             <span>Controls: <b id="gmDevControls">-</b></span>
+            <span>Rumble options: <b id="gmDevRumble">-</b></span>
           </div>
         </div>
         <div class="card">
           <div class="card-head"><h2>Reset maps</h2></div>
-          <p class="muted small-text" style="margin: 0;">Erase every profile and set the default map back to the identity (no rules, no dead zones). Settings and paired controllers are not touched.</p>
+          <p class="muted small-text" style="margin: 0;">Erase every profile, set the default map back to the identity (no rules, no dead zones) and default rumble to on / 100 % / not swapped. Settings and paired controllers are not touched.</p>
           <div class="actions"><button id="gmResetAll" class="danger" type="button" disabled>Reset all maps</button></div>
           <div id="gmResetConfirm" class="confirm-slot"></div>
         </div>
@@ -1044,7 +1061,7 @@
       [MODULE.GAMEPAD_MAP]: {
         label: "GamepadMap", protocol: PROTOCOL.GAMEPAD_MAP, version: 1, correlates: true, errorType: 0x84, parseError: parseRequestCodeMessageError,
         names: { 0x01: "GET_INFO", 0x02: "GET_MAP", 0x03: "SET_MAP", 0x04: "ERASE_PROFILE", 0x05: "LIST_PROFILES", 0x06: "SET_STREAM",
-                 0x07: "RESET_ALL", 0x81: "INFO", 0x82: "MAP", 0x83: "OK", 0x84: "ERROR", 0x85: "PROFILES", 0x86: "INPUT" },
+                 0x07: "RESET_ALL", 0x08: "TEST_RUMBLE", 0x81: "INFO", 0x82: "MAP", 0x83: "OK", 0x84: "ERROR", 0x85: "PROFILES", 0x86: "INPUT" },
       },
       [MODULE.DISCOVERY]: { label: "Discovery", errorType: -1, parseError: null, names: { 0x00: "LIST_MODULES" } },
     };
@@ -1610,7 +1627,8 @@
       };
     }
 
-    // ---- espp.gamepad_map v1 (module 11, firmware v4+): the button / axis maps ----
+    // ---- espp.gamepad_map v1 (module 11, firmware v4+): the button / axis maps
+    //      and their rumble options (found through INFO capability bits) ----
     // The block between the markers is a verbatim copy of the codec block of
     // espp's components/gamepad_map/web/gamepad_map_console.html (re-sync by
     // replacing everything between the markers); web/test/dongle_console_test.js
@@ -1622,16 +1640,39 @@
     // a `str` is [len u8][utf8 bytes]. Compatibility rule: device -> host
     // messages are decoded leniently -- bytes after the known fields are
     // ignored (a later version may append fields); a truncated message fails.
+    // Rumble options (still v1, found through capability bits): `rumble` is
+    // [flags u8][strength_percent u8] (RumbleOptions field for field; flags
+    // bit0 = RUMBLE_OFF, bit1 = SWAP_MOTORS, bits 2-7 reserved; strength
+    // 0..200; neutral = 00 64). INFO flags bit1: the device stores rumble
+    // options per map. MAP flags bit1: a rumble block follows the map. SET_MAP
+    // takes an optional trailing rumble block; without one the device keeps the
+    // stored options (a new profile starts from the default map's). Decoded
+    // rumble values stay raw ({ flags, strength }) so unknown flag bits survive
+    // an edit and are echoed back. Fields added after v1 (`rumbleOptions` in
+    // INFO, `rumble` in MAP) appear in a decoded object only when the device
+    // sent them, so a v1 payload decodes to exactly the object it always did.
+    // TEST_RUMBLE (0x08, [rumble]) plays a short test pattern on the connected
+    // controller through unsaved options; it is offered only when INFO flags
+    // bit2 is set (`testRumble`), so it never reaches firmware without it.
     // requests (host -> device)
     const T_GET_INFO = 0x01, T_GET_MAP = 0x02, T_SET_MAP = 0x03, T_ERASE_PROFILE = 0x04,
-          T_LIST_PROFILES = 0x05, T_SET_STREAM = 0x06, T_RESET_ALL = 0x07;
+          T_LIST_PROFILES = 0x05, T_SET_STREAM = 0x06, T_RESET_ALL = 0x07,
+          T_TEST_RUMBLE = 0x08;
     // replies / events (device -> host, reply flag set)
     const T_INFO = 0x81, T_MAP = 0x82, T_OK = 0x83, T_ERROR = 0x84, T_PROFILES = 0x85, T_INPUT = 0x86;
     const REQ_NAME = { 0x01: "get info", 0x02: "get map", 0x03: "save map", 0x04: "erase profile",
-                       0x05: "list profiles", 0x06: "set input stream", 0x07: "reset all" };
+                       0x05: "list profiles", 0x06: "set input stream", 0x07: "reset all",
+                       0x08: "test rumble" };
     const FLAG_CONNECTED = 0x01, FLAG_CHANGED = 0x02;   // INFO / INPUT flags
     const FLAG_EXISTS = 0x01;                           // MAP flag: the requested map exists
-    const STATE_SIZE = 16, RULE_SIZE = 6;
+    const FLAG_RUMBLE_OPTIONS = 0x02;                   // INFO flag: the device stores rumble options per map
+    const FLAG_RUMBLE = 0x02;                           // MAP flag: a rumble block follows the map
+    const FLAG_TEST_RUMBLE = 0x04;                      // INFO flag: the device takes TEST_RUMBLE
+    const STATE_SIZE = 16, RULE_SIZE = 6, RUMBLE_SIZE = 2;
+    // RumbleOptions (rumble_options.hpp): flags + strength in percent (0..200)
+    const RUMBLE_OFF = 0x01, RUMBLE_SWAP_MOTORS = 0x02, RUMBLE_KNOWN_FLAGS = 0x03;
+    const MAX_RUMBLE_STRENGTH = 200, RUMBLE_LEVEL_MAX = 255;
+    const NEUTRAL_RUMBLE = Object.freeze({ flags: 0, strength: 100 });
     // GamepadState: Button order = bit index, Axis order = axes[] index
     const BUTTON_NAMES = ["south", "east", "west", "north", "l1", "r1", "l2", "r2", "l3", "r3", "select", "start",
                           "home", "capture", "up", "down", "left", "right", "paddle1", "paddle2", "paddle3", "paddle4"];
@@ -1747,20 +1788,39 @@
       return r.ok ? s : null;
     }
     function encodeState(s) { const w = new GmWriter(); w.u32(s.buttons); for (const a of s.axes) w.i16(a); return w.bytes(); }
+    // rumble: { flags, strength } (RumbleOptions' flags / strength_percent), kept
+    // raw: reserved flag bits are carried as they are (layout only; see validateRumble)
+    function putRumble(w, o) { w.u8(o.flags).u8(o.strength); }
+    function readRumble(r) {
+      const o = { flags: r.u8(), strength: r.u8() };
+      return r.ok ? o : null;
+    }
 
     // ---- requests ----
     function encodeGetMap(t) { const w = new GmWriter(); putTarget(w, t); return w.bytes(); }
-    function encodeSetMap(t, m) { const w = new GmWriter(); putTarget(w, t); putMap(w, m); return w.bytes(); }
+    // [target][map], then [rumble] when given: a null rumble sends the v1 form
+    // (byte-identical to before rumble options), which keeps the stored options
+    function encodeSetMap(t, m, rumble = null) {
+      const w = new GmWriter(); putTarget(w, t); putMap(w, m);
+      if (rumble != null) putRumble(w, rumble);
+      return w.bytes();
+    }
     function encodeEraseProfile(t) { return new GmWriter().u16(t.vid).u16(t.pid).str(t.name).bytes(); }
     function encodeSetStream(enable, periodMs) { return new GmWriter().u8(enable ? 1 : 0).u16(periodMs).bytes(); }
+    // TEST_RUMBLE: [rumble] (only when INFO says `testRumble`)
+    function encodeTestRumble(o) { const w = new GmWriter(); putRumble(w, o); return w.bytes(); }
 
     // ---- replies / events (null = truncated / malformed, like the C++ decoders;
     //      trailing bytes after the known fields are ignored) ----
+    // INFO; `rumbleOptions: true` only when flags bit1 is set (the device
+    // stores rumble options per map; the bit adds no bytes)
     function decodeInfo(p) {
       const r = new GmReader(p);
       const info = { buttonCount: r.u8(), axisCount: r.u8(), maxRules: r.u8(), maxProfiles: r.u8(), profileCount: r.u8(), controller: null };
       const flags = r.u8();
       if (!r.ok) return null;
+      if (flags & FLAG_RUMBLE_OPTIONS) info.rumbleOptions = true;
+      if (flags & FLAG_TEST_RUMBLE) info.testRumble = true;
       if (flags & FLAG_CONNECTED) {
         const c = { vid: r.u16(), pid: r.u16(), name: r.str(), hasProfile: r.u8() !== 0 };
         if (!r.ok) return null;
@@ -1768,15 +1828,23 @@
       }
       return r.knownFieldsRead() ? info : null;
     }
-    // MAP: [target][flags u8][map]; the target as requested (the stored name if
-    // the profile exists), exists = false: a missing profile, answered with the
-    // default map (what that controller uses today)
+    // MAP: [target][flags u8][map], then [rumble] when flags bit1 is set; the
+    // target as requested (the stored name if the profile exists), exists =
+    // false: a missing profile, answered with the default map (what that
+    // controller uses today) and the default rumble options. `rumble` is only
+    // present when the device sent the block; bit1 with a missing or short
+    // block is truncated (null)
     function decodeMapReply(p) {
       const r = new GmReader(p);
       const target = readTarget(r); if (!target) return null;
       const flags = r.u8(); if (!r.ok) return null;
-      const map = readMap(r); if (!map || !r.knownFieldsRead()) return null;
-      return { target, exists: !!(flags & FLAG_EXISTS), map };
+      const map = readMap(r); if (!map) return null;
+      const reply = { target, exists: !!(flags & FLAG_EXISTS), map };
+      if (flags & FLAG_RUMBLE) {
+        const rumble = readRumble(r); if (!rumble) return null;
+        reply.rumble = rumble;
+      }
+      return r.knownFieldsRead() ? reply : null;
     }
     function decodeProfiles(p) {
       const r = new GmReader(p);
@@ -1857,6 +1925,34 @@
       if (m.rules.length > lim.maxRules) errors.push({ rule: -1, why: "too many rules (" + m.rules.length + "; the device takes at most " + lim.maxRules + ")" });
       m.rules.forEach((r, i) => { const why = validateRule(r, lim); if (why) errors.push({ rule: i, why }); });
       return errors;
+    }
+
+    // ---- rumble options: RumbleOptions::valid() / apply() ----
+    // The strength must be an integer 0..200; reserved flag bits are never
+    // flagged (they are echoed as loaded: a later firmware may define them).
+    function validateRumble(o) {
+      if (!o) return null;
+      const s = o.strength;
+      return Number.isInteger(s) && s >= 0 && s <= MAX_RUMBLE_STRENGTH ? null : "Rumble: strength out of range (0..200 %)";
+    }
+    // The levels a device plays for a host's request: levels = [strong, weak,
+    // left trigger, right trigger] (0..255 each). Off -> all 0; otherwise every
+    // level x strength / 100, rounded half up, saturating at 255 per motor (the
+    // strength clamped to 200); swap trades strong and weak, never the
+    // triggers; unknown flag bits are ignored. (Fields as the device holds them:
+    // uint8, like the bytes encodeSetMap sends.)
+    function applyRumble(o, levels) {
+      const flags = o.flags & 0xFF;
+      if (flags & RUMBLE_OFF) return [0, 0, 0, 0];
+      const pct = Math.min(o.strength & 0xFF, MAX_RUMBLE_STRENGTH);
+      const scale = (v) => Math.min(RUMBLE_LEVEL_MAX, Math.floor(((v & 0xFF) * pct + 50) / 100));
+      const swap = (flags & RUMBLE_SWAP_MOTORS) !== 0;
+      return [scale(levels[swap ? 1 : 0]), scale(levels[swap ? 0 : 1]), scale(levels[2]), scale(levels[3])];
+    }
+    // "off", "100 %", "150 %, strong / weak swapped"
+    function describeRumble(o) {
+      if (o.flags & RUMBLE_OFF) return "off";
+      return o.strength + " %" + (o.flags & RUMBLE_SWAP_MOTORS ? ", strong / weak swapped" : "");
     }
 
     // ---- rules: builders (GamepadMapRule's static helpers), kinds, descriptions ----
@@ -2229,9 +2325,9 @@
                           parseVersion, compareVersionCore, compareFirmware, pickFirmwareAsset, normalizeRelease,
                           MODULE, MODULE_SPEC, PROTOCOL, DEV, OTA, CD, SYS, SYS_TAG, SYS_CAP_REBOOT, SYS_CAP_BOOTLOADER, MON,
                           DEV_KEY, DEV_ERROR_CODE, MAX_PAYLOAD, HEADER_SIZE, CRC_SIZE, INFO_FLAG, LEGACY_MAP_KEYS,
-                          // button maps (espp.gamepad_map) + the Full update plan
-                          encodeGetMap, encodeSetMap, encodeEraseProfile, encodeSetStream, decodeInfo, decodeMapReply,
-                          decodeProfiles, decodeInput, validateMap, parseFlashManifest, flashFileUrls, buildLocalFlashPlan,
+                          // button maps + rumble options (espp.gamepad_map) + the Full update plan
+                          encodeGetMap, encodeSetMap, encodeEraseProfile, encodeSetStream, encodeTestRumble, decodeInfo, decodeMapReply,
+                          decodeProfiles, decodeInput, validateMap, validateRumble, applyRumble, describeRumble, parseFlashManifest, flashFileUrls, buildLocalFlashPlan,
                           parsePartitionTable, checkFlashImages, md5Hex, bytesToBinaryString, binaryStringToBytes,
                           describeRomPort, hasGamepadMapModule, fullUpdateReason, fixEsptoolReadTimeout };
     if (typeof module !== "undefined" && module.exports) module.exports = DongleProto;
@@ -4562,6 +4658,8 @@
       for (const id of ["gmMissing", "gmNeedsFlash", "gmGotoFull", "gmGotoFull2", "gmMain", "gmSide", "gmRxRate", "gmLiveState", "gmLive", "gmPeriod",
                         "gmLearnBanner", "gmLearnText", "gmLearnCancel", "gmSideRaw", "gmSideMapped", "gmRawOverlay", "gmMappedOverlay",
                         "gmDirty", "gmEditTitle", "gmEditBadge", "gmEditNote", "gmDzLeft", "gmDzRight", "gmDzLeftOut", "gmDzRightOut",
+                        "gmRumbleRow", "gmRumbleOn", "gmRumbleStrength", "gmRumbleStrengthOut", "gmRumbleNormal", "gmRumbleSwap",
+                        "gmRumbleTest", "gmRumbleNote", "gmDevRumble",
                         "gmRulesBody", "gmNoRules", "gmAddRule", "gmRuleCount", "gmRuleMax", "gmPresets", "gmValidation",
                         "gmSave", "gmRevert", "gmErase", "gmEditConfirm", "gmEditStatus", "gmRefresh", "gmCtlName", "gmCtlProfile",
                         "gmTargetSel", "gmNewFields", "gmNewVid", "gmNewPid", "gmNewName", "gmLoad", "gmLoadConfirm",
@@ -4573,10 +4671,11 @@
       let infoKey = "";            // what of INFO the picker / profile list show (rebuilt only when it changes)
       let started = false;         // INFO + PROFILES were read on this connection
       let editTarget = null;       // the map being edited (a target), null = nothing loaded
-      let editMap = null;          // the edited map
+      let editMap = null;          // the edited map (+ `rumble`: its rumble options, null = the firmware has none)
       let savedMap = null;         // the map as loaded / last saved
       let editExists = false;      // a profile target exists on the dongle
       let loading = false, saving = false, erasing = false;
+      let testing = false;         // a TEST_RUMBLE is in flight
       let streamOn = false;        // the dongle was asked to stream (renewed while on)
       let lastInputConnected = null;
       let rxTimes = [];
@@ -4592,7 +4691,9 @@
       // the connected firmware is known to lack the maps (v3, or no discovery reply)
       const lacking = () => !!transport && discoveryDone && hasGamepadMapModule(discovered) !== true;
       const ctlKey = (c) => c ? c.vid + ":" + c.pid + ":" + c.name : "";
-      const cloneMap = (m) => ({ leftDeadzone: m.leftDeadzone, rightDeadzone: m.rightDeadzone, rules: m.rules.map((r) => ({ ...r })) });
+      const cloneMap = (m) => ({ leftDeadzone: m.leftDeadzone, rightDeadzone: m.rightDeadzone, rules: m.rules.map((r) => ({ ...r })),
+                                 rumble: m.rumble ? { ...m.rumble } : null });
+      const rumbleLogText = (m) => m.rumble ? ", rumble " + describeRumble(m.rumble) : "";
       const isDirty = () => !!editMap && JSON.stringify(editMap) !== JSON.stringify(savedMap);
       const errText = (e) => (e && e.message) ? e.message : String(e);
       function setEditStatus(text, cls) { setNote(E.gmEditStatus, cls || "muted", text || ""); }
@@ -4635,7 +4736,9 @@
         E.gmDevProfiles.textContent = info.profileCount + " / " + info.maxProfiles;
         E.gmDevMaxRules.textContent = String(info.maxRules);
         E.gmDevControls.textContent = info.buttonCount + " buttons, " + info.axisCount + " axes";
+        E.gmDevRumble.textContent = info.rumbleOptions ? "per map" : "not in this firmware";
         E.gmRuleMax.textContent = String(info.maxRules);
+        renderRumble(); // (capabilities, and the controller the Test button needs)
         // INFO is polled: rebuild the picker (which would close an open drop-down)
         // only when what it shows changed; a changed profile count re-lists them
         const key = JSON.stringify([c, info.profileCount, info.maxProfiles]);
@@ -4749,8 +4852,10 @@
         }
         cancelLearn();
         editTarget = d.target; editExists = d.exists;
-        editMap = cloneMap(d.map); savedMap = cloneMap(d.map);
-        logLine("rx", "Button mapping: loaded the " + describeTarget(editTarget) + (d.exists ? "" : " (no such profile yet: starting from the default map)") + ": " + d.map.rules.length + " rule(s), dead zones " + d.map.leftDeadzone + " / " + d.map.rightDeadzone + " %.");
+        // (the rumble options ride along with the map: dirty / Revert / the load
+        // confirmation cover them; null = this firmware does not store them)
+        editMap = cloneMap({ ...d.map, rumble: d.rumble || null }); savedMap = cloneMap({ ...d.map, rumble: d.rumble || null });
+        logLine("rx", "Button mapping: loaded the " + describeTarget(editTarget) + (d.exists ? "" : " (no such profile yet: starting from the default map)") + ": " + d.map.rules.length + " rule(s), dead zones " + d.map.leftDeadzone + " / " + d.map.rightDeadzone + " %" + rumbleLogText(editMap) + ".");
         setEditStatus(d.exists ? "Loaded." : "", d.exists ? "ok" : "muted");
         renderEditor();
       }
@@ -4763,14 +4868,15 @@
           E.gmEditBadge.className = "badge " + (!editTarget.profile ? "info" : editExists ? "ok" : "warn");
         }
         E.gmEditNote.textContent = !loaded ? (transport ? "Pick a map and load it." : "Connect the dongle to load its maps.") :
-          !editTarget.profile ? "Used by every controller that has no profile of its own." :
+          !editTarget.profile ? "Used by every controller that has no profile of its own (its buttons, axes and rumble)." :
           editExists ? "Used by every controller of this type (VID:PID" + (editTarget.vid === 0 && editTarget.pid === 0 ? ", here: by name" : "") + ")." :
-          "This controller type has no profile yet: the rules below are the default map's, as a starting point. Save creates the profile.";
+          "This controller type has no profile yet: the rules and rumble options below are the default map's, as a starting point. Save creates the profile.";
         E.gmDzLeft.disabled = E.gmDzRight.disabled = !loaded;
         E.gmAddRule.disabled = !loaded;
         for (const b of E.gmPresets.querySelectorAll("button")) b.disabled = !loaded;
         if (loaded) { E.gmDzLeft.value = String(editMap.leftDeadzone); E.gmDzRight.value = String(editMap.rightDeadzone); }
         updateDeadzoneText();
+        renderRumble();
         renderRules();
         renderProfiles();
       }
@@ -4781,6 +4887,99 @@
       }
       for (const [el, key] of [[E.gmDzLeft, "leftDeadzone"], [E.gmDzRight, "rightDeadzone"]])
         el.addEventListener("input", () => { if (!editMap) return; editMap[key] = Math.round(Number(el.value)) || 0; updateDeadzoneText(); updateValidation(); });
+
+      // ---- rumble options (per map, saved in the same SET_MAP) ----
+      // Ported from espp's console. Editable only when the map came with rumble
+      // options (MAP flags bit1) AND the connected dongle stores them (INFO
+      // flags bit1): an editor kept across a reconnect may face other firmware.
+      // Offline, the loaded map decides (Save is disabled then anyway); while
+      // connected but before this connection's INFO arrives, it is unknown: the
+      // row is not editable and Save waits (see infoPending). Each control
+      // rewrites only its own bit / field: the other flag bits, reserved ones
+      // included, are kept and echoed back as loaded.
+      const infoPending = () => !!transport && !devInfo;
+      const deviceStoresRumble = () => (devInfo ? !!devInfo.rumbleOptions : !transport);
+      // the rumble options Save sends: null (the v1 form, which keeps what the
+      // dongle stores) unless both the map and the dongle have them
+      const rumbleToSave = (m) => (m && m.rumble && deviceStoresRumble() ? m.rumble : null);
+      function rumbleNoteText() {
+        if (!editMap) return "";
+        if (infoPending()) return "Reading the dongle's map settings…";
+        const r = editMap.rumble;
+        if (!deviceStoresRumble()) return "This dongle's firmware does not store rumble options (update it to set them per controller)." +
+          (r ? " Save keeps the map only." : "");
+        if (!r) return devInfo ? "Load the map again to edit its rumble options (it was loaded from firmware without them)." :
+          "This dongle's firmware does not store rumble options (update it to set them per controller).";
+        const off = !!(r.flags & RUMBLE_OFF);
+        let s = off ? "Off: the host's rumble never reaches this controller type; the dongle sends a stop instead." :
+                r.strength === 0 ? "0 %: silent, like off." :
+                r.strength < 100 ? "Every motor plays at " + r.strength + " % of what the host asks." :
+                r.strength === 100 ? "As the host asks." :
+                "Every motor plays at " + r.strength + " % of what the host asks; strong effects saturate at full strength.";
+        // (off plays nothing, so a kept swap bit has no effect then)
+        if (!off && (r.flags & RUMBLE_SWAP_MOTORS)) s += " Strong and weak motors trade places (trigger motors stay).";
+        return s + " Applies at once to the rumble this dongle forwards, as soon as it is saved.";
+      }
+      function renderRumble() {
+        const r = rumbleToSave(editMap);
+        const off = !!r && !!(r.flags & RUMBLE_OFF);
+        E.gmRumbleOn.disabled = !r;
+        // (while off, the strength and swap keep their values but are not in effect)
+        E.gmRumbleStrength.disabled = E.gmRumbleNormal.disabled = E.gmRumbleSwap.disabled = !r || off;
+        E.gmRumbleOn.checked = !off;
+        E.gmRumbleSwap.checked = !!r && !!(r.flags & RUMBLE_SWAP_MOTORS);
+        const strength = r ? r.strength : NEUTRAL_RUMBLE.strength;
+        E.gmRumbleStrength.value = String(strength);
+        E.gmRumbleStrengthOut.textContent = strength + " %";
+        E.gmRumbleNote.textContent = rumbleNoteText();
+        renderRumbleTest();
+      }
+      // Test: the dongle must offer it (INFO flags bit2) and have a controller;
+      // the settings as edited (not saved) are sent. (Also re-run from
+      // updateValidation(): online() follows the console's busy state.)
+      function renderRumbleTest() {
+        const r = rumbleToSave(editMap);
+        const off = !!r && !!(r.flags & RUMBLE_OFF);
+        const why = !online() ? "Connect the dongle to test rumble" :
+                    !devInfo || !devInfo.testRumble ? "This dongle's firmware does not offer a rumble test" :
+                    !devInfo.controller ? "Connect a controller to the dongle to test rumble" :
+                    !r ? "Load a map with rumble options to test them" :
+                    off ? "Rumble is off for this controller type" :
+                    r.strength === 0 ? "Rumble is at 0 % in these settings (silent, like off)" :
+                    validateRumble(r) ? "Fix the strength first" :
+                    testing ? "Testing…" : "";
+        E.gmRumbleTest.disabled = why !== "";
+        E.gmRumbleTest.title = why || "Play a short test pattern on the connected controller with these settings (not saved)";
+      }
+      function editRumble(fn) {
+        if (!rumbleToSave(editMap)) return;
+        fn(editMap.rumble);
+        renderRumble(); updateValidation();
+      }
+      E.gmRumbleOn.addEventListener("change", () => editRumble((r) => { r.flags = E.gmRumbleOn.checked ? (r.flags & ~RUMBLE_OFF) : (r.flags | RUMBLE_OFF); }));
+      E.gmRumbleSwap.addEventListener("change", () => editRumble((r) => { r.flags = E.gmRumbleSwap.checked ? (r.flags | RUMBLE_SWAP_MOTORS) : (r.flags & ~RUMBLE_SWAP_MOTORS); }));
+      E.gmRumbleStrength.addEventListener("input", () => editRumble((r) => { r.strength = Math.round(Number(E.gmRumbleStrength.value)) || 0; }));
+      E.gmRumbleNormal.addEventListener("click", () => editRumble((r) => { r.strength = NEUTRAL_RUMBLE.strength; }));
+      // TEST_RUMBLE (0x08): the dongle plays its test pattern (strong motor, then
+      // weak) through these options and answers at once; nothing is saved
+      E.gmRumbleTest.addEventListener("click", async () => {
+        const r = rumbleToSave(editMap);
+        if (!r || testing || !online() || !devInfo || !devInfo.testRumble) return;
+        const o = { ...r };
+        testing = true; renderRumbleTest();
+        logLine("tx", "Button mapping: testing rumble on the connected controller: " + describeRumble(o) + " (not saved).");
+        setEditStatus("Testing rumble on the connected controller…");
+        try {
+          await request(T_TEST_RUMBLE, encodeTestRumble(o), T_OK);
+          logLine("ok", "Button mapping: rumble test played (" + describeRumble(o) + ").");
+          setEditStatus("Played a rumble test on the connected controller with these settings (not saved).", "ok");
+        } catch (e) {
+          if (!(e && e.transportLost)) {
+            logLine("err", "Button mapping: rumble test failed: " + errText(e));
+            setEditStatus((e && e.deviceError ? "The dongle refused to test rumble: " : "Rumble test failed: ") + errText(e), "err");
+          }
+        } finally { testing = false; renderRumbleTest(); }
+      });
 
       // ---- the rule table ----
       function fillSelect(sel, isAxis, value, withNone) {
@@ -4916,6 +5115,8 @@
         const errors = loaded ? validateMap(editMap, limits()) : [];
         const tErr = loaded ? validateTarget(editTarget) : null;
         if (tErr) errors.unshift({ rule: -1, why: tErr });
+        const rErr = loaded ? validateRumble(rumbleToSave(editMap)) : null;
+        if (rErr) errors.push({ rule: -1, why: rErr });
         const bad = new Set(errors.filter((e) => e.rule >= 0).map((e) => e.rule));
         [...E.gmRulesBody.children].forEach((tr, i) => tr.classList.toggle("invalid", bad.has(i)));
         E.gmValidation.hidden = errors.length === 0;
@@ -4928,13 +5129,14 @@
         }
         E.gmDirty.hidden = !isDirty();
         const on = online(), idle = !loading && !saving && !erasing;
-        E.gmSave.disabled = !on || !loaded || errors.length > 0 || !idle;
+        E.gmSave.disabled = !on || !loaded || errors.length > 0 || !idle || infoPending();
         E.gmRevert.disabled = !loaded || !idle;
         E.gmErase.disabled = !on || !loaded || !editTarget.profile || !editExists || !idle;
         E.gmLoad.disabled = !on || !idle;
         E.gmResetAll.disabled = !on || !idle;
         E.gmRefresh.disabled = !on;
         E.gmTargetSel.disabled = !transport;
+        renderRumbleTest();
         return errors;
       }
       E.gmRefresh.addEventListener("click", () => refreshDevice(false));
@@ -4948,13 +5150,13 @@
       E.gmErase.addEventListener("click", async () => {
         if (!editTarget || !editTarget.profile || !online()) return;
         const t = editTarget;
-        if (!(await askConfirm(E.gmEditConfirm, E.gmErase, "Erase the " + describeTarget(t) + " from the dongle? That controller type then uses the default map.", "Erase profile"))) return;
+        if (!(await askConfirm(E.gmEditConfirm, E.gmErase, "Erase the " + describeTarget(t) + " from the dongle? That controller type then uses the default map and its rumble options.", "Erase profile"))) return;
         if (!online()) return;
         erasing = true; updateValidation(); setEditStatus("Erasing…");
         try {
           await request(T_ERASE_PROFILE, encodeEraseProfile(t), T_OK);
           logLine("ok", "Button mapping: erased the " + describeTarget(t) + ".");
-          setEditStatus("Erased. The controller type now uses the default map.", "ok");
+          setEditStatus("Erased. The controller type now uses the default map and its rumble options.", "ok");
           erasing = false;
           await refreshDevice(true);
           await requestLoad(t);
@@ -4964,13 +5166,13 @@
       });
       E.gmResetAll.addEventListener("click", async () => {
         if (!online()) return;
-        if (!(await askConfirm(E.gmResetConfirm, E.gmResetAll, "Erase EVERY profile and reset the default map to the identity? Settings and paired controllers are kept.", "Reset all maps"))) return;
+        if (!(await askConfirm(E.gmResetConfirm, E.gmResetAll, "Erase EVERY profile, reset the default map to the identity and default rumble to on / 100 % / not swapped? Settings and paired controllers are kept.", "Reset all maps"))) return;
         if (!online()) return;
         erasing = true; updateValidation(); setEditStatus("Resetting…");
         try {
           await request(T_RESET_ALL, null, T_OK);
-          logLine("ok", "Button mapping: everything reset (no profiles, default map = identity).");
-          setEditStatus("Everything reset: no profiles, default map = identity.", "ok");
+          logLine("ok", "Button mapping: everything reset (no profiles, default map = identity, default rumble = on / 100 % / not swapped).");
+          setEditStatus("Everything reset: no profiles, default map = identity, default rumble = on / 100 % / not swapped.", "ok");
           erasing = false;
           await refreshDevice(true);
           if (editTarget) await requestLoad(editTarget);
@@ -4979,17 +5181,20 @@
         } finally { erasing = false; updateValidation(); }
       });
       async function saveMap() {
-        if (!editMap || !editTarget || !online()) return;
+        if (!editMap || !editTarget || !online() || infoPending()) return;
         const errors = updateValidation();
         if (errors.length) { setEditStatus("Not saved: fix the problems listed above first.", "err"); return; }
         if (editTarget.profile && !editExists && devInfo && devInfo.profileCount >= devInfo.maxProfiles)
           logLine("warn", "The dongle already holds " + devInfo.profileCount + " of " + devInfo.maxProfiles + " profiles; it will likely refuse a new one (erase one first).");
         const t = editTarget, m = cloneMap(editMap);
+        const savingRumble = rumbleToSave(m);
         saving = true; updateValidation();
-        logLine("tx", "Button mapping: saving the " + describeTarget(t) + ": " + m.rules.length + " rule(s), dead zones " + m.leftDeadzone + " / " + m.rightDeadzone + " %.");
+        logLine("tx", "Button mapping: saving the " + describeTarget(t) + ": " + m.rules.length + " rule(s), dead zones " + m.leftDeadzone + " / " + m.rightDeadzone + " %" + (savingRumble ? ", rumble " + describeRumble(savingRumble) : "") + ".");
         setEditStatus("Saving…");
         try {
-          await request(T_SET_MAP, encodeSetMap(t, m), T_OK);
+          // map + rumble options in one SET_MAP (saved together); without rumble
+          // options (firmware that has none) the v1 form, which keeps the stored ones
+          await request(T_SET_MAP, encodeSetMap(t, m, savingRumble), T_OK);
           if (sameTarget(t, editTarget)) { savedMap = m; editExists = true; }
           const unsaved = lastInfo && lastInfo.needsFullFlash;
           setEditStatus("Saved the " + describeTarget(t) + "." + (unsaved ? " This dongle cannot store it until a Full update (it applies until the next reboot)." : ""), unsaved ? "warn" : "ok");
@@ -5179,8 +5384,8 @@
       function onDisconnected() {
         cancelLearn();
         streamOn = false; started = false;
-        devInfo = null; profiles = []; infoKey = ""; loading = saving = erasing = false;
-        for (const id of ["gmCtlName", "gmDevProfiles", "gmDevMaxRules", "gmDevControls"]) E[id].textContent = "-";
+        devInfo = null; profiles = []; infoKey = ""; loading = saving = erasing = testing = false;
+        for (const id of ["gmCtlName", "gmDevProfiles", "gmDevMaxRules", "gmDevControls", "gmDevRumble"]) E[id].textContent = "-";
         E.gmCtlProfile.textContent = "-"; E.gmCtlProfile.className = "badge";
         setLiveIdle("Connect the dongle to see the controller's input.");
         rebuildTargets();

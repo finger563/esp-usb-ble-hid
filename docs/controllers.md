@@ -73,7 +73,7 @@ If a controller doesn't publish a readable button description, or the one it pub
 | L2 / R2 reported as buttons | Yes, as ZL / ZR | Yes, as a fully pulled LT / RT |
 | Back paddles | No | No |
 | Battery level | Yes: the controller's battery is reported to the Switch, when the controller shares it over Bluetooth (the Xbox Wireless controller's own battery report stands in until then) | No |
-| Rumble | Yes, on controllers whose report map declares a rumble report (the Xbox Wireless Controller does): the Device tab's **Rumble** row says whether yours does | Yes, the same way (the LED part of the PC's report is ignored) |
+| Rumble | Yes, on controllers whose report map declares a rumble report (the Xbox Wireless Controller does): the Device tab's **Rumble** row says whether yours does. Per controller model you can turn it off, change its strength or swap the motors ([Rumble](button-mapping.md#rumble)) | Yes, the same way (the LED part of the PC's report is ignored) |
 | Motion controls (gyro) | No | No |
 | NFC (amiibo) | No | n/a |
 | Headset jack audio | No | No |
