@@ -132,10 +132,10 @@ void rumble_set_target(const espp::RumbleState &target) {
   cv.notify_one();
 }
 
-void rumble_set_encoder(std::optional<espp::hid_rp::RumbleEncoder> e) {
+void rumble_set_encoder(std::optional<espp::hid_rp::RumbleEncoder> new_encoder) {
   {
     std::lock_guard<std::mutex> lk(mutex);
-    encoder = std::move(e);
+    encoder = std::move(new_encoder);
     ++generation;
     last_sent = {}; // a (re)connected controller starts with its motors off
     last_send_us = 0;

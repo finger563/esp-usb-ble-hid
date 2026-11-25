@@ -40,7 +40,7 @@ void rumble_set_target(const espp::RumbleState &target);
 
 /// The connected controller's rumble encoder (from its report map), or nullopt
 /// when it has none / when it disconnects. Stops whatever was playing.
-void rumble_set_encoder(std::optional<espp::hid_rp::RumbleEncoder> encoder);
+void rumble_set_encoder(std::optional<espp::hid_rp::RumbleEncoder> new_encoder);
 
 /// Whether the connected controller can be rumbled: its report map declares a
 /// rumble report and the controller exposes that output report over BLE.
