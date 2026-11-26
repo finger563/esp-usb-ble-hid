@@ -79,7 +79,7 @@ flowchart TB
 
 Nothing that waits runs on the TinyUSB task. Pro Controller handshake replies are worked out there, but they are queued (at most 16) and sent by `usb_hid_tx`. Vendor bytes are only queued there, for `usb_rx`.
 
-**Latency.** The BLE connection uses a 15 ms interval, a peripheral latency of 4 and a 4 s supervision timeout. A report is decoded and mapped when its notification arrives. In Switch Pro mode the latest report goes out every 8 ms, the real Pro Controller's polling interval. In Xbox 360 mode a new state is submitted as soon as it changes (the X-Input IN endpoint polls every 4 ms).
+**Latency.** The dongle asks for a 15 ms connection interval, a peripheral latency of 4 and a 4 s supervision timeout once the link is encrypted. A controller that asks for its own parameters (an L2CAP Connection Parameter Update Request) gets them, and the dongle then keeps them for that connection. After encryption the dongle also exchanges the ATT MTU and, after subscribing to the input reports, enables Service Changed indications, as a desktop host does. A report is decoded and mapped when its notification arrives. In Switch Pro mode the latest report goes out every 8 ms, the real Pro Controller's polling interval. In Xbox 360 mode a new state is submitted as soon as it changes (the X-Input IN endpoint polls every 4 ms).
 
 ## The Bluetooth side
 
