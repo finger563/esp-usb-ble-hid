@@ -37,6 +37,17 @@ static std::atomic<uint8_t> subscribe_attempts{0};
 // supervisor must not restart the scan underneath it
 static std::atomic<bool> connect_pending{false};
 static std::atomic<int64_t> connect_started_us{0};
+// Per-link setup, reset on every connection. The controller may ask for its own
+// connection parameters (an L2CAP Connection Parameter Update Request): from
+// then on the dongle follows them on that link and no longer applies its own.
+static std::atomic<bool> controller_set_conn_params{false};
+static std::atomic<bool> mtu_requested{false};      // the ATT MTU exchange was started
+static std::atomic<bool> service_changed_on{false}; // Service Changed indications enabled
+// the attempt the link subscribed on (0 = not subscribed); the link detail is
+// then refreshed with what the link negotiated (see refresh_link_summary(),
+// which, like the subscribe path, runs on the scan timer task only)
+static std::atomic<uint8_t> subscribed_on_attempt{0};
+static std::string last_link_summary; // timer task only
 // a pairing scan (accept any controller) stays in effect until this time; after
 // that a rescan goes back to reconnecting bonded controllers only
 static std::atomic<int64_t> pairing_until_us{0};
@@ -100,22 +111,47 @@ static bool is_bonded_peer(const NimBLEAddress &address) {
   return false;
 }
 
+static const char *advertisement_kind(uint8_t type) {
+  switch (type) {
+  case BLE_HCI_ADV_RPT_EVTYPE_ADV_IND:
+    return "connectable";
+  case BLE_HCI_ADV_RPT_EVTYPE_DIR_IND:
+    return "directed";
+  case BLE_HCI_ADV_RPT_EVTYPE_SCAN_IND:
+    return "scannable, not connectable";
+  case BLE_HCI_ADV_RPT_EVTYPE_NONCONN_IND:
+    return "not connectable";
+  case BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP:
+    return "scan response";
+  default:
+    return "advertising";
+  }
+}
+
 // While reconnecting, a gamepad that advertises but is not paired is noted in
-// the link detail, with its kind of address: a paired controller that comes
-// back under an address the dongle does not recognise looks exactly like this.
-// Updated when the address changes and otherwise every 10 s, as scan results
-// arrive many times a second.
-static void note_unpaired_gamepad(const NimBLEAddress &address) {
-  static std::string last_address;
+// the link detail, with its kind of address, its name, the kind of
+// advertisement and its signal strength: a paired controller that comes back
+// under an address the dongle does not recognise looks exactly like this, and
+// the name tells whether it is that controller. Updated when the device (or its
+// name) changes, at most once a second, and otherwise every 10 s, as scan
+// results arrive many times a second.
+static void note_unpaired_gamepad(const NimBLEAdvertisedDevice &device) {
+  static std::string last_key;
   static int64_t last_note_us = 0;
   const int64_t now = esp_timer_get_time();
+  const NimBLEAddress &address = device.getAddress();
   const std::string a = address.toString();
-  if (a == last_address && now - last_note_us < 10'000'000)
+  const std::string name = device.haveName() ? device.getName() : std::string();
+  const std::string key = a + "/" + name;
+  const int64_t since = now - last_note_us;
+  if (since < 1'000'000 || (key == last_key && since < 10'000'000))
     return;
-  last_address = a;
+  last_key = key;
   last_note_us = now;
-  set_link_detail(fmt::format("scanning; a gamepad that is not paired is advertising: {} ({})", a,
-                              address_kind(address)));
+  set_link_detail(fmt::format(
+      "scanning; a gamepad that is not paired is advertising: {} ({}), {}, {}, {} dBm", a,
+      address_kind(address), name.empty() ? std::string("no name") : "\"" + name + "\"",
+      advertisement_kind(device.getAdvType()), device.getRSSI()));
 }
 
 static NimBLEUUID hid_service_uuid(espp::HidService::SERVICE_UUID);
@@ -127,6 +163,8 @@ static NimBLEUUID pnp_id_uuid(espp::DeviceInfoService::PNP_CHAR_UUID);          
 
 static NimBLEUUID battery_service_uuid(espp::BatteryService::BATTERY_SERVICE_UUID);
 static NimBLEUUID battery_level_uuid(espp::BatteryService::BATTERY_LEVEL_CHAR_UUID);
+static NimBLEUUID gatt_service_uuid(static_cast<uint16_t>(0x1801));    // Generic Attribute
+static NimBLEUUID service_changed_uuid(static_cast<uint16_t>(0x2A05)); // Service Changed
 
 static std::atomic<bool> is_pairing{true};
 static notify_callback_t notify_callback = nullptr;
@@ -271,6 +309,10 @@ static void reset_link_state(const std::string &why) {
   const bool was_subscribed = subscribed.exchange(false);
   authenticated = false;
   subscribe_attempts = 0;
+  controller_set_conn_params = false;
+  mtu_requested = false;
+  service_changed_on = false;
+  subscribed_on_attempt = 0;
   {
     std::lock_guard<std::mutex> lk(report_map_mutex);
     report_ids.clear();
@@ -284,6 +326,48 @@ static void reset_link_state(const std::string &why) {
     if (disconnect_callback)
       disconnect_callback();
   }
+}
+
+// The link is encrypted: set the dongle's connection parameters (unless the
+// controller already asked for its own on this link, which then stay), and
+// exchange the ATT MTU, as a desktop host does. Called once per link, from the
+// security callback or from the timer that polls the encryption state.
+static void on_link_encrypted(NimBLEClient *client) {
+  if (!client)
+    return;
+  if (!controller_set_conn_params.load())
+    client->updateConnParams(min_conn_interval, max_conn_interval, conn_latency,
+                             supervision_timeout);
+  if (!mtu_requested.exchange(true) && !client->exchangeMTU())
+    ble_logger.warn("could not start the ATT MTU exchange");
+}
+
+// The link detail once subscribed, with what the link negotiated: the ATT MTU,
+// the connection parameters (and whether they are the controller's own) and
+// whether Service Changed indications are on. Refreshed from the timer when it
+// changes, e.g. when the controller asks for its own parameters a few seconds
+// after connecting.
+static void refresh_link_summary(NimBLEClient *client) {
+  const uint8_t attempt = subscribed_on_attempt.load();
+  if (!client || attempt == 0)
+    return;
+  const NimBLEConnInfo info = client->getConnInfo();
+  const std::string detail =
+      fmt::format("subscribed on attempt {}; MTU {}; {:g} ms, latency {}, {:g} s timeout{}{}",
+                  attempt, info.getMTU(), info.getConnInterval() * 1.25f, info.getConnLatency(),
+                  info.getConnTimeout() / 100.0f,
+                  controller_set_conn_params ? " (the controller's choice)" : "",
+                  service_changed_on ? "; Service Changed on" : "");
+  if (detail != last_link_summary) {
+    last_link_summary = detail;
+    set_link_detail(detail);
+  }
+}
+
+// The controller's attributes changed (a Service Changed indication); logged
+// only: the next connection discovers them again.
+static void on_service_changed(NimBLERemoteCharacteristic *, uint8_t *, size_t, bool) {
+  ble_logger.info("the controller reports that its attributes changed (Service Changed)");
 }
 
 // Every subscribed characteristic notifies through here: count it if it is a
@@ -391,6 +475,10 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     connect_pending = false;
     authenticated = false;
     subscribe_attempts = 0;
+    controller_set_conn_params = false;
+    mtu_requested = false;
+    service_changed_on = false;
+    subscribed_on_attempt = 0;
     connected_at_us = esp_timer_get_time();
     last_secure_request_us = connected_at_us.load();
     link_state = BleLinkState::Encrypting;
@@ -406,6 +494,25 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     if (!pClient->secureConnection(async)) {
       logger.warn("security request not accepted (already in progress?)");
     }
+  }
+
+  // The controller asks for its own connection parameters (an L2CAP Connection
+  // Parameter Update Request): accept them, and stop applying the dongle's own
+  // on this link, so the controller's choice is the one that stays.
+  bool onConnParamsUpdateRequest(NimBLEClient *pClient, const ble_gap_upd_params *params) override {
+    logger.info("controller asks for interval {}-{} (x1.25 ms), latency {}, timeout {} (x10 ms)",
+                params->itvl_min, params->itvl_max, params->latency, params->supervision_timeout);
+    controller_set_conn_params = true;
+    // esp-nimble-cpp answers a link-layer request with the client's stored
+    // parameters: make those the controller's, so both kinds of request (L2CAP
+    // and link layer) get what the controller asked for
+    pClient->setConnectionParams(params->itvl_min, params->itvl_max, params->latency,
+                                 params->supervision_timeout);
+    return true;
+  }
+
+  void onMTUChange(NimBLEClient *pClient, uint16_t mtu) override {
+    logger.info("ATT MTU {} with {}", mtu, pClient->getPeerAddress().toString());
   }
 
   void onConnectFail(NimBLEClient *pClient, int reason) override {
@@ -433,10 +540,9 @@ class ClientCallbacks : public NimBLEClientCallbacks {
       return;
     } else {
       logger.info("Encryption successful!");
-      // set the connection parameters
-      NimBLEDevice::getClientByHandle(connInfo.getConnHandle())
-          ->updateConnParams(min_conn_interval, max_conn_interval, conn_latency,
-                             supervision_timeout);
+      // the dongle's connection parameters (unless the controller chose its
+      // own) and the MTU exchange
+      on_link_encrypted(NimBLEDevice::getClientByHandle(connInfo.getConnHandle()));
       // the protected HID characteristics can be discovered + subscribed now
       authenticated = true;
     }
@@ -463,7 +569,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       // the device is bonded (by its identity, see is_bonded_peer())
       should_connect = true;
     } else if (!is_pairing && is_pairable_device) {
-      note_unpaired_gamepad(advertisedDevice->getAddress());
+      note_unpaired_gamepad(*advertisedDevice);
     }
     if (should_connect) {
       // tell the supervisor a connection is in flight BEFORE stopping the scan,
@@ -716,8 +822,12 @@ static bool timer_callback() {
 
   set_led_breathing(false);
   update_led_connected();
-  if (subscribed)
+  if (subscribed) {
+    static uint8_t refresh = 0; // ~1 s at the 100 ms timer period
+    if (++refresh % 10 == 0)
+      refresh_link_summary(pClients.front());
     return false;
+  }
 
   auto *pClient = pClients.front();
   if (!pClient->isConnected())
@@ -743,8 +853,7 @@ static bool timer_callback() {
   // time to pair before the link is dropped so the scan can start over.
   if (!authenticated && pClient->getConnInfo().isEncrypted()) {
     ble_logger.info("link is encrypted");
-    pClient->updateConnParams(min_conn_interval, max_conn_interval, conn_latency,
-                              supervision_timeout);
+    on_link_encrypted(pClient);
     authenticated = true;
   }
   if (!authenticated) {
@@ -798,6 +907,8 @@ static bool timer_callback() {
   last_notify_us = -1;
   subscribed = true;
   link_state = BleLinkState::Subscribed;
+  subscribed_on_attempt = attempt;
+  last_link_summary.clear(); // a new link: always show its summary
   set_link_detail(fmt::format("subscribed on attempt {}", attempt));
 
   // we were able to get the HID service and subscribe, so also subscribe
@@ -809,6 +920,16 @@ static bool timer_callback() {
       pBatteryChr->subscribe(pBatteryChr->canNotify(), on_notify);
     }
   }
+  // Service Changed indications (the GATT service), as a desktop host enables
+  // them after pairing: some controllers only treat the link as fully set up
+  // once a host has (optional: a controller without them works as before)
+  if (auto *pGattSvc = pClient->getService(gatt_service_uuid)) {
+    pGattSvc->getCharacteristics(true);
+    auto *pChangedChr = pGattSvc->getCharacteristic(service_changed_uuid);
+    if (pChangedChr && pChangedChr->canIndicate())
+      service_changed_on = pChangedChr->subscribe(false, on_service_changed);
+  }
+  refresh_link_summary(pClient);
   // and report the controller's name for the paired-controller list
   if (bond_name_callback) {
     const NimBLEAddress id = pClient->getConnInfo().getIdAddress();

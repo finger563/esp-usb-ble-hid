@@ -101,7 +101,7 @@ The card refreshes every 2 seconds while the page is visible. **Refresh now** re
 
 The Link block is the first place to look when a controller is connected but nothing happens:
 
-- **Controller link** shows where the Bluetooth connection is: *scanning*, *connecting*, *encrypting*, *subscribing*, then *subscribed* once inputs flow. The dongle adds a note about the last thing that happened, such as why a link dropped or what it is retrying.
+- **Controller link** shows where the Bluetooth connection is: *scanning*, *connecting*, *encrypting*, *subscribing*, then *subscribed* once inputs flow. The dongle adds a note about the last thing that happened, such as why a link dropped or what it is retrying. Once subscribed, the note also shows what the link settled on: the ATT MTU, the connection interval, latency and timeout (marked *the controller's choice* when the controller asked for its own), and whether Service Changed indications are on.
 - **BLE input** counts the input messages the controller has sent and shows how long ago the last one arrived.
 - **USB output** shows the host side. In Switch Pro mode, it shows whether the host has finished the Pro Controller handshake. In Xbox 360 mode, it shows whether a driver is reading the X-Input reports. Either way it also shows how many reports were sent.
 
